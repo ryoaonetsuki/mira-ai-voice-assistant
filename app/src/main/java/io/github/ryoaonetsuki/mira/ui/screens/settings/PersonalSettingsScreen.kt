@@ -1,0 +1,215 @@
+package io.github.ryoaonetsuki.mira.ui.screens.settings
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
+import io.github.ryoaonetsuki.mira.data.preferences.UserPreferences
+import io.github.ryoaonetsuki.mira.network.GeminiRestClient
+import io.github.ryoaonetsuki.mira.ui.components.MiraButton
+import io.github.ryoaonetsuki.mira.ui.components.MiraCard
+import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
+import kotlinx.coroutines.launch
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PersonalSettingsScreen(
+    onBack: () -> Unit
+) {
+    val context = LocalContext.current
+    val palette = LocalMiraPalette.current
+    val scope = rememberCoroutineScope()
+    val securePrefs = remember { SecurePreferences(context) }
+    val userPrefs = remember { UserPreferences(context) }
+    val restClient = remember { GeminiRestClient() }
+
+    val savedName by userPrefs.userNameFlow.collectAsState(initial = "Alex")
+    val savedPhone by userPrefs.userPhoneFlow.collectAsState(initial = "")
+    val savedMusicApp by userPrefs.musicAppFlow.collectAsState(initial = "Spotify")
+    val savedSong by userPrefs.favoriteSongFlow.collectAsState(initial = "Starboy")
+
+    var nameInput by remember { mutableStateOf(savedName) }
+    var phoneInput by remember { mutableStateOf(savedPhone) }
+    var apiKeyInput by remember { mutableStateOf(securePrefs.getGeminiApiKey() ?: "") }
+    var favoriteSongInput by remember { mutableStateOf(savedSong) }
+
+    var isTestingKey by remember { mutableStateOf(false) }
+    var testResultMsg by remember { mutableStateOf<String?>(null) }
+    var isKeyValid by remember { mutableStateOf(false) }
+
+    LaunchedEffect(savedName, savedPhone, savedSong) {
+        nameInput = savedName
+        phoneInput = savedPhone
+        favoriteSongInput = savedSong
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Personal Profile", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
+            )
+        },
+        containerColor = palette.background
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            item {
+                Text("Your Details", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.primary)
+            }
+
+            // Name
+            item {
+                OutlinedTextField(
+                    value = nameInput,
+                    onValueChange = {
+                        nameInput = it
+                        scope.launch { userPrefs.setUserName(it.trim()) }
+                    },
+                    label = { Text("Your Name") },
+                    placeholder = { Text("e.g. Alex") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
+            // Phone
+            item {
+                OutlinedTextField(
+                    value = phoneInput,
+                    onValueChange = {
+                        phoneInput = it
+                        scope.launch { userPrefs.setUserPhone(it.trim()) }
+                    },
+                    label = { Text("Phone Number (Optional)") },
+                    placeholder = { Text("+1 ...") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
+            item {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text("Gemini API Key (Encrypted BYOK)", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.primary)
+            }
+
+            // API Key
+            item {
+                MiraCard(modifier = Modifier.fillMaxWidth()) {
+                    OutlinedTextField(
+                        value = apiKeyInput,
+                        onValueChange = {
+                            apiKeyInput = it
+                            testResultMsg = null
+                        },
+                        label = { Text("Gemini API Key") },
+                        placeholder = { Text("AIzaSy... or AQ...") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    if (testResultMsg != null) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = testResultMsg!!,
+                            fontSize = 12.sp,
+                            color = if (isKeyValid) Color(0xFF10B981) else Color(0xFFEF4444)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    MiraButton(
+                        text = "Test & Save Key",
+                        isLoading = isTestingKey,
+                        onClick = {
+                            if (apiKeyInput.isNotBlank()) {
+                                isTestingKey = true
+                                testResultMsg = "Checking key with Google..."
+                                scope.launch {
+                                    val res = restClient.validateApiKey(apiKeyInput.trim())
+                                    isTestingKey = false
+                                    if (res.isSuccess) {
+                                        isKeyValid = true
+                                        testResultMsg = "Key validated! Stored securely in Keystore."
+                                        securePrefs.setGeminiApiKey(apiKeyInput.trim())
+                                    } else {
+                                        isKeyValid = false
+                                        testResultMsg = "Invalid key: ${res.exceptionOrNull()?.message}"
+                                    }
+                                }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+
+            item {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text("Music Preferences", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.primary)
+            }
+
+            // Music App & Song
+            item {
+                MiraCard(modifier = Modifier.fillMaxWidth()) {
+                    Text("Preferred Music App", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        val apps = listOf("Spotify", "YouTube Music", "YouTube")
+                        for (app in apps) {
+                            FilterChip(
+                                selected = savedMusicApp == app,
+                                onClick = { scope.launch { userPrefs.setMusicApp(app) } },
+                                label = { Text(app) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = palette.primary,
+                                    selectedLabelColor = Color.Black
+                                )
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    OutlinedTextField(
+                        value = favoriteSongInput,
+                        onValueChange = {
+                            favoriteSongInput = it
+                            scope.launch { userPrefs.setFavoriteSong(it.trim()) }
+                        },
+                        label = { Text("Favorite Song / Track") },
+                        placeholder = { Text("e.g. Starboy") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+    }
+}

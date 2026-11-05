@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_launcher_background">#FF000000</color>
+    <color name="mira_dark">#FF0A0A12</color>
+    <color name="mira_cyan">#FF22D3EE</color>
+    <color name="mira_violet">#FF8B5CF6</color>
+</resources>

@@ -33,6 +33,7 @@ import io.github.ryoaonetsuki.mira.data.local.MiraDatabase
 import io.github.ryoaonetsuki.mira.data.local.entities.SosContactEntity
 import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
 import io.github.ryoaonetsuki.mira.data.preferences.UserPreferences
+import io.github.ryoaonetsuki.mira.service.MiraAccessibilityService
 import io.github.ryoaonetsuki.mira.ui.components.BiometricAuthHelper
 import io.github.ryoaonetsuki.mira.ui.components.MiraCard
 import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
@@ -61,6 +62,21 @@ fun AdvancedSettingsScreen(
 
     var isFaceLockActive by remember { mutableStateOf(securePrefs.isFaceLockEnabled()) }
     var enrolledFaceName by remember { mutableStateOf(securePrefs.getEnrolledFaceName() ?: "Owner (Alex)") }
+
+    var isAccessibilityEnabled by remember {
+        mutableStateOf(MiraAccessibilityService.isEnabled(context))
+    }
+
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                isAccessibilityEnabled = MiraAccessibilityService.isEnabled(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     var showSosDialog by remember { mutableStateOf(false) }
     var sosNameInput by remember { mutableStateOf("") }
@@ -196,6 +212,48 @@ fun AdvancedSettingsScreen(
                             checked = batterySaver,
                             onCheckedChange = { scope.launch { userPrefs.setBatterySaver(it) } }
                         )
+                    }
+                }
+            }
+
+            // Automation & Accessibility
+            item {
+                Text("Automation & Accessibility", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.primary)
+            }
+
+            item {
+                MiraCard(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Accessibility Service (Macros)", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
+                            Text(
+                                if (isAccessibilityEnabled) "Active • Screen automation enabled"
+                                else "Disabled • Required for WhatsApp & YouTube screen automation",
+                                fontSize = 12.sp,
+                                color = if (isAccessibilityEnabled) Color(0xFF10B981) else palette.textSecondary
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            onClick = {
+                                val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                                context.startActivity(intent)
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isAccessibilityEnabled) palette.surfaceVariant else palette.primary
+                            ),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Text(
+                                if (isAccessibilityEnabled) "Configure" else "Enable",
+                                fontSize = 12.sp,
+                                color = if (isAccessibilityEnabled) palette.primary else Color.Black
+                            )
+                        }
                     }
                 }
             }

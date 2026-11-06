@@ -17,11 +17,20 @@ import androidx.compose.ui.unit.sp
 import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
 import io.github.ryoaonetsuki.mira.data.preferences.UserPreferences
 import io.github.ryoaonetsuki.mira.network.GeminiRestClient
+import io.github.ryoaonetsuki.mira.network.KeyValidationOutcome
 import io.github.ryoaonetsuki.mira.network.normalizeApiKey
 import io.github.ryoaonetsuki.mira.ui.components.MiraButton
 import io.github.ryoaonetsuki.mira.ui.components.MiraCard
 import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
 import kotlinx.coroutines.launch
+
+private enum class PersonalKeyValidationState {
+    IDLE,
+    CHECKING,
+    VALID,
+    TRANSIENT,
+    INVALID
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -48,7 +57,7 @@ fun PersonalSettingsScreen(
 
     var isTestingKey by remember { mutableStateOf(false) }
     var testResultMsg by remember { mutableStateOf<String?>(null) }
-    var isKeyValid by remember { mutableStateOf(false) }
+    var validationState by remember { mutableStateOf(PersonalKeyValidationState.IDLE) }
     var activeModeText by remember { mutableStateOf("Checking...") }
 
     fun refreshStatus() {
@@ -148,6 +157,7 @@ fun PersonalSettingsScreen(
                         onValueChange = {
                             apiKeyInput = it
                             testResultMsg = null
+                            validationState = PersonalKeyValidationState.IDLE
                         },
                         label = { Text("API Key") },
                         placeholder = { Text("Paste your API key — new keys start with AQ.") },
@@ -166,10 +176,16 @@ fun PersonalSettingsScreen(
 
                     if (testResultMsg != null) {
                         Spacer(modifier = Modifier.height(6.dp))
+                        val msgColor = when (validationState) {
+                            PersonalKeyValidationState.VALID -> Color(0xFF10B981)
+                            PersonalKeyValidationState.TRANSIENT -> Color(0xFFF59E0B)
+                            PersonalKeyValidationState.INVALID -> Color(0xFFEF4444)
+                            PersonalKeyValidationState.CHECKING, PersonalKeyValidationState.IDLE -> palette.textSecondary
+                        }
                         Text(
                             text = testResultMsg!!,
                             fontSize = 12.sp,
-                            color = if (isKeyValid) Color(0xFF10B981) else Color(0xFFEF4444)
+                            color = msgColor
                         )
                     }
 
@@ -182,29 +198,43 @@ fun PersonalSettingsScreen(
                             val normalized = normalizeApiKey(apiKeyInput)
                             if (normalized.isNotBlank()) {
                                 if (!securePrefs.isSecureStorageAvailable()) {
-                                    isKeyValid = false
+                                    validationState = PersonalKeyValidationState.INVALID
                                     testResultMsg = "Secure storage unavailable on this device — key was not saved"
                                     return@MiraButton
                                 }
                                 isTestingKey = true
-                                testResultMsg = "Checking key with Google..."
+                                validationState = PersonalKeyValidationState.CHECKING
+                                testResultMsg = "Validating key with Google... (retrying if Google is busy)"
                                 scope.launch {
-                                    val res = restClient.validateApiKeyAndChat(normalized)
+                                    val outcome = restClient.validateApiKeyAndChat(normalized)
                                     isTestingKey = false
-                                    if (res.isSuccess) {
-                                        val saved = securePrefs.setGeminiApiKey(normalized)
-                                        if (saved) {
-                                            isKeyValid = true
-                                            testResultMsg = "Key validated! Stored securely in Keystore."
-                                            refreshStatus()
-                                        } else {
-                                            isKeyValid = false
-                                            testResultMsg = "Secure storage unavailable on this device — key was not saved"
+                                    when (outcome) {
+                                        is KeyValidationOutcome.Valid -> {
+                                            val saved = securePrefs.setGeminiApiKey(normalized)
+                                            if (saved) {
+                                                validationState = PersonalKeyValidationState.VALID
+                                                testResultMsg = "Valid API Key! Stored encrypted on device."
+                                                refreshStatus()
+                                            } else {
+                                                validationState = PersonalKeyValidationState.INVALID
+                                                testResultMsg = "Secure storage unavailable on this device — key was not saved"
+                                            }
                                         }
-                                    } else {
-                                        isKeyValid = false
-                                        testResultMsg = res.exceptionOrNull()?.message
-                                            ?: "Key validation failed"
+                                        is KeyValidationOutcome.TransientServerBusy -> {
+                                            val saved = securePrefs.setGeminiApiKey(normalized)
+                                            if (saved) {
+                                                validationState = PersonalKeyValidationState.TRANSIENT
+                                                testResultMsg = "Google's servers are busy right now — key saved, try again in a bit"
+                                                refreshStatus()
+                                            } else {
+                                                validationState = PersonalKeyValidationState.INVALID
+                                                testResultMsg = "Google's servers are busy right now (HTTP 503 — high demand). Your key was NOT rejected — please try again in a bit."
+                                            }
+                                        }
+                                        is KeyValidationOutcome.InvalidKey -> {
+                                            validationState = PersonalKeyValidationState.INVALID
+                                            testResultMsg = outcome.userFacingMessage
+                                        }
                                     }
                                 }
                             }
@@ -219,7 +249,7 @@ fun PersonalSettingsScreen(
                                 securePrefs.clearGeminiApiKey()
                                 apiKeyInput = ""
                                 testResultMsg = "Cleared personal key. Falling back to server key."
-                                isKeyValid = false
+                                validationState = PersonalKeyValidationState.VALID
                                 refreshStatus()
                             },
                             modifier = Modifier.fillMaxWidth()

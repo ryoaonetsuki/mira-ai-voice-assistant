@@ -120,12 +120,15 @@ fun MarketingScreen(
                     text = "Generate Post",
                     isLoading = isGenerating,
                     onClick = {
+                        val resolver = io.github.ryoaonetsuki.mira.backend.ApiKeyResolver(context)
                         val apiKey = securePrefs.getGeminiApiKey() ?: ""
                         if (topicInput.isNotBlank()) {
                             isGenerating = true
                             scope.launch {
+                                val keySource = resolver.resolveKey()
+                                val useServer = keySource is io.github.ryoaonetsuki.mira.backend.KeySource.ServerKey
                                 val prompt = "Write an engaging, high-conversion $selectedPlatform post about: $topicInput. Include hook, value, call-to-action, and relevant hashtags."
-                                val result = restClient.generateMarketingContent(apiKey, prompt)
+                                val result = restClient.generateMarketingContent(apiKey, prompt, useServerProxy = useServer)
                                 isGenerating = false
                                 if (result.isSuccess) {
                                     generatedPost = result.getOrThrow()

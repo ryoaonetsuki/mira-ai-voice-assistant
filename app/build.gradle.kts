@@ -23,6 +23,7 @@ android {
 
         buildConfigField("String", "SUPABASE_URL", "\"https://zvnfwlqxdbommtozugzt.supabase.co\"")
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp2bmZ3bHF4ZGJvbW10b3p1Z3p0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM5MTM2NDksImV4cCI6MjEwOTQ4OTY0OX0.uqyERmXVe2GEP2oaU0xc7I9V1ry-43adAEg6jddYBpk\"")
+        buildConfigField("String", "CLOUDFLARE_RELAY_URL", "\"https://mira-gemini-live-relay.salman-dev.workers.dev\"")
     }
 
     buildTypes {

@@ -19,6 +19,9 @@ class AudioPlayer(
     @Volatile
     private var isSpeakingState: Boolean = false
 
+    /** True while an utterance is actively playing (round 9 barge-in check). */
+    fun isSpeaking(): Boolean = isSpeakingState
+
     private var totalAudioBytesWritten: Long = 0L
     private var totalAudioChunksWritten: Long = 0L
 

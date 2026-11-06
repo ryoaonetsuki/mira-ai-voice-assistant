@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -418,6 +419,16 @@ class GeminiRestClient {
         .writeTimeout(15, TimeUnit.SECONDS)
         .build()
 
+    // ROUND 6: short-timeout client used ONLY for key validation. Every validation
+    // HTTP call is capped at 8s (callTimeout), so one slow/overloaded Google
+    // response can never wedge Setup. Chat/voice keep the shared client above.
+    private val validationClient = OkHttpClient.Builder()
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(8, TimeUnit.SECONDS)
+        .writeTimeout(5, TimeUnit.SECONDS)
+        .callTimeout(8, TimeUnit.SECONDS)
+        .build()
+
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
     private val edgeFunctionUrl: String
@@ -451,24 +462,27 @@ class GeminiRestClient {
     }
 
     /**
-     * Full validation:
-     * (1) models-list check (retries transient 503/429 once or twice with short backoff; transient
-     *     failure does NOT hard-fail validation when Step 2 can still prove the key)
-     * (2) real generateContent call walking the chat model ladder:
-     *     gemini-3.8-flash -> gemini-3.6-flash -> gemini-3.5-flash-lite
-     *     with up to 3 retries with backoff (~2s, ~5s, ~10s) on each model.
-     * Plausible key + only transient/network errors = TransientServerBusy (save + proceed).
-     * Auth failure = InvalidKey (do not save, show red error).
+     * Full validation — ROUND 6: v1 behaviour restored. ONE quick generateContent
+     * check on gemini-3.8-flash only (no models-list pre-check, no ladder, no
+     * retries, no backoff), on the short-timeout validationClient (8s per call)
+     * inside a hard 12s overall deadline.
+     * Plausible key + any timeout/transient/network error = TransientServerBusy
+     * (save + proceed into the app). Auth failure = InvalidKey (do not save).
+     * The spinner can never run past ~12s from this function, under any condition.
      */
     suspend fun validateApiKeyAndChat(
         apiKey: String,
         useServerProxy: Boolean = false
-    ): KeyValidationOutcome = withContext(Dispatchers.IO) {
+    ): KeyValidationOutcome {
         val key = normalizeApiKey(apiKey)
         if (key.isBlank()) {
-            return@withContext KeyValidationOutcome.InvalidKey("API key cannot be empty")
+            return KeyValidationOutcome.InvalidKey("API key cannot be empty")
         }
 
+        // ROUND 6 hard deadline: the whole check can never run past ~12s.
+        // A timeout returns null below and fails OPEN (plausible key = save + enter).
+        val outcome = withTimeoutOrNull(12_000L) {
+            withContext(Dispatchers.IO) {
         if (useServerProxy) {
             return@withContext try {
                 val payload = JSONObject().apply {
@@ -481,7 +495,7 @@ class GeminiRestClient {
                     .addHeader("Authorization", "Bearer $anonKey")
                     .post(payload.toString().toRequestBody(jsonMediaType))
                     .build()
-                client.newCall(request).execute().use { response ->
+                validationClient.newCall(request).execute().use { response ->
                     val body = response.body?.string() ?: ""
                     if (!response.isSuccessful) {
                         val err = try {
@@ -517,103 +531,64 @@ class GeminiRestClient {
             }
         }
 
-        // Step 1: models-list check (retries transient 503/429 once or twice with short backoff;
-        // transient failures in Step 1 do NOT hard-fail validation when Step 2 can still prove the key)
-        val step1Delays = listOf(1500L, 2500L)
-        for (attempt in 0..step1Delays.size) {
-            try {
-                val url = "https://generativelanguage.googleapis.com/v1beta/models?key=$key"
-                val request = Request.Builder().url(url).header("x-goog-api-key", key).get().build()
-                val response = client.newCall(request).execute()
-                val responseCode = response.code
-                val body = response.use { it.body?.string() ?: "" }
+        // ROUND 6: Step 1 (models-list pre-check) REMOVED — v1 did one quick
+        // generateContent check only, and the extra pre-check call was a second
+        // hang surface (3 attempts x ~75s). The single check below is the check.
 
-                if (response.isSuccessful) {
-                    break
-                }
-
-                val errorMsg = try {
-                    JSONObject(body).optJSONObject("error")?.optString("message") ?: "HTTP $responseCode"
-                } catch (e: Exception) {
-                    "HTTP $responseCode"
-                }
-
-                if (isAuthError(responseCode, errorMsg)) {
-                    val shortReason = extractShortReason(errorMsg)
-                    return@withContext KeyValidationOutcome.InvalidKey(shortReason, responseCode)
-                }
-
-                if (isTransientError(responseCode, errorMsg) && attempt < step1Delays.size) {
-                    Log.w(TAG, "Step 1 transient failure (HTTP $responseCode: $errorMsg). Retrying in ${step1Delays[attempt]}ms...")
-                    delay(step1Delays[attempt])
-                    continue
-                } else {
-                    Log.w(TAG, "Step 1 check non-fatal failure: HTTP $responseCode: $errorMsg. Proceeding to Step 2 chat ladder.")
-                    break
-                }
-            } catch (e: Exception) {
-                if (attempt < step1Delays.size && (isNetworkError(e) || isTransientError(null, e.message))) {
-                    Log.w(TAG, "Step 1 network error: ${e.message}. Retrying in ${step1Delays[attempt]}ms...")
-                    delay(step1Delays[attempt])
-                    continue
-                } else {
-                    Log.w(TAG, "Step 1 check exception: ${e.message}. Proceeding to Step 2 chat ladder.")
-                    break
-                }
-            }
-        }
-
-        // Step 2: real generateContent call trying the full chat ladder
+        // Single quick check (v1 behaviour restored): ONE generateContent call on
+        // gemini-3.8-flash only — no ladder, no retries, no backoff. The 8s call
+        // timeout on validationClient bounds the HTTP call; the 12s
+        // withTimeoutOrNull deadline above bounds everything else. Worst case
+        // this function returns in ~12s; the spinner can never spin forever.
         val testMsg = ChatMessageEntity(
             conversationId = "validate",
             role = "user",
             content = "Reply with exactly: OK"
         )
+        val result = executeGenerateContentSingleAttempt(
+            apiKey = key,
+            history = listOf(testMsg),
+            systemPrompt = "",
+            model = "gemini-3.8-flash",
+            useServerProxy = false,
+            attachSearchTool = false,
+            enableThinking = false,
+            httpClient = validationClient
+        )
 
-        var lastErrorReason = ""
-        var lastErrorCode: Int? = null
+        if (result.isSuccess) {
+            return@withContext KeyValidationOutcome.Valid
+        }
 
-        for (ladderModel in chatModelLadder) {
-            Log.d(TAG, "Validating key on model: $ladderModel")
-            val result = executeGenerateContent(
-                apiKey = key,
-                history = listOf(testMsg),
-                systemPrompt = "",
-                model = ladderModel,
-                useServerProxy = false,
-                attachSearchTool = false,
-                enableThinking = false
-            )
+        val errMsg = result.exceptionOrNull()?.message ?: "Unknown error"
+        val code = extractStatusCode(errMsg)
 
-            if (result.isSuccess) {
-                return@withContext KeyValidationOutcome.Valid
-            }
-
-            val err = result.exceptionOrNull()
-            val errMsg = err?.message ?: "Unknown error"
-            val code = extractStatusCode(errMsg)
-            lastErrorReason = errMsg
-            lastErrorCode = code
-
-            if (isAuthError(code, errMsg)) {
-                val shortReason = extractShortReason(errMsg)
-                return@withContext KeyValidationOutcome.InvalidKey(shortReason, code)
-            }
-
-            Log.w(TAG, "Validation generateContent failed on $ladderModel: $errMsg. Trying next ladder model...")
+        if (isAuthError(code, errMsg)) {
+            val shortReason = extractShortReason(errMsg)
+            return@withContext KeyValidationOutcome.InvalidKey(shortReason, code)
         }
 
         if (isPlausibleApiKey(key)) {
-            Log.i(TAG, "All models failed with transient/busy errors on plausible key format. Treating as TransientServerBusy.")
+            Log.i(TAG, "Single validation check failed with transient/network error on plausible key: $errMsg. Treating as TransientServerBusy.")
             KeyValidationOutcome.TransientServerBusy(
                 message = "Google's servers are busy right now — key saved, try again in a bit",
-                lastStatusCode = lastErrorCode
+                lastStatusCode = code
             )
         } else {
             KeyValidationOutcome.InvalidKey(
-                reason = extractShortReason(lastErrorReason.ifBlank { "Unrecognized key format" }),
-                statusCode = lastErrorCode
+                reason = extractShortReason(errMsg),
+                statusCode = code
             )
+        }
+            }
+        }
+        // Overall deadline hit (or any path that never returned): fail OPEN for a
+        // plausible key so the user can always enter the app; only an implausible
+        // key format is treated as invalid here.
+        return outcome ?: if (isPlausibleApiKey(key)) {
+            KeyValidationOutcome.TransientServerBusy(lastStatusCode = null)
+        } else {
+            KeyValidationOutcome.InvalidKey("Validation timed out")
         }
     }
 
@@ -1054,7 +1029,8 @@ class GeminiRestClient {
         useServerProxy: Boolean = false,
         attachSearchTool: Boolean = false,
         enableThinking: Boolean = false,
-        attachments: List<ChatAttachment> = emptyList()
+        attachments: List<ChatAttachment> = emptyList(),
+        httpClient: OkHttpClient = client
     ): Result<GroundedChatResult> {
         return try {
             val root = JSONObject()
@@ -1173,7 +1149,7 @@ class GeminiRestClient {
                 Request.Builder().url(url).header("x-goog-api-key", apiKey).post(root.toString().toRequestBody(jsonMediaType)).build()
             }
 
-            client.newCall(request).execute().use { response ->
+            httpClient.newCall(request).execute().use { response ->
                 val body = response.body?.string() ?: ""
                 if (response.isSuccessful) {
                     val json = JSONObject(body)

@@ -18,15 +18,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.ryoaonetsuki.mira.network.FreeWebSearch
 import io.github.ryoaonetsuki.mira.ui.components.MiraCard
 import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import org.json.JSONObject
-import java.util.concurrent.TimeUnit
 
 data class SearchResult(val title: String, val snippet: String, val url: String)
 
@@ -44,58 +41,28 @@ fun WebSearchScreen(
     var results by remember { mutableStateOf<List<SearchResult>>(emptyList()) }
     var isSearching by remember { mutableStateOf(false) }
 
-    val client = remember {
-        OkHttpClient.Builder()
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(10, TimeUnit.SECONDS)
-            .build()
-    }
-
     fun performSearch(query: String) {
         if (query.isBlank()) return
         isSearching = true
         scope.launch {
             val list = mutableListOf<SearchResult>()
             try {
-                // Query DuckDuckGo Instant Answer API
-                val encoded = Uri.encode(query)
-                val url = "https://api.duckduckgo.com/?q=$encoded&format=json&no_html=1&skip_disambig=1"
-                val req = Request.Builder().url(url).build()
-
-                val body = withContext(Dispatchers.IO) {
-                    client.newCall(req).execute().use { it.body?.string() ?: "" }
+                // Real live results via the app's own built-in search (live Google
+                // results via SearXNG, then DuckDuckGo fallbacks) — no key needed.
+                val webResults = withContext(Dispatchers.IO) {
+                    FreeWebSearch.search(query, maxResults = 10)
+                }
+                webResults.forEach { r ->
+                    list.add(SearchResult(r.title, r.snippet, r.url))
                 }
 
-                if (body.isNotBlank()) {
-                    val json = JSONObject(body)
-                    val heading = json.optString("Heading")
-                    val abstractText = json.optString("AbstractText")
-                    val abstractUrl = json.optString("AbstractURL")
-
-                    if (abstractText.isNotBlank()) {
-                        list.add(SearchResult(heading.ifBlank { query }, abstractText, abstractUrl.ifBlank { "https://duckduckgo.com/?q=$encoded" }))
-                    }
-
-                    val related = json.optJSONArray("RelatedTopics")
-                    if (related != null) {
-                        for (i in 0 until minOf(related.length(), 10)) {
-                            val topic = related.optJSONObject(i)
-                            if (topic != null && topic.has("Text")) {
-                                val text = topic.getString("Text")
-                                val firstUrl = topic.optString("FirstURL")
-                                list.add(SearchResult(text.take(45), text, firstUrl))
-                            }
-                        }
-                    }
-                }
-
-                // If instant answer has no items, add direct web search result
+                // If the built-in search has no items, add direct web search result
                 if (list.isEmpty()) {
                     list.add(
                         SearchResult(
                             title = "DuckDuckGo Web Search: $query",
                             snippet = "Tap to view full web search results on DuckDuckGo.",
-                            url = "https://duckduckgo.com/?q=$encoded"
+                            url = "https://duckduckgo.com/?q=${Uri.encode(query)}"
                         )
                     )
                 }

@@ -7,16 +7,30 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
+sealed class LiveAuthMode(val label: String) {
+    data class Ephemeral(val token: String) : LiveAuthMode("ephemeral")
+    data class DirectKey(val key: String) : LiveAuthMode("direct")
+    data class Relay(val key: String, val relayUrl: String) : LiveAuthMode("relay")
+}
+
 class GeminiLiveClient(
-    private val apiKey: String,
+    private val apiKey: String = "",
     private val voiceName: String,
     private val systemPrompt: String,
     private val initialModel: String = "models/gemini-3.8-live",
     private val language: String = "Bangla (Bengali)",
     private val ephemeralToken: String? = null,
+    val relayUrl: String? = null,
+    val anonKey: String? = null,
+    val authModes: List<LiveAuthMode> = if (!ephemeralToken.isNullOrBlank()) {
+        listOf(LiveAuthMode.Ephemeral(ephemeralToken))
+    } else if (apiKey.isNotBlank()) {
+        listOf(LiveAuthMode.DirectKey(apiKey))
+    } else {
+        emptyList()
+    },
     private val listener: LiveEventsListener
 ) {
     interface LiveEventsListener {
@@ -27,6 +41,7 @@ class GeminiLiveClient(
         fun onInterrupted()
         fun onTurnComplete()
         fun onTranscript(text: String, isUser: Boolean)
+        fun onStalled()
         fun onError(message: String)
         fun onClosed(reason: String)
     }
@@ -57,8 +72,18 @@ class GeminiLiveClient(
         "models/gemini-3.8-live"
     ).distinct()
 
+    private val TOTAL_SAFETY_BUDGET_MS = 240_000L
+    private var sessionStartTimestampMs = 0L
+
     private val MAX_SETUP_ATTEMPTS = 3
-    private var setupAttempt = 0
+    private var currentModeIndex = 0
+    private var currentVariant = 0
+    private var resolvedAuthModes: List<LiveAuthMode> = emptyList()
+    private val modesTriedRecord = mutableListOf<Pair<String, MutableList<String>>>()
+
+    var activeModeLabel: String = ""
+        private set
+
     private var lastFailureReason: String? = null
     private var v1FailureReason: String? = null
 
@@ -83,17 +108,50 @@ class GeminiLiveClient(
     val audioChunksSent: Long get() = audioChunksSentCount.get()
     val audioChunksReceived: Long get() = incomingAudioChunksCount.get()
 
-    // Setup timeout: 25 seconds to receive setupComplete after sending setup
-    private val SETUP_TIMEOUT_MS = 25_000L
+    // Setup timeout: 45 seconds to receive setupComplete after sending setup
+    private val SETUP_TIMEOUT_MS = 45_000L
     private var setupTimeoutThread: Thread? = null
 
+    // Post-setup stall watchdog: checks every 5s if user sent audio > last server message and no reply > 30s
+    private val STALL_CHECK_INTERVAL_MS = 5_000L
+    private val STALL_TIMEOUT_MS = 30_000L
+    private val STALL_MAX_SILENCE_MS = 8 * 60 * 1_000L // 8 minutes
+
+    @Volatile private var lastServerMessageMs: Long = 0L
+    @Volatile private var lastUserAudioSentMs: Long = 0L
+    private val isStalledEpisode = AtomicBoolean(false)
+    private var stallWatchdogThread: Thread? = null
+
+    private fun recordAttempt(modeLabel: String, variantNum: Int) {
+        val variantLabel = "V$variantNum"
+        val existing = modesTriedRecord.find { it.first == modeLabel }
+        if (existing != null) {
+            if (!existing.second.contains(variantLabel)) {
+                existing.second.add(variantLabel)
+            }
+        } else {
+            modesTriedRecord.add(Pair(modeLabel, mutableListOf(variantLabel)))
+        }
+    }
+
     fun startSession() {
-        if (ephemeralToken.isNullOrBlank() && apiKey.isBlank()) {
+        resolvedAuthModes = if (authModes.isNotEmpty()) {
+            authModes
+        } else if (!ephemeralToken.isNullOrBlank()) {
+            listOf(LiveAuthMode.Ephemeral(ephemeralToken))
+        } else if (apiKey.isNotBlank()) {
+            listOf(LiveAuthMode.DirectKey(apiKey))
+        } else {
+            emptyList()
+        }
+
+        if (resolvedAuthModes.isEmpty()) {
             listener.onError("Missing API key. Please configure in Setup.")
             return
         }
-        val authSource = if (!ephemeralToken.isNullOrBlank()) "ServerKey (ephemeral token)" else if (apiKey.isNotBlank()) "UserKey (length=${apiKey.length})" else "NoKey"
-        Log.i(TAG, "Starting Live session: model=$sanitizedInitialModel, voice=$voiceName, language=$language, auth=$authSource")
+
+        val initialMode = resolvedAuthModes[0]
+        Log.i(TAG, "Starting Live session: model=$sanitizedInitialModel, voice=$voiceName, language=$language, initialMode=${initialMode.label}, totalModes=${resolvedAuthModes.size}")
 
         synchronized(lock) {
             if (isRunning.get()) {
@@ -102,7 +160,10 @@ class GeminiLiveClient(
             }
             isRunning.set(true)
             isSetupComplete.set(false)
-            setupAttempt = 0
+            sessionStartTimestampMs = System.currentTimeMillis()
+            currentModeIndex = 0
+            currentVariant = 0
+            modesTriedRecord.clear()
             lastFailureReason = null
             v1FailureReason = null
             lastVoiceDiagnostic = ""
@@ -111,19 +172,38 @@ class GeminiLiveClient(
             audioBytesSentCount.set(0L)
             incomingAudioChunksCount.set(0L)
             incomingAudioBytesCount.set(0L)
-            connectWithCurrentSetupAttemptLocked()
+            lastServerMessageMs = 0L
+            lastUserAudioSentMs = 0L
+            isStalledEpisode.set(false)
+            stopStallWatchdog()
+            connectWithCurrentAttemptLocked()
         }
     }
 
-    private fun connectWithCurrentSetupAttemptLocked() {
-        setupAttempt++
-        if (setupAttempt > MAX_SETUP_ATTEMPTS) {
-            val diag = buildDiagnosticString("tried all $MAX_SETUP_ATTEMPTS setup variants without success", MAX_SETUP_ATTEMPTS)
+    private fun connectWithCurrentAttemptLocked() {
+        val elapsedTotal = System.currentTimeMillis() - sessionStartTimestampMs
+        if (elapsedTotal >= TOTAL_SAFETY_BUDGET_MS) {
+            val diag = buildDiagnosticString("overall safety budget exceeded (${elapsedTotal / 1000}s >= ${TOTAL_SAFETY_BUDGET_MS / 1000}s)")
             lastVoiceDiagnostic = diag
             Log.e(TAG, diag)
             listener.onError(diag)
             return
         }
+
+        if (currentModeIndex >= resolvedAuthModes.size) {
+            val diag = buildDiagnosticString("tried all ${resolvedAuthModes.size} auth modes without success")
+            lastVoiceDiagnostic = diag
+            Log.e(TAG, diag)
+            listener.onError(diag)
+            return
+        }
+
+        val currentMode = resolvedAuthModes[currentModeIndex]
+        activeModeLabel = currentMode.label
+        val maxVariantsForMode = if (currentModeIndex == 0) MAX_SETUP_ATTEMPTS else 1
+        currentVariant++
+
+        recordAttempt(currentMode.label, currentVariant)
 
         // Reset per-attempt diagnostic tracking
         httpUpgradeCode = null
@@ -135,23 +215,35 @@ class GeminiLiveClient(
         lastFailureReason = null
 
         // Select model from ladder: attempt 1 & 2 use ladder primary; attempt 3 can use secondary if ladder has > 1
-        val model = if (modelFallbackLadder.size > 1 && setupAttempt == 3) {
+        val model = if (modelFallbackLadder.size > 1 && currentVariant == 3) {
             modelFallbackLadder[1]
         } else {
             modelFallbackLadder[0]
         }
 
-        // Live WebSocket request: auth is ?key= in the URL ONLY, NO x-goog-api-key header (docs & Maya)
-        val request = if (!ephemeralToken.isNullOrBlank()) {
-            val wsUrl = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained?access_token=$ephemeralToken"
-            Log.i(TAG, "Connecting to Gemini Live WS attempt $setupAttempt/$MAX_SETUP_ATTEMPTS using ephemeral token, model: $model")
-            Request.Builder().url(wsUrl).build()
-        } else {
-            val wsUrl = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=$apiKey"
-            Log.i(TAG, "Connecting to Gemini Live WS attempt $setupAttempt/$MAX_SETUP_ATTEMPTS using ?key= URL auth, model: $model (setup variant $setupAttempt)")
-            Request.Builder()
-                .url(wsUrl)
-                .build()
+        val request = when (currentMode) {
+            is LiveAuthMode.Ephemeral -> {
+                val wsUrl = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained?access_token=${currentMode.token}"
+                Log.i(TAG, "Connecting to Gemini Live WS [mode: ${currentMode.label}, variant V$currentVariant/$maxVariantsForMode] using ephemeral token, model: $model")
+                Request.Builder().url(wsUrl).build()
+            }
+            is LiveAuthMode.DirectKey -> {
+                val wsUrl = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${currentMode.key}"
+                Log.i(TAG, "Connecting to Gemini Live WS [mode: ${currentMode.label}, variant V$currentVariant/$maxVariantsForMode] using ?key= URL auth, model: $model")
+                Request.Builder().url(wsUrl).build()
+            }
+            is LiveAuthMode.Relay -> {
+                val targetUrl = currentMode.relayUrl.ifBlank { relayUrl ?: "" }
+                Log.i(TAG, "Connecting to Gemini Live WS [mode: ${currentMode.label}, variant V$currentVariant/$maxVariantsForMode] via relay ($targetUrl), model: $model")
+                val reqBuilder = Request.Builder().url(targetUrl)
+                if (!anonKey.isNullOrBlank()) {
+                    reqBuilder.header("apikey", anonKey)
+                    reqBuilder.header("Authorization", "Bearer $anonKey")
+                }
+                val key = currentMode.key.ifBlank { apiKey }
+                reqBuilder.header("x-mira-key", key)
+                reqBuilder.build()
+            }
         }
 
         listener.onConnecting(model)
@@ -159,7 +251,7 @@ class GeminiLiveClient(
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 httpUpgradeCode = response.code
-                Log.i(TAG, "WebSocket connection opened successfully (HTTP ${response.code}) [attempt $setupAttempt/$MAX_SETUP_ATTEMPTS]")
+                Log.i(TAG, "WebSocket connection opened successfully (HTTP ${response.code}) [mode: ${currentMode.label}, variant V$currentVariant/$maxVariantsForMode]")
                 synchronized(lock) {
                     if (webSocket !== this@GeminiLiveClient.webSocket || !isRunning.get()) {
                         Log.w(TAG, "onOpen received for stale or cancelled WebSocket — closing")
@@ -167,7 +259,7 @@ class GeminiLiveClient(
                         return
                     }
                     listener.onConnected()
-                    sendSetupMessage(webSocket, model, setupAttempt)
+                    sendSetupMessage(webSocket, model, currentVariant)
                     startSetupTimeout(webSocket)
                 }
             }
@@ -205,7 +297,7 @@ class GeminiLiveClient(
                     append(t.message ?: t.javaClass.simpleName)
                     if (response != null) append(" (HTTP ${response.code})")
                 }
-                Log.e(TAG, "WebSocket failure on attempt $setupAttempt: $failureDesc", t)
+                Log.e(TAG, "WebSocket failure on [mode: ${currentMode.label}, variant V$currentVariant]: $failureDesc", t)
                 if (wsCloseOrFailure == null) {
                     wsCloseOrFailure = if (lastFailureReason?.contains("timed out") == true) "-" else failureDesc
                 }
@@ -222,7 +314,7 @@ class GeminiLiveClient(
 
     /**
      * Single decision point for WebSocket termination (onClosed / onFailure).
-     * Drives Maya-style config-varied setup retries (max 3 attempts total).
+     * Drives auth-mode ladder and config-varied setup retries.
      */
     private fun handleSocketTermination(
         ws: WebSocket,
@@ -238,6 +330,7 @@ class GeminiLiveClient(
             }
             webSocket = null
             cancelSetupTimeout()
+            stopStallWatchdog()
 
             // If session was stopped by the user, clean exit with no spurious error
             if (!isRunning.get()) {
@@ -248,20 +341,42 @@ class GeminiLiveClient(
             val wasSetup = isSetupComplete.get()
             isSetupComplete.set(false)
 
-            // Setup never completed — try next setup variant
+            // Setup never completed — try next setup variant or advance auth mode
             if (!wasSetup) {
-                if (setupAttempt == 1) {
+                if (currentModeIndex == 0 && currentVariant == 1) {
                     v1FailureReason = lastFailureReason ?: closeReason.ifBlank { "V1 connection terminated" }
                 }
-                if (setupAttempt < MAX_SETUP_ATTEMPTS && isRunning.get()) {
-                    val nextAttempt = setupAttempt + 1
-                    Log.w(TAG, "Setup variant $setupAttempt failed ($closeReason). Retrying with variant $nextAttempt on fresh socket...")
-                    connectWithCurrentSetupAttemptLocked()
+
+                val elapsedTotal = System.currentTimeMillis() - sessionStartTimestampMs
+                if (elapsedTotal >= TOTAL_SAFETY_BUDGET_MS) {
+                    val finalReason = lastFailureReason ?: closeReason.ifBlank { "safety budget exceeded" }
+                    val diag = buildDiagnosticString("safety budget exceeded (${elapsedTotal / 1000}s >= ${TOTAL_SAFETY_BUDGET_MS / 1000}s); last error: $finalReason")
+                    lastVoiceDiagnostic = diag
+                    Log.e(TAG, "Overall voice setup safety budget exceeded: $diag")
+                    listener.onError(diag)
+                    return
+                }
+
+                val maxVariants = if (currentModeIndex == 0) MAX_SETUP_ATTEMPTS else 1
+
+                if (currentVariant < maxVariants && isRunning.get()) {
+                    val nextVariant = currentVariant + 1
+                    val modeLabel = resolvedAuthModes[currentModeIndex].label
+                    Log.w(TAG, "Setup variant V$currentVariant in mode '$modeLabel' failed ($closeReason). Retrying with variant V$nextVariant...")
+                    connectWithCurrentAttemptLocked()
+                    return
+                } else if (currentModeIndex + 1 < resolvedAuthModes.size && isRunning.get()) {
+                    val finishedModeLabel = resolvedAuthModes[currentModeIndex].label
+                    currentModeIndex++
+                    currentVariant = 0
+                    val nextModeLabel = resolvedAuthModes[currentModeIndex].label
+                    Log.w(TAG, "All variants exhausted for mode '$finishedModeLabel' ($closeReason). Advancing to next auth mode '$nextModeLabel'...")
+                    connectWithCurrentAttemptLocked()
                     return
                 } else {
-                    // All 3 setup variants exhausted — report the real diagnostic
+                    // All modes and variants exhausted — report the real diagnostic
                     val finalReason = lastFailureReason ?: closeReason.ifBlank { "connection terminated" }
-                    val diag = buildDiagnosticString(finalReason, setupAttempt)
+                    val diag = buildDiagnosticString(finalReason)
                     lastVoiceDiagnostic = diag
                     Log.e(TAG, "All voice setup variants failed: $diag")
                     listener.onError(diag)
@@ -279,7 +394,7 @@ class GeminiLiveClient(
     }
 
     /**
-     * Starts a 25-second timeout. If setupComplete does not arrive within this window,
+     * Starts a 45-second timeout. If setupComplete does not arrive within this window,
      * aborts the socket via ws.cancel(). The decision point in handleSocketTermination
      * will advance to the next setup variant.
      */
@@ -290,7 +405,7 @@ class GeminiLiveClient(
                 Thread.sleep(SETUP_TIMEOUT_MS)
                 synchronized(lock) {
                     if (ws === webSocket && !isSetupComplete.get() && isRunning.get()) {
-                        Log.w(TAG, "Setup timeout after ${SETUP_TIMEOUT_MS / 1000}s on attempt $setupAttempt — cancelling socket for variant retry")
+                        Log.w(TAG, "Setup timeout after ${SETUP_TIMEOUT_MS / 1000}s in mode '$activeModeLabel' variant V$currentVariant — cancelling socket for retry")
                         lastFailureReason = "no setupComplete in ${SETUP_TIMEOUT_MS / 1000}s"
                         // Socket cancel aborts socket and triggers onFailure
                         ws.cancel()
@@ -305,6 +420,54 @@ class GeminiLiveClient(
     private fun cancelSetupTimeout() {
         setupTimeoutThread?.interrupt()
         setupTimeoutThread = null
+    }
+
+    /**
+     * Starts the post-setup stall watchdog daemon thread.
+     * Checks every 5s: if the user has sent audio after the last server message
+     * (lastUserAudioSentMs > lastServerMessageMs) and no server message has arrived for >30s,
+     * treats it as a STALL: logs a warning and calls onStalled() exactly once per stall episode.
+     * If silence continues past 8 minutes, sets lastFailureReason and cancels the socket.
+     */
+    private fun startStallWatchdog(ws: WebSocket) {
+        stopStallWatchdog()
+        isStalledEpisode.set(false)
+        stallWatchdogThread = Thread {
+            try {
+                while (isRunning.get() && isSetupComplete.get() && ws === webSocket) {
+                    Thread.sleep(STALL_CHECK_INTERVAL_MS)
+                    val now = System.currentTimeMillis()
+                    val userAudioMs = lastUserAudioSentMs
+                    val serverMs = lastServerMessageMs
+
+                    if (userAudioMs > serverMs) {
+                        val silenceDuration = now - serverMs
+                        if (silenceDuration > STALL_MAX_SILENCE_MS) {
+                            synchronized(lock) {
+                                if (ws === webSocket && isRunning.get()) {
+                                    Log.e(TAG, "Live session stalled — no reply from the server for 8 minutes")
+                                    lastFailureReason = "Live session stalled — no reply from the server for 8 minutes"
+                                    ws.cancel()
+                                }
+                            }
+                            break
+                        } else if (silenceDuration > STALL_TIMEOUT_MS) {
+                            if (isStalledEpisode.compareAndSet(false, true)) {
+                                Log.w(TAG, "Live session stalled: no server message for ${silenceDuration / 1000}s after user audio. Keeping session alive.")
+                                listener.onStalled()
+                            }
+                        }
+                    }
+                }
+            } catch (e: InterruptedException) {
+                // Watchdog cancelled / stopped
+            }
+        }.also { it.isDaemon = true; it.start() }
+    }
+
+    private fun stopStallWatchdog() {
+        stallWatchdogThread?.interrupt()
+        stallWatchdogThread = null
     }
 
     /**
@@ -344,6 +507,10 @@ class GeminiLiveClient(
             setupDetails.put("outputAudioTranscription", JSONObject())
             setupDetails.put("inputAudioTranscription", JSONObject())
 
+            // sessionResumption and contextWindowCompression in all setup variants (V1, V2, V3)
+            setupDetails.put("sessionResumption", JSONObject())
+            setupDetails.put("contextWindowCompression", JSONObject().put("slidingWindow", JSONObject()))
+
             // System instructions (all variants)
             if (systemPrompt.isNotBlank()) {
                 val sysInstruction = JSONObject()
@@ -356,13 +523,7 @@ class GeminiLiveClient(
             }
 
             if (attemptVariant == 2) {
-                // V2 = Maya C2265b60 FULL: V1 + inputAudioTranscription:{},
-                // sessionResumption:{}, contextWindowCompression:{slidingWindow:{}},
-                // realtimeInputConfig{automaticActivityDetection:{endOfSpeechSensitivity:"END_SENSITIVITY_HIGH", silenceDurationMs:800}}
-                setupDetails.put("inputAudioTranscription", JSONObject())
-                setupDetails.put("sessionResumption", JSONObject())
-                setupDetails.put("contextWindowCompression", JSONObject().put("slidingWindow", JSONObject()))
-
+                // V2: realtimeInputConfig with automaticActivityDetection
                 val realtimeInputConfig = JSONObject()
                 val autoDetect = JSONObject()
                 autoDetect.put("endOfSpeechSensitivity", "END_SENSITIVITY_HIGH")
@@ -404,6 +565,8 @@ class GeminiLiveClient(
     }
 
     private fun handleIncomingMessage(jsonText: String, ws: WebSocket) {
+        lastServerMessageMs = System.currentTimeMillis()
+        isStalledEpisode.set(false)
         try {
             val json = JSONObject(jsonText)
 
@@ -413,11 +576,12 @@ class GeminiLiveClient(
                 val errCode = errorObj.optInt("code", -1)
                 val errMsg = errorObj.optString("message", "Unknown server error")
                 serverErrorFrame = if (errCode != -1) "code $errCode: $errMsg" else errMsg
-                Log.e(TAG, "Server sent error frame on attempt $setupAttempt: $serverErrorFrame")
+                Log.e(TAG, "Server sent error frame in mode '$activeModeLabel' variant V$currentVariant: $serverErrorFrame")
                 synchronized(lock) {
                     if (ws === webSocket) {
                         lastFailureReason = "server error ($serverErrorFrame)"
                         cancelSetupTimeout()
+                        stopStallWatchdog()
                         isSetupComplete.set(false)
                         ws.cancel()
                     }
@@ -428,13 +592,15 @@ class GeminiLiveClient(
             // 1. Setup complete check
             if (json.has("setupComplete")) {
                 val elapsedMs = if (setupSentTimestampMs > 0L) System.currentTimeMillis() - setupSentTimestampMs else -1L
-                Log.i(TAG, ">>> SETUP COMPLETE received from Gemini Live on attempt $setupAttempt in ${elapsedMs}ms! Starting audio transmission.")
-                if (setupAttempt > 1 && v1FailureReason != null) {
-                    Log.i(TAG, ">>> Setup succeeded on variant $setupAttempt (V1 failed: $v1FailureReason)")
+                Log.i(TAG, ">>> SETUP COMPLETE received from Gemini Live in mode '$activeModeLabel' variant V$currentVariant in ${elapsedMs}ms! Starting audio transmission.")
+                if (currentVariant > 1 && v1FailureReason != null) {
+                    Log.i(TAG, ">>> Setup succeeded on variant V$currentVariant (V1 failed: $v1FailureReason)")
                 }
                 cancelSetupTimeout()
                 isSetupComplete.set(true)
+                lastServerMessageMs = System.currentTimeMillis()
                 lastFailureReason = null
+                startStallWatchdog(ws)
                 listener.onSetupComplete()
                 return
             }
@@ -519,7 +685,7 @@ class GeminiLiveClient(
         }
     }
 
-    private fun buildDiagnosticString(reason: String, attemptsCount: Int): String {
+    private fun buildDiagnosticString(reason: String): String {
         val wsCodeStr = if (httpUpgradeCode != null) "WS $httpUpgradeCode" else "WS -"
         val setupStr = if (setupWasSent) "setup $setupBytesSent bytes sent=$setupSendSuccess" else "setup not sent"
         val errorFrameStr = if (serverErrorFrame != null) "server error $serverErrorFrame" else "no server error frame"
@@ -528,7 +694,11 @@ class GeminiLiveClient(
         val toolDiagnostic = if (v1FailureReason != null) {
             "; V1 failed ($v1FailureReason); retried with subsequent variants"
         } else ""
-        return "Live setup failed: $reason ($wsCodeStr, $setupStr, $errorFrameStr, $closeStr, $statsStr$toolDiagnostic) — tried $attemptsCount setup variants (V1 Maya-minimal, V2 Maya-full, V3 +language)"
+        val modesTriedSummary = modesTriedRecord.joinToString(" ") { (label, variants) ->
+            "$label(${variants.joinToString(",")})"
+        }
+        val modesDiagnostic = if (modesTriedSummary.isNotBlank()) "modes tried: $modesTriedSummary" else "no modes tried"
+        return "Live setup failed: $reason ($wsCodeStr, $setupStr, $errorFrameStr, $closeStr, $statsStr$toolDiagnostic) — $modesDiagnostic"
     }
 
     /**
@@ -550,6 +720,7 @@ class GeminiLiveClient(
 
             val sent = webSocket?.send(root.toString()) ?: false
             if (sent) {
+                lastUserAudioSentMs = System.currentTimeMillis()
                 val chunkNum = audioChunksSentCount.incrementAndGet()
                 val totalBytes = audioBytesSentCount.addAndGet(pcmBytes.size.toLong())
                 if (chunkNum == 1L || chunkNum % 50L == 0L) {
@@ -607,6 +778,7 @@ class GeminiLiveClient(
         isRunning.set(false)
         isSetupComplete.set(false)
         cancelSetupTimeout()
+        stopStallWatchdog()
         lastFailureReason = null
         try {
             webSocket?.close(1000, "User ended session")

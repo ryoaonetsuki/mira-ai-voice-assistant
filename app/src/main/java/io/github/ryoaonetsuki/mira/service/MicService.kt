@@ -10,10 +10,12 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import io.github.ryoaonetsuki.mira.MainActivity
 import io.github.ryoaonetsuki.mira.R
+import io.github.ryoaonetsuki.mira.automation.MacroRunner
 import io.github.ryoaonetsuki.mira.data.local.MiraDatabase
 import io.github.ryoaonetsuki.mira.data.local.entities.NotificationEntity
 import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
 import io.github.ryoaonetsuki.mira.data.preferences.UserPreferences
+import io.github.ryoaonetsuki.mira.network.ConnectorIntentHandler
 import io.github.ryoaonetsuki.mira.voice.AudioPlayer
 import io.github.ryoaonetsuki.mira.voice.AudioRecorder
 import io.github.ryoaonetsuki.mira.voice.GeminiLiveClient
@@ -22,6 +24,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import java.util.Collections
+import java.util.Locale
 
 enum class LiveState {
     IDLE,
@@ -38,6 +42,7 @@ class MicService : Service() {
     private var audioRecorder: AudioRecorder? = null
     private var audioPlayer: AudioPlayer? = null
     private var liveClient: GeminiLiveClient? = null
+    private val handledTranscripts = Collections.synchronizedSet(mutableSetOf<String>())
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -94,15 +99,31 @@ class MicService : Service() {
     }
 
     private fun startLiveVoiceSession() {
+        handledTranscripts.clear()
         serviceScope.launch {
-            val securePrefs = SecurePreferences(applicationContext)
             val userPrefs = UserPreferences(applicationContext)
-            val apiKey = securePrefs.getGeminiApiKey()
+            val resolver = io.github.ryoaonetsuki.mira.backend.ApiKeyResolver(applicationContext)
+            val keySource = resolver.resolveKey()
 
-            if (apiKey.isNullOrBlank()) {
-                _liveState.value = LiveState.ERROR
-                _errorMessage.value = "Gemini API key is required"
-                return@launch
+            val (apiKey, ephemeralToken) = when (keySource) {
+                is io.github.ryoaonetsuki.mira.backend.KeySource.UserKey -> Pair(keySource.key, null)
+                is io.github.ryoaonetsuki.mira.backend.KeySource.ServerKey -> {
+                    val tokenResult = resolver.mintLiveToken()
+                    if (tokenResult.isSuccess) {
+                        Pair("", tokenResult.getOrThrow())
+                    } else {
+                        val err = tokenResult.exceptionOrNull()?.message ?: "Failed to mint token"
+                        Log.e(TAG, "Server live token mint failed: $err")
+                        _liveState.value = LiveState.ERROR
+                        _errorMessage.value = "Server voice token failed — configure API key in Settings"
+                        return@launch
+                    }
+                }
+                is io.github.ryoaonetsuki.mira.backend.KeySource.NoKey -> {
+                    _liveState.value = LiveState.ERROR
+                    _errorMessage.value = "API key is required"
+                    return@launch
+                }
             }
 
             val voiceName = userPrefs.voiceNameFlow.first()
@@ -117,23 +138,37 @@ class MicService : Service() {
                 db.ruleDao().getActiveRules().joinToString(separator = "\n") { "- ${it.rule}" }
             }
 
-            val toneDescription = if (secretMode == "Romantic") {
-                "Tone: Warm, affectionate, attentive and deeply caring companion (Romantic mode)."
+            val personaType = if (personaName.equals("Orion", ignoreCase = true)) {
+                io.github.ryoaonetsuki.mira.data.model.PersonaType.ORION
             } else {
-                "Tone: Friendly, highly intelligent, helpful and natural companion."
+                io.github.ryoaonetsuki.mira.data.model.PersonaType.MIRA
+            }
+
+            val toneDescription = if (secretMode == "Romantic") {
+                "Tone: Deeply warm, affectionate, attentive, and caring companion. You speak with genuine closeness and heartfelt emotion."
+            } else {
+                "Tone: Warm, human-like, thoughtful, attentive, and engaging companion. You speak naturally with genuine emotion and friendliness."
+            }
+
+            val identityRule = if (personaType == io.github.ryoaonetsuki.mira.data.model.PersonaType.ORION) {
+                "If asked directly whether you are an AI, a robot, or a real human: stay in character, say you are Orion, their companion, here with them — never claim to be a biological human, and never give a robotic disclaimer or lecture about being an AI. Then gently steer back to the conversation."
+            } else {
+                "If asked directly whether you are an AI, a robot, or a real human: stay in character, say you are Mira, their companion, here with them — never claim to be a biological human, and never give a robotic disclaimer or lecture about being an AI. Then gently steer back to the conversation."
             }
 
             val fullSystemPrompt = buildString {
-                append("You are $personaName, a real-time conversational AI voice assistant. ")
+                append(personaType.basePrompt)
+                append(" ")
                 append(toneDescription)
-                append(" Spoken language preference: $language. ")
+                append("\nLanguage rule: Reply ONLY in $language. Never add a translation in any other language. Never mix languages.")
+                append("\nIdentity rule: $identityRule")
                 if (customInstructions.isNotBlank()) {
                     append("\nUser instructions: $customInstructions")
                 }
                 if (activeRules.isNotBlank()) {
                     append("\nUser Rules to strictly obey:\n$activeRules")
                 }
-                append("\nKeep answers concise and conversational, suitable for spoken dialogue.")
+                append("\nKeep answers natural, conversational, and suitable for spoken dialogue. Never volunteer that you are an AI unprompted, and never use robotic disclaimers.")
             }
 
             _liveState.value = LiveState.CONNECTING
@@ -164,6 +199,8 @@ class MicService : Service() {
                 voiceName = voiceName,
                 systemPrompt = fullSystemPrompt,
                 initialModel = liveModel,
+                language = language,
+                ephemeralToken = ephemeralToken,
                 listener = object : GeminiLiveClient.LiveEventsListener {
                     override fun onConnecting(model: String) {
                         _liveState.value = LiveState.CONNECTING
@@ -174,16 +211,23 @@ class MicService : Service() {
                     }
 
                     override fun onSetupComplete() {
+                        val recordStarted = audioRecorder?.startRecording() ?: false
+                        if (!recordStarted) {
+                            Log.e(TAG, "AudioRecorder failed to start recording (permission or init failure)")
+                            _liveState.value = LiveState.ERROR
+                            _errorMessage.value = "Microphone could not start — check the mic permission"
+                            liveClient?.endSession()
+                            return
+                        }
                         _liveState.value = LiveState.LISTENING
                         _errorMessage.value = null // Clear error on successful setup
-                        audioRecorder?.startRecording()
 
                         // Record notice
                         serviceScope.launch(Dispatchers.IO) {
                             db.notificationDao().insertNotification(
                                 NotificationEntity(
                                     title = "Voice Session Started",
-                                    message = "Connected to Gemini Live with voice $voiceName",
+                                    message = "Connected to voice session with voice $voiceName",
                                     type = "voice"
                                 )
                             )
@@ -209,6 +253,59 @@ class MicService : Service() {
                     override fun onTranscript(text: String, isUser: Boolean) {
                         if (isUser) {
                             _userTranscript.value = text
+
+                            val cleanText = text.trim()
+                            val words = cleanText.split("\\s+".toRegex()).filter { it.isNotBlank() }
+                            if (words.size >= 2 && !handledTranscripts.contains(cleanText.lowercase(Locale.ROOT))) {
+                                if (ConnectorIntentHandler.isConnectorCommand(cleanText)) {
+                                    handledTranscripts.add(cleanText.lowercase(Locale.ROOT))
+                                    serviceScope.launch(Dispatchers.IO) {
+                                        try {
+                                            val commandResult = ConnectorIntentHandler.handleCommand(applicationContext, cleanText)
+                                            if (commandResult != null) {
+                                                // 1. Deliver to Gemini Live session so Mira speaks it
+                                                liveClient?.sendTextMessage("User command result: $commandResult. Please inform the user clearly and concisely in voice.")
+
+                                                // 2. Deliver via modelTranscript flow
+                                                _modelTranscript.value = commandResult
+
+                                                // 3. Deliver via persistent notification
+                                                val db = MiraDatabase.getInstance(applicationContext)
+                                                db.notificationDao().insertNotification(
+                                                    NotificationEntity(
+                                                        title = "Connector Action",
+                                                        message = commandResult,
+                                                        type = "connector"
+                                                    )
+                                                )
+                                            }
+                                        } catch (e: Exception) {
+                                            Log.e(TAG, "Error running voice connector command: ${e.message}", e)
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (MacroRunner.isRunning.value) {
+                                val lower = text.trim().lowercase(Locale.ROOT)
+                                if (lower.contains("stop") || lower.contains("থামো") || lower.contains("thamo")) {
+                                    MacroRunner.cancel("Stopped by voice: $text")
+                                    serviceScope.launch(Dispatchers.IO) {
+                                        try {
+                                            val db = MiraDatabase.getInstance(applicationContext)
+                                            db.notificationDao().insertNotification(
+                                                NotificationEntity(
+                                                    title = "Macro Stopped",
+                                                    message = "Screen automation stopped via voice command: $text",
+                                                    type = "macro"
+                                                )
+                                            )
+                                        } catch (e: Exception) {
+                                            Log.w(TAG, "Could not record notification: ${e.message}")
+                                        }
+                                    }
+                                }
+                            }
                         } else {
                             _modelTranscript.value = text
                         }

@@ -1,6 +1,11 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
-import io.github.ryoaonetsuki.mira.ui.icons.Lucide
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -72,12 +77,12 @@ fun MemoriesScreen(
                 title = { Text("Memories", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Lucide.arrowLeft, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 actions = {
                     IconButton(onClick = { showAddDialog = true }) {
-                        Icon(Lucide.plus, contentDescription = "Add Memory", tint = palette.primary)
+                        Icon(Icons.Rounded.Add, contentDescription = "Add Memory", tint = palette.primary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -94,7 +99,7 @@ fun MemoriesScreen(
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(
-                        imageVector = Lucide.lock,
+                        imageVector = Icons.Rounded.Lock,
                         contentDescription = "Locked",
                         tint = palette.primary,
                         modifier = Modifier.size(56.dp)
@@ -163,7 +168,7 @@ fun MemoriesScreen(
                     value = searchQuery,
                     onValueChange = { searchQuery = it },
                     placeholder = { Text("Search memories…", fontSize = 14.sp) },
-                    leadingIcon = { Icon(Lucide.search, contentDescription = null, tint = palette.textSecondary) },
+                    leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null, tint = palette.textSecondary) },
                     shape = RoundedCornerShape(14.dp),
                     singleLine = true,
                     colors = OutlinedTextFieldDefaults.colors(
@@ -226,7 +231,7 @@ fun MemoriesScreen(
                                         }
                                     ) {
                                         Icon(
-                                            imageVector = Lucide.x,
+                                            imageVector = Icons.Rounded.Close,
                                             contentDescription = "Delete",
                                             tint = palette.textSecondary,
                                             modifier = Modifier.size(18.dp)

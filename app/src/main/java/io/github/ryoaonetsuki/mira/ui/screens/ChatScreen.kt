@@ -811,7 +811,7 @@ fun ChatScreen(
                                                     history = allMsgs,
                                                     systemPrompt = sysPrompt,
                                                     useServerProxy = useServer,
-                                                    enableGrounding = shouldGround
+                                                    enableGrounding = MiraChatSearchHeuristic.isTimeSensitive(text)
                                                 )
                                             } catch (_: Exception) { null }
 

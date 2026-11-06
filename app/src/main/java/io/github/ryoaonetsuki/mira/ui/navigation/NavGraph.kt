@@ -120,7 +120,12 @@ fun MiraNavGraph(
             }
 
             composable(Screen.Chat.route) {
-                ChatScreen(onBack = { navController.popBackStack() })
+                ChatScreen(
+                    onBack = { navController.popBackStack() },
+                    onOpenBrowser = { url ->
+                        navController.navigate("browser?url=${java.net.URLEncoder.encode(url, "UTF-8")}")
+                    }
+                )
             }
 
             composable(Screen.Scan.route) {
@@ -144,7 +149,12 @@ fun MiraNavGraph(
             }
 
             composable(Screen.CodeProjects.route) {
-                CodeProjectsScreen(onBack = { navController.popBackStack() })
+                CodeProjectsScreen(
+                    onBack = { navController.popBackStack() },
+                    onOpenBrowser = { url ->
+                        navController.navigate("browser?url=${java.net.URLEncoder.encode(url, "UTF-8")}")
+                    }
+                )
             }
 
             composable(Screen.Whiteboard.route) {
@@ -163,8 +173,15 @@ fun MiraNavGraph(
                 MarketingScreen(onBack = { navController.popBackStack() })
             }
 
-            composable(Screen.PcPhone.route) {
-                PcPhoneScreen(onBack = { navController.popBackStack() })
+            composable(Screen.Licence.route) {
+                LicenceScreen(
+                    onLicenceSuccess = {
+                        navController.navigate(Screen.Home.route) {
+                            popUpTo(Screen.Licence.route) { inclusive = true }
+                        }
+                    },
+                    onBack = { navController.popBackStack() }
+                )
             }
 
             composable(Screen.Extensions.route) {
@@ -179,13 +196,21 @@ fun MiraNavGraph(
                 WebSearchScreen(
                     onBack = { navController.popBackStack() },
                     onOpenUrl = { url ->
-                        navController.navigate(Screen.Browser.route)
+                        navController.navigate("browser?url=${java.net.URLEncoder.encode(url, "UTF-8")}")
                     }
                 )
             }
 
             composable(Screen.Browser.route) {
                 BrowserScreen(onBack = { navController.popBackStack() })
+            }
+
+            composable("browser?url={url}") { backStackEntry ->
+                val encodedUrl = backStackEntry.arguments?.getString("url")
+                val url = if (!encodedUrl.isNullOrBlank()) {
+                    try { java.net.URLDecoder.decode(encodedUrl, "UTF-8") } catch (_: Exception) { encodedUrl }
+                } else "https://duckduckgo.com"
+                BrowserScreen(initialUrl = url, onBack = { navController.popBackStack() })
             }
 
             composable(Screen.Notifications.route) {

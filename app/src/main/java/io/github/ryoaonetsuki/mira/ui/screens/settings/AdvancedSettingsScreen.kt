@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
+import io.github.ryoaonetsuki.mira.ui.components.MiraSwitch
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -161,10 +162,9 @@ fun AdvancedSettingsScreen(
                             Text("Start on Boot", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
                             Text("Launch Mira voice service when phone turns on", fontSize = 12.sp, color = palette.textSecondary)
                         }
-                        Switch(
+                        MiraSwitch(
                             checked = startOnBoot,
-                            onCheckedChange = { scope.launch { userPrefs.setStartOnBoot(it) } },
-                            colors = SwitchDefaults.colors(checkedThumbColor = palette.primary)
+                            onCheckedChange = { scope.launch { userPrefs.setStartOnBoot(it) } }
                         )
                     }
                 }
@@ -177,10 +177,9 @@ fun AdvancedSettingsScreen(
                             Text("Earpiece Mode", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
                             Text("Talk to Mira like a private phone call against your ear", fontSize = 12.sp, color = palette.textSecondary)
                         }
-                        Switch(
+                        MiraSwitch(
                             checked = earpieceMode,
-                            onCheckedChange = { scope.launch { userPrefs.setEarpieceMode(it) } },
-                            colors = SwitchDefaults.colors(checkedThumbColor = palette.primary)
+                            onCheckedChange = { scope.launch { userPrefs.setEarpieceMode(it) } }
                         )
                     }
                 }
@@ -193,10 +192,9 @@ fun AdvancedSettingsScreen(
                             Text("Battery Saver Mode", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
                             Text("Reduces background CPU cycles and lowers visual frame rate", fontSize = 12.sp, color = palette.textSecondary)
                         }
-                        Switch(
+                        MiraSwitch(
                             checked = batterySaver,
-                            onCheckedChange = { scope.launch { userPrefs.setBatterySaver(it) } },
-                            colors = SwitchDefaults.colors(checkedThumbColor = palette.primary)
+                            onCheckedChange = { scope.launch { userPrefs.setBatterySaver(it) } }
                         )
                     }
                 }
@@ -214,7 +212,7 @@ fun AdvancedSettingsScreen(
                             Text("Face Lock / Biometrics", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
                             Text("Gate Memories & Chat behind BiometricPrompt / Device PIN", fontSize = 12.sp, color = palette.textSecondary)
                         }
-                        Switch(
+                        MiraSwitch(
                             checked = isFaceLockActive,
                             onCheckedChange = { active ->
                                 if (active && context is FragmentActivity) {
@@ -231,8 +229,7 @@ fun AdvancedSettingsScreen(
                                     isFaceLockActive = false
                                     securePrefs.setFaceLockEnabled(false)
                                 }
-                            },
-                            colors = SwitchDefaults.colors(checkedThumbColor = palette.primary)
+                            }
                         )
                     }
 
@@ -264,10 +261,9 @@ fun AdvancedSettingsScreen(
                             Text("Touch Guard", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
                             Text("Alerts when someone moves or touches the phone while away", fontSize = 12.sp, color = palette.textSecondary)
                         }
-                        Switch(
+                        MiraSwitch(
                             checked = touchGuard,
-                            onCheckedChange = { scope.launch { userPrefs.setTouchGuard(it) } },
-                            colors = SwitchDefaults.colors(checkedThumbColor = palette.primary)
+                            onCheckedChange = { scope.launch { userPrefs.setTouchGuard(it) } }
                         )
                     }
                 }

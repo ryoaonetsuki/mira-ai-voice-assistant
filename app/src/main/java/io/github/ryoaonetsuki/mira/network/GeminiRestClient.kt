@@ -3,6 +3,7 @@ package io.github.ryoaonetsuki.mira.network
 import android.util.Log
 import io.github.ryoaonetsuki.mira.data.local.entities.ChatMessageEntity
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
@@ -30,6 +31,130 @@ fun normalizeApiKey(raw: String): String {
         trimmed
     }
     return withoutBearer.replace(Regex("\\s+"), "")
+}
+
+sealed class KeyValidationOutcome {
+    object Valid : KeyValidationOutcome()
+
+    data class TransientServerBusy(
+        val message: String = "Google's servers are busy right now — key saved, try again in a bit",
+        val lastStatusCode: Int? = null
+    ) : KeyValidationOutcome()
+
+    data class InvalidKey(
+        val reason: String,
+        val statusCode: Int? = null
+    ) : KeyValidationOutcome() {
+        val userFacingMessage: String
+            get() = "This API key looks invalid — check the key and try again (Google said: $reason)"
+    }
+}
+
+/**
+ * Checks whether the key looks plausible.
+ * Accepts keys starting with AQ. (new AI Studio format), AIza (traditional format),
+ * or any non-blank format of reasonable length with typical key characters.
+ * Never overly restricts plausible keys.
+ */
+fun isPlausibleApiKey(raw: String): Boolean {
+    val key = normalizeApiKey(raw)
+    if (key.isBlank() || key.length < 10) return false
+    if (key.startsWith("AQ.", ignoreCase = false)) return true
+    if (key.startsWith("AIza", ignoreCase = false)) return true
+    return key.all { it.isLetterOrDigit() || it in "-_.=+/" }
+}
+
+fun extractStatusCode(message: String?): Int? {
+    if (message == null) return null
+    val match = Regex("HTTP\\s+(\\d{3})", RegexOption.IGNORE_CASE).find(message)
+    return match?.groupValues?.get(1)?.toIntOrNull()
+}
+
+/**
+ * Checks if an error is transient (HTTP 503, 429, 500, 502, 504, overloaded, high demand, unavailable).
+ */
+fun isTransientError(statusCode: Int?, message: String?): Boolean {
+    val code = statusCode ?: extractStatusCode(message)
+    if (code != null && code in listOf(429, 500, 502, 503, 504)) return true
+    val msg = message?.lowercase(Locale.ROOT) ?: ""
+    return msg.contains("503") ||
+           msg.contains("429") ||
+           msg.contains("500") ||
+           msg.contains("502") ||
+           msg.contains("504") ||
+           msg.contains("overloaded") ||
+           msg.contains("high demand") ||
+           msg.contains("unavailable") ||
+           msg.contains("resource_exhausted") ||
+           msg.contains("resource exhausted") ||
+           msg.contains("quota") ||
+           msg.contains("rate limit") ||
+           msg.contains("rate_limit") ||
+           msg.contains("temporarily") ||
+           msg.contains("try again later")
+}
+
+/**
+ * Checks if an error is a genuine authentication/credential error (HTTP 400 with key error, 401, 403).
+ */
+fun isAuthError(statusCode: Int?, message: String?): Boolean {
+    val code = statusCode ?: extractStatusCode(message)
+    val msg = message?.lowercase(Locale.ROOT) ?: ""
+    if (code in listOf(401, 403)) return true
+    if (code == 400 && (msg.contains("key") || msg.contains("credential") || msg.contains("invalid") || msg.contains("auth"))) return true
+    return msg.contains("api key not valid") ||
+           msg.contains("invalid api key") ||
+           msg.contains("api_key_invalid") ||
+           msg.contains("permission_denied") ||
+           msg.contains("permissiondenied") ||
+           msg.contains("unauthenticated") ||
+           msg.contains("unauthorized") ||
+           msg.contains("forbidden") ||
+           msg.contains("consumer has been suspended") ||
+           msg.contains("api key expired") ||
+           (msg.contains("invalid") && msg.contains("key"))
+}
+
+fun isNetworkError(e: Throwable?): Boolean {
+    if (e == null) return false
+    if (e is java.io.IOException) return true
+    val msg = e.message?.lowercase(Locale.ROOT) ?: ""
+    return msg.contains("timeout") ||
+           msg.contains("unable to resolve host") ||
+           msg.contains("failed to connect") ||
+           msg.contains("network") ||
+           msg.contains("connection refused") ||
+           msg.contains("connection reset") ||
+           msg.contains("broken pipe") ||
+           msg.contains("route to host")
+}
+
+fun extractShortReason(raw: String): String {
+    val trimmed = raw.trim()
+    val afterHttp = if (trimmed.startsWith("HTTP", ignoreCase = true) && trimmed.contains(":")) {
+        trimmed.substringAfter(":").trim()
+    } else {
+        trimmed
+    }
+    val cleaned = afterHttp
+        .replace("\n", " ")
+        .replace(Regex("\\s+"), " ")
+        .trim()
+    return when {
+        cleaned.isBlank() -> "rejected credentials"
+        cleaned.length > 100 -> cleaned.take(97) + "…"
+        else -> cleaned
+    }
+}
+
+fun formatChatErrorMessage(rawError: String): String {
+    val isTransient = isTransientError(null, rawError)
+    val isAuth = isAuthError(null, rawError)
+    return when {
+        isTransient -> "Google is busy right now (high demand) — please try again in a bit ($rawError)"
+        isAuth -> "API key problem — check your Gemini API key in Settings ($rawError)"
+        else -> rawError
+    }
 }
 
 data class GroundingSource(
@@ -307,7 +432,7 @@ class GeminiRestClient {
     // Chat model ladder (Round-3 addendum): 3.8 Flash is Google's most intelligent free Flash model,
     // engineered for long-horizon software engineering and complex agent workflows.
     // Quality beats speed for chat; 3.6 Flash and 3.5 Flash Lite serve as fallbacks.
-    private val chatModelLadder = listOf(
+    val chatModelLadder = listOf(
         "gemini-3.8-flash",
         "gemini-3.6-flash",
         "gemini-3.5-flash-lite"
@@ -317,15 +442,33 @@ class GeminiRestClient {
      * Legacy validate — delegates to the full validateApiKeyAndChat.
      * Kept so existing callers still compile.
      */
-    suspend fun validateApiKey(apiKey: String, useServerProxy: Boolean = false): Result<Boolean> =
-        validateApiKeyAndChat(apiKey, useServerProxy)
+    suspend fun validateApiKey(apiKey: String, useServerProxy: Boolean = false): Result<Boolean> {
+        return when (val outcome = validateApiKeyAndChat(apiKey, useServerProxy)) {
+            is KeyValidationOutcome.Valid -> Result.success(true)
+            is KeyValidationOutcome.TransientServerBusy -> Result.success(true)
+            is KeyValidationOutcome.InvalidKey -> Result.failure(Exception(outcome.userFacingMessage))
+        }
+    }
 
     /**
-     * Full validation: (1) models-list check, then (2) a real tiny generateContent call
-     * on gemini-3.8-flash asking "Reply with exactly: OK".
-     * Returns the exact failure reason on failure.
+     * Full validation:
+     * (1) models-list check (retries transient 503/429 once or twice with short backoff; transient
+     *     failure does NOT hard-fail validation when Step 2 can still prove the key)
+     * (2) real generateContent call walking the chat model ladder:
+     *     gemini-3.8-flash -> gemini-3.6-flash -> gemini-3.5-flash-lite
+     *     with up to 3 retries with backoff (~2s, ~5s, ~10s) on each model.
+     * Plausible key + only transient/network errors = TransientServerBusy (save + proceed).
+     * Auth failure = InvalidKey (do not save, show red error).
      */
-    suspend fun validateApiKeyAndChat(apiKey: String, useServerProxy: Boolean = false): Result<Boolean> = withContext(Dispatchers.IO) {
+    suspend fun validateApiKeyAndChat(
+        apiKey: String,
+        useServerProxy: Boolean = false
+    ): KeyValidationOutcome = withContext(Dispatchers.IO) {
+        val key = normalizeApiKey(apiKey)
+        if (key.isBlank()) {
+            return@withContext KeyValidationOutcome.InvalidKey("API key cannot be empty")
+        }
+
         if (useServerProxy) {
             return@withContext try {
                 val payload = JSONObject().apply {
@@ -341,59 +484,136 @@ class GeminiRestClient {
                 client.newCall(request).execute().use { response ->
                     val body = response.body?.string() ?: ""
                     if (!response.isSuccessful) {
-                        return@use Result.failure(Exception("Server key validation failed (HTTP ${response.code})"))
-                    }
-                    val json = JSONObject(body)
-                    if (json.optBoolean("valid", false)) {
-                        Result.success(true)
+                        val err = try {
+                            JSONObject(body).optString("error", "HTTP ${response.code}")
+                        } catch (_: Exception) {
+                            "HTTP ${response.code}"
+                        }
+                        if (isTransientError(response.code, err)) {
+                            KeyValidationOutcome.TransientServerBusy(lastStatusCode = response.code)
+                        } else {
+                            KeyValidationOutcome.InvalidKey(extractShortReason(err), response.code)
+                        }
                     } else {
-                        Result.failure(Exception(json.optString("error", "Server key is invalid")))
+                        val json = JSONObject(body)
+                        if (json.optBoolean("valid", false)) {
+                            KeyValidationOutcome.Valid
+                        } else {
+                            val err = json.optString("error", "Server key is invalid")
+                            if (isTransientError(response.code, err)) {
+                                KeyValidationOutcome.TransientServerBusy(lastStatusCode = response.code)
+                            } else {
+                                KeyValidationOutcome.InvalidKey(extractShortReason(err), response.code)
+                            }
+                        }
                     }
                 }
             } catch (e: Exception) {
-                Result.failure(e)
-            }
-        }
-
-        val key = normalizeApiKey(apiKey)
-        if (key.isBlank()) return@withContext Result.failure(Exception("API key cannot be empty"))
-
-        // Step 1: models-list check
-        try {
-            val url = "https://generativelanguage.googleapis.com/v1beta/models?key=$key"
-            val request = Request.Builder().url(url).header("x-goog-api-key", key).get().build()
-            client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) {
-                    val body = response.body?.string() ?: ""
-                    val errorMsg = try {
-                        JSONObject(body).optJSONObject("error")?.optString("message")
-                            ?: "HTTP ${response.code}"
-                    } catch (e: Exception) {
-                        "HTTP ${response.code}"
-                    }
-                    return@withContext Result.failure(Exception("Models list failed: HTTP ${response.code}: $errorMsg"))
+                if (isTransientError(null, e.message) || isNetworkError(e)) {
+                    KeyValidationOutcome.TransientServerBusy()
+                } else {
+                    KeyValidationOutcome.InvalidKey(extractShortReason(e.message ?: "Unknown server error"))
                 }
             }
-        } catch (e: Exception) {
-            return@withContext Result.failure(Exception("Models list check failed: ${e.message}"))
         }
 
-        // Step 2: real generateContent call to verify the key can actually generate
-        try {
-            val testMsg = ChatMessageEntity(
-                conversationId = "validate",
-                role = "user",
-                content = "Reply with exactly: OK"
-            )
-            val result = executeGenerateContent(key, listOf(testMsg), "", "gemini-3.8-flash", false, attachSearchTool = false, enableThinking = false)
-            if (result.isSuccess) {
-                Result.success(true)
-            } else {
-                val reason = result.exceptionOrNull()?.message ?: "Unknown error"
-                Result.failure(Exception("generateContent check failed: $reason"))
+        // Step 1: models-list check (retries transient 503/429 once or twice with short backoff;
+        // transient failures in Step 1 do NOT hard-fail validation when Step 2 can still prove the key)
+        val step1Delays = listOf(1500L, 2500L)
+        for (attempt in 0..step1Delays.size) {
+            try {
+                val url = "https://generativelanguage.googleapis.com/v1beta/models?key=$key"
+                val request = Request.Builder().url(url).header("x-goog-api-key", key).get().build()
+                val response = client.newCall(request).execute()
+                val responseCode = response.code
+                val body = response.use { it.body?.string() ?: "" }
+
+                if (response.isSuccessful) {
+                    break
+                }
+
+                val errorMsg = try {
+                    JSONObject(body).optJSONObject("error")?.optString("message") ?: "HTTP $responseCode"
+                } catch (e: Exception) {
+                    "HTTP $responseCode"
+                }
+
+                if (isAuthError(responseCode, errorMsg)) {
+                    val shortReason = extractShortReason(errorMsg)
+                    return@withContext KeyValidationOutcome.InvalidKey(shortReason, responseCode)
+                }
+
+                if (isTransientError(responseCode, errorMsg) && attempt < step1Delays.size) {
+                    Log.w(TAG, "Step 1 transient failure (HTTP $responseCode: $errorMsg). Retrying in ${step1Delays[attempt]}ms...")
+                    delay(step1Delays[attempt])
+                    continue
+                } else {
+                    Log.w(TAG, "Step 1 check non-fatal failure: HTTP $responseCode: $errorMsg. Proceeding to Step 2 chat ladder.")
+                    break
+                }
+            } catch (e: Exception) {
+                if (attempt < step1Delays.size && (isNetworkError(e) || isTransientError(null, e.message))) {
+                    Log.w(TAG, "Step 1 network error: ${e.message}. Retrying in ${step1Delays[attempt]}ms...")
+                    delay(step1Delays[attempt])
+                    continue
+                } else {
+                    Log.w(TAG, "Step 1 check exception: ${e.message}. Proceeding to Step 2 chat ladder.")
+                    break
+                }
             }
-        } catch (e: Exception) {
-            Result.failure(Exception("generateContent check failed: ${e.message}"))
+        }
+
+        // Step 2: real generateContent call trying the full chat ladder
+        val testMsg = ChatMessageEntity(
+            conversationId = "validate",
+            role = "user",
+            content = "Reply with exactly: OK"
+        )
+
+        var lastErrorReason = ""
+        var lastErrorCode: Int? = null
+
+        for (ladderModel in chatModelLadder) {
+            Log.d(TAG, "Validating key on model: $ladderModel")
+            val result = executeGenerateContent(
+                apiKey = key,
+                history = listOf(testMsg),
+                systemPrompt = "",
+                model = ladderModel,
+                useServerProxy = false,
+                attachSearchTool = false,
+                enableThinking = false
+            )
+
+            if (result.isSuccess) {
+                return@withContext KeyValidationOutcome.Valid
+            }
+
+            val err = result.exceptionOrNull()
+            val errMsg = err?.message ?: "Unknown error"
+            val code = extractStatusCode(errMsg)
+            lastErrorReason = errMsg
+            lastErrorCode = code
+
+            if (isAuthError(code, errMsg)) {
+                val shortReason = extractShortReason(errMsg)
+                return@withContext KeyValidationOutcome.InvalidKey(shortReason, code)
+            }
+
+            Log.w(TAG, "Validation generateContent failed on $ladderModel: $errMsg. Trying next ladder model...")
+        }
+
+        if (isPlausibleApiKey(key)) {
+            Log.i(TAG, "All models failed with transient/busy errors on plausible key format. Treating as TransientServerBusy.")
+            KeyValidationOutcome.TransientServerBusy(
+                message = "Google's servers are busy right now — key saved, try again in a bit",
+                lastStatusCode = lastErrorCode
+            )
+        } else {
+            KeyValidationOutcome.InvalidKey(
+                reason = extractShortReason(lastErrorReason.ifBlank { "Unrecognized key format" }),
+                statusCode = lastErrorCode
+            )
         }
     }
 
@@ -540,8 +760,12 @@ class GeminiRestClient {
             val err = result.exceptionOrNull() ?: Exception("Unknown error")
             Log.w(TAG, "Model $m failed: ${err.message}. Trying next...")
             lastError = Exception("$m: ${err.message}")
+            if (isAuthError(null, err.message)) {
+                break
+            }
         }
-        Result.failure(lastError)
+        val annotated = formatChatErrorMessage(lastError.message ?: "All models failed")
+        Result.failure(Exception(annotated, lastError))
     }
 
     suspend fun generateChatResponseStreaming(
@@ -759,15 +983,70 @@ class GeminiRestClient {
                 }
                 Log.w(TAG, "Stream failed before tokens on $m: ${e.message}. Trying next...")
                 lastError = e
+                if (isAuthError(null, e.message)) {
+                    break
+                }
             }
         }
 
         if (tokensEmittedTotal == 0) {
-            throw lastError
+            val annotated = formatChatErrorMessage(lastError.message ?: "All models in streaming ladder failed")
+            throw Exception(annotated, lastError)
         }
     }.flowOn(Dispatchers.IO)
 
-    private fun executeGenerateContent(
+    /**
+     * Executes generateContent with up to 3 retries on transient errors (503, 429, 500, overloaded,
+     * network timeout) using backoff (~2s, ~5s, ~10s).
+     * Auth errors and other non-transient errors fail immediately without retry.
+     */
+    private suspend fun executeGenerateContent(
+        apiKey: String,
+        history: List<ChatMessageEntity>,
+        systemPrompt: String,
+        model: String,
+        useServerProxy: Boolean = false,
+        attachSearchTool: Boolean = false,
+        enableThinking: Boolean = false,
+        attachments: List<ChatAttachment> = emptyList()
+    ): Result<GroundedChatResult> = withContext(Dispatchers.IO) {
+        val retryDelaysMs = listOf(2000L, 5000L, 10000L)
+        var lastResult: Result<GroundedChatResult> = Result.failure(Exception("Not started"))
+
+        for (attempt in 0..retryDelaysMs.size) {
+            val result = executeGenerateContentSingleAttempt(
+                apiKey = apiKey,
+                history = history,
+                systemPrompt = systemPrompt,
+                model = model,
+                useServerProxy = useServerProxy,
+                attachSearchTool = attachSearchTool,
+                enableThinking = enableThinking,
+                attachments = attachments
+            )
+
+            if (result.isSuccess) {
+                return@withContext result
+            }
+
+            lastResult = result
+            val err = result.exceptionOrNull()
+            val errMsg = err?.message ?: "Unknown error"
+            val isTransient = isTransientError(null, errMsg) || isNetworkError(err)
+
+            if (!isTransient || attempt == retryDelaysMs.size) {
+                break
+            }
+
+            val backoffMs = retryDelaysMs[attempt]
+            Log.w(TAG, "Transient error on $model (attempt ${attempt + 1}/${retryDelaysMs.size + 1}): $errMsg. Retrying in ${backoffMs}ms...")
+            delay(backoffMs)
+        }
+
+        lastResult
+    }
+
+    private fun executeGenerateContentSingleAttempt(
         apiKey: String,
         history: List<ChatMessageEntity>,
         systemPrompt: String,

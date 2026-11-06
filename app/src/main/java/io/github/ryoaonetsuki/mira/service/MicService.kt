@@ -93,6 +93,13 @@ class MicService : Service() {
     @Volatile
     private var isAwaitingFinalReply: Boolean = false
 
+    // Watchdog for server voice path
+    private var serverWatchdogJob: Job? = null
+    @Volatile private var serverSpeechDetectedAt: Long = 0L
+    @Volatile private var serverLastAudioFlowingAt: Long = 0L
+    @Volatile private var serverTranscriptReceivedAt: Long = 0L
+    @Volatile private var serverTurnActive: Boolean = false
+
     private lateinit var resumptionStore: SessionResumptionStore
     private var vad: VoiceActivityDetector? = null
     @Volatile
@@ -231,7 +238,7 @@ class MicService : Service() {
                 Log.i(TAG, "Groq key missing — starting Live voice session as secondary attempt")
                 Toast.makeText(
                     applicationContext,
-                    "Groq key missing — using Live voice. Add Groq key in Settings for Server Voice",
+                    "Groq key missing — add it in Settings for Server Voice",
                     Toast.LENGTH_SHORT
                 ).show()
                 startExistingLiveVoiceSession()
@@ -242,8 +249,8 @@ class MicService : Service() {
                 Log.w(TAG, "No API key available for voice session")
                 _liveState.value = LiveState.ERROR
                 _voiceStage.value = VoiceStage.ERROR
-                _errorMessage.value = "API key is required"
-                _lastVoiceDiagnostic.value = "API key is required"
+                _errorMessage.value = "Gemini key missing — add it in Settings"
+                _lastVoiceDiagnostic.value = "Gemini key missing — add it in Settings"
             }
         }
     }
@@ -312,6 +319,12 @@ class MicService : Service() {
 
             Log.i(TAG, "Starting ServerVoiceSession (streaming Worker path)")
             serverVoiceSession?.stop()
+            serverWatchdogJob?.cancel()
+            serverSpeechDetectedAt = 0L
+            serverLastAudioFlowingAt = 0L
+            serverTranscriptReceivedAt = 0L
+            serverTurnActive = false
+
             val session = ServerVoiceSession(
                 context = applicationContext,
                 groqKey = groqKey,
@@ -321,22 +334,66 @@ class MicService : Service() {
                 systemPrompt = fullSystemPrompt,
                 dateLine = dateLine,
                 audioPlayer = audioPlayer!!,
-                onStateChanged = { state -> _liveState.value = state },
-                onStageChanged = { stage -> _voiceStage.value = stage },
-                onUserTranscript = { text -> _userTranscript.value = text },
-                onModelTranscript = { text -> _modelTranscript.value = text },
-                onAppendModelTranscript = { token -> _modelTranscript.value = _modelTranscript.value + token },
+                onStateChanged = { state ->
+                    _liveState.value = state
+                    if (state == LiveState.LISTENING) {
+                        serverSpeechDetectedAt = 0L
+                        serverTurnActive = false
+                    }
+                },
+                onStageChanged = { stage ->
+                    _voiceStage.value = stage
+                    if (stage == VoiceStage.RECOGNISING) {
+                        if (serverSpeechDetectedAt == 0L) {
+                            serverSpeechDetectedAt = System.currentTimeMillis()
+                        }
+                        serverTurnActive = true
+                    } else if (stage == VoiceStage.SPEAKING || stage == VoiceStage.LISTENING) {
+                        serverTurnActive = false
+                        serverSpeechDetectedAt = 0L
+                    }
+                },
+                onUserTranscript = { text ->
+                    _userTranscript.value = text
+                    serverTranscriptReceivedAt = System.currentTimeMillis()
+                },
+                onModelTranscript = { text ->
+                    _modelTranscript.value = text
+                    serverTranscriptReceivedAt = System.currentTimeMillis()
+                },
+                onAppendModelTranscript = { token ->
+                    _modelTranscript.value = _modelTranscript.value + token
+                    serverTranscriptReceivedAt = System.currentTimeMillis()
+                },
                 onError = { err ->
-                    _errorMessage.value = err
-                    _lastVoiceDiagnostic.value = err
+                    val plainError = if (err.startsWith("Server voice:", ignoreCase = true)) err else "Server voice: $err"
+                    _errorMessage.value = plainError
+                    _lastVoiceDiagnostic.value = plainError
                 },
                 onAudioChunkSent = { _audioChunksSent.value = _audioChunksSent.value + 1L },
                 onAudioChunkReceived = { _audioChunksReceived.value = _audioChunksReceived.value + 1L },
-                onMicAmplitude = { amp -> _micAmplitude.value = amp },
+                onMicAmplitude = { amp ->
+                    _micAmplitude.value = amp
+                    if (amp > 0.12f) {
+                        serverLastAudioFlowingAt = System.currentTimeMillis()
+                        if (serverSpeechDetectedAt == 0L && _liveState.value == LiveState.LISTENING && _voiceStage.value != VoiceStage.SPEAKING) {
+                            serverSpeechDetectedAt = System.currentTimeMillis()
+                            serverTurnActive = true
+                        }
+                    }
+                },
                 onRequestLiveFallback = { reason ->
                     Log.i(TAG, "Server voice session falling back to Live: $reason")
                     serverVoiceSession?.stop()
                     serverVoiceSession = null
+                    serverWatchdogJob?.cancel()
+                    if (reason.isNotBlank()) {
+                        Toast.makeText(
+                            applicationContext,
+                            "Server voice: $reason",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
                     Toast.makeText(
                         applicationContext,
                         "Server voice unavailable — switching to Live voice",
@@ -347,6 +404,55 @@ class MicService : Service() {
             )
             serverVoiceSession = session
             session.start()
+            startServerWatchdog()
+        }
+    }
+
+    private fun startServerWatchdog() {
+        serverWatchdogJob?.cancel()
+        serverWatchdogJob = serviceScope.launch {
+            val sessionStartTime = System.currentTimeMillis()
+            var checkedZeroChunks = false
+
+            while (isActive && serverVoiceSession != null) {
+                delay(500)
+                val now = System.currentTimeMillis()
+
+                // Check 1: Session is LISTENING but 0 audio chunks sent after 4 seconds
+                if (!checkedZeroChunks && _liveState.value == LiveState.LISTENING && (now - sessionStartTime) > 4000L) {
+                    checkedZeroChunks = true
+                    if (_audioChunksSent.value == 0L) {
+                        Log.w(TAG, "Server voice watchdog: zero audio chunks sent after 4s in LISTENING")
+                        val err = "Server voice: No microphone audio sending"
+                        _errorMessage.value = err
+                        _lastVoiceDiagnostic.value = err
+                        _liveState.value = LiveState.ERROR
+                        _voiceStage.value = VoiceStage.ERROR
+                        Toast.makeText(applicationContext, err, Toast.LENGTH_SHORT).show()
+                        serverVoiceSession?.stop()
+                        break
+                    }
+                }
+
+                // Check 2: Speech detected, but no partial/transcript arrives within timeout (~6s after speech ends)
+                val isSpeaking = _liveState.value == LiveState.SPEAKING || (audioPlayer?.isSpeaking() == true)
+                val isAudioFlowing = (now - serverLastAudioFlowingAt) < 1500L
+                if (!isSpeaking && !isAudioFlowing && serverTurnActive && serverSpeechDetectedAt > 0L) {
+                    val speechAge = now - serverSpeechDetectedAt
+                    val silenceAfterSpeech = now - serverLastAudioFlowingAt
+                    if (speechAge > 6000L && silenceAfterSpeech > 2000L && serverTranscriptReceivedAt < serverSpeechDetectedAt) {
+                        Log.w(TAG, "Server voice watchdog: Speech detected $speechAge ms ago with silence, but no transcript arrived")
+                        val err = "Server did not answer — could not hear you clearly"
+                        _errorMessage.value = err
+                        _lastVoiceDiagnostic.value = err
+                        _liveState.value = LiveState.ERROR
+                        _voiceStage.value = VoiceStage.ERROR
+                        Toast.makeText(applicationContext, err, Toast.LENGTH_SHORT).show()
+                        serverVoiceSession?.stop()
+                        break
+                    }
+                }
+            }
         }
     }
 
@@ -777,9 +883,13 @@ class MicService : Service() {
 
             override fun onStalled() {
                 if (!hasSwapped) return
-                Log.w(TAG, "Gemini Live session stalled (no server reply for >30s after audio) — keeping LISTENING state")
-                _liveState.value = LiveState.LISTENING
-                _voiceStage.value = VoiceStage.LISTENING
+                Log.w(TAG, "Gemini Live session stalled (no server reply for >30s after audio)")
+                val stallMsg = "Live voice: Server did not answer"
+                _errorMessage.value = stallMsg
+                _lastVoiceDiagnostic.value = stallMsg
+                _liveState.value = LiveState.ERROR
+                _voiceStage.value = VoiceStage.ERROR
+                Toast.makeText(applicationContext, stallMsg, Toast.LENGTH_SHORT).show()
             }
 
             override fun onError(message: String) {
@@ -800,7 +910,13 @@ class MicService : Service() {
                 }
 
                 Log.e(TAG, "Voice session error termination: $message")
-                _lastVoiceDiagnostic.value = message
+                val liveErrMsg = "Live voice error: $message"
+                _errorMessage.value = liveErrMsg
+                _lastVoiceDiagnostic.value = liveErrMsg
+                _liveState.value = LiveState.ERROR
+                _voiceStage.value = VoiceStage.ERROR
+                Toast.makeText(applicationContext, liveErrMsg, Toast.LENGTH_SHORT).show()
+
                 rotationJob?.cancel()
                 rotationJob = null
                 connectorJob?.cancel()
@@ -880,6 +996,12 @@ class MicService : Service() {
     private fun stopLiveVoiceSessionInternal() {
         serverVoiceSession?.stop()
         serverVoiceSession = null
+        serverWatchdogJob?.cancel()
+        serverWatchdogJob = null
+        serverSpeechDetectedAt = 0L
+        serverLastAudioFlowingAt = 0L
+        serverTranscriptReceivedAt = 0L
+        serverTurnActive = false
         rotationJob?.cancel()
         rotationJob = null
         rotationRetryCount = 0
@@ -924,11 +1046,12 @@ class MicService : Service() {
 
         if (!SpeechRecognizer.isRecognitionAvailable(applicationContext)) {
             Log.e(TAG, "SpeechRecognizer is NOT available on this device")
-            val noSpeechMsg = "Voice recognition isn't available on this device — please use text chat"
+            val noSpeechMsg = "SpeechRecognizer unavailable — voice recognition isn't available on this device"
             _liveState.value = LiveState.ERROR
             _voiceStage.value = VoiceStage.ERROR
             _errorMessage.value = noSpeechMsg
             _lastVoiceDiagnostic.value = noSpeechMsg
+            Toast.makeText(applicationContext, noSpeechMsg, Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -973,11 +1096,13 @@ class MicService : Service() {
             onError = { errMsg ->
                 isAwaitingFinalReply = false
                 Log.w(TAG, "Fallback voice session error: $errMsg")
-                _errorMessage.value = errMsg
-                _lastVoiceDiagnostic.value = errMsg
+                val fallbackErr = if (errMsg.startsWith("SpeechRecognizer", ignoreCase = true)) errMsg else "SpeechRecognizer: $errMsg"
+                _errorMessage.value = fallbackErr
+                _lastVoiceDiagnostic.value = fallbackErr
                 _liveState.value = LiveState.ERROR
                 _voiceStage.value = VoiceStage.ERROR
                 _micAmplitude.value = 0f
+                Toast.makeText(applicationContext, fallbackErr, Toast.LENGTH_SHORT).show()
             },
             onAmplitude = { amp ->
                 _micAmplitude.value = amp

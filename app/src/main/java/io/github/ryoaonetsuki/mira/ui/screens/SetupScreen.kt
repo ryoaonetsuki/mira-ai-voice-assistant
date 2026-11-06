@@ -35,6 +35,7 @@ import androidx.core.content.ContextCompat
 import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
 import io.github.ryoaonetsuki.mira.network.GeminiRestClient
 import io.github.ryoaonetsuki.mira.network.normalizeApiKey
+import io.github.ryoaonetsuki.mira.service.MiraAccessibilityService
 import io.github.ryoaonetsuki.mira.ui.components.MiraButton
 import io.github.ryoaonetsuki.mira.ui.components.MiraCard
 import io.github.ryoaonetsuki.mira.ui.navigation.Screen
@@ -50,6 +51,7 @@ fun SetupScreen(
     val scope = rememberCoroutineScope()
     val securePrefs = remember { SecurePreferences(context) }
     val restClient = remember { GeminiRestClient() }
+    val resolver = remember { io.github.ryoaonetsuki.mira.backend.ApiKeyResolver(context) }
 
     var currentStep by remember { mutableIntStateOf(1) }
     var apiKeyInput by remember { mutableStateOf(securePrefs.getGeminiApiKey() ?: "") }
@@ -57,6 +59,11 @@ fun SetupScreen(
     var isCheckingKey by remember { mutableStateOf(false) }
     var keyValidationMessage by remember { mutableStateOf<String?>(null) }
     var isKeyValid by remember { mutableStateOf(false) }
+    var isServerKeyAvailable by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        isServerKeyAvailable = resolver.isServerKeyConfigured()
+    }
 
     // Permission states
     var hasMicPermission by remember {
@@ -68,6 +75,25 @@ fun SetupScreen(
     val powerManager = remember { context.getSystemService(Context.POWER_SERVICE) as PowerManager }
     var isBatteryIgnoringOptimizations by remember {
         mutableStateOf(powerManager.isIgnoringBatteryOptimizations(context.packageName))
+    }
+
+    var isAccessibilityEnabled by remember {
+        mutableStateOf(MiraAccessibilityService.isEnabled(context))
+    }
+
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                hasMicPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+                isBatteryIgnoringOptimizations = powerManager.isIgnoringBatteryOptimizations(context.packageName)
+                isAccessibilityEnabled = MiraAccessibilityService.isEnabled(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
     }
 
     val micPermissionLauncher = rememberLauncherForActivityResult(
@@ -113,16 +139,16 @@ fun SetupScreen(
         Spacer(modifier = Modifier.height(16.dp))
 
         if (currentStep == 1) {
-            // STEP 1: BYOK Gemini Key
+            // STEP 1: API Key
             Text(
-                text = "Add Your Gemini Key",
+                text = "Add Your API Key",
                 fontSize = 24.sp,
                 fontWeight = FontWeight.Bold,
                 color = palette.textPrimary
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "Mira's real-time voice and brain run on Google's Gemini models. The API key is free from Google AI Studio and takes 30 seconds to create.",
+                text = "Add your API key — it's free and takes 30 seconds to create.",
                 fontSize = 14.sp,
                 color = palette.textSecondary,
                 lineHeight = 20.sp
@@ -156,8 +182,8 @@ fun SetupScreen(
                     apiKeyInput = it
                     keyValidationMessage = null
                 },
-                label = { Text("Gemini API Key") },
-                placeholder = { Text("Paste your Gemini key — new keys start with AQ.") },
+                label = { Text("API Key") },
+                placeholder = { Text("Paste your API key — new keys start with AQ.") },
                 visualTransformation = if (isKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
                 trailingIcon = {
                     IconButton(onClick = { isKeyVisible = !isKeyVisible }) {
@@ -227,16 +253,26 @@ fun SetupScreen(
                             keyValidationMessage = "Please enter an API key"
                             return@MiraButton
                         }
+                        if (!securePrefs.isSecureStorageAvailable()) {
+                            isKeyValid = false
+                            keyValidationMessage = "Secure storage unavailable on this device — key was not saved"
+                            return@MiraButton
+                        }
                         isCheckingKey = true
                         keyValidationMessage = "Validating key with Google..."
                         scope.launch {
                             val result = restClient.validateApiKeyAndChat(normalized)
                             isCheckingKey = false
                             if (result.isSuccess) {
-                                isKeyValid = true
-                                keyValidationMessage = "Valid API Key! Stored encrypted on device."
-                                securePrefs.setGeminiApiKey(normalized)
-                                currentStep = 2
+                                val saved = securePrefs.setGeminiApiKey(normalized)
+                                if (saved) {
+                                    isKeyValid = true
+                                    keyValidationMessage = "Valid API Key! Stored encrypted on device."
+                                    currentStep = 2
+                                } else {
+                                    isKeyValid = false
+                                    keyValidationMessage = "Secure storage unavailable on this device — key was not saved"
+                                }
                             } else {
                                 isKeyValid = false
                                 // Show exact validation error
@@ -252,7 +288,16 @@ fun SetupScreen(
 
             Spacer(modifier = Modifier.weight(1f))
 
-            if (securePrefs.getGeminiApiKey() != null) {
+            if (isServerKeyAvailable) {
+                Spacer(modifier = Modifier.height(8.dp))
+                TextButton(
+                    onClick = { currentStep = 2 },
+                    modifier = Modifier.align(Alignment.CenterHorizontally)
+                ) {
+                    Text("Mira server key available — Continue with server key →", color = palette.primary)
+                }
+            } else if (securePrefs.getGeminiApiKey() != null) {
+                Spacer(modifier = Modifier.height(8.dp))
                 TextButton(
                     onClick = { currentStep = 2 },
                     modifier = Modifier.align(Alignment.CenterHorizontally)
@@ -353,10 +398,10 @@ fun SetupScreen(
                 // Optional: Accessibility
                 item {
                     PermissionRow(
-                        title = "Accessibility Service",
-                        subtitle = "Allows automated UI macros and app control",
+                        title = "Accessibility Service (Macros)",
+                        subtitle = "Allows Mira to operate the screen for WhatsApp and YouTube macros",
                         icon = Icons.Rounded.Accessibility,
-                        isGranted = false,
+                        isGranted = isAccessibilityEnabled,
                         onClick = {
                             val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
                             context.startActivity(intent)

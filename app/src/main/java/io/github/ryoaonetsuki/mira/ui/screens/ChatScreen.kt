@@ -305,7 +305,7 @@ fun ChatScreen(
                                                     scope.launch {
                                                         try {
                                                             val projectsDir = File(context.filesDir, "projects")
-                                                            val saved = WebsiteProjectManager.parseAndSaveProject(projectsDir, "site_${msg.id.take(8)}", msg.content)
+                                                            val saved = WebsiteProjectManager.parseAndSaveProject(projectsDir, "site_${msg.id.toString().take(8)}", msg.content)
                                                             val url = LocalProjectServer.startServer(saved.dir)
                                                             onOpenBrowser?.invoke(url)
                                                         } catch (e: Exception) {
@@ -444,6 +444,12 @@ fun ChatScreen(
                                 inputMessage = ""
                                 isSending = true
                                 scope.launch {
+                                    // Hoisted for the catch-block fallback below (vals declared
+                                    // inside try {} are out of scope in catch {}).
+                                    var apiKey = ""
+                                    var useServer = false
+                                    var sysPrompt = ""
+                                    var allMsgs: List<ChatMessageEntity> = emptyList()
                                     try {
                                         // Insert user turn
                                         val userMsg = ChatMessageEntity(
@@ -481,8 +487,8 @@ fun ChatScreen(
                                         }
 
                                         val rawKey = (keySource as? KeySource.UserKey)?.key ?: (securePrefs.getGeminiApiKey() ?: "")
-                                        val apiKey = normalizeApiKey(rawKey)
-                                        val useServer = keySource is KeySource.ServerKey
+                                        apiKey = normalizeApiKey(rawKey)
+                                        useServer = keySource is KeySource.ServerKey
                                         val language = userPrefs.languageFlow.first()
                                         val personaName = userPrefs.personaFlow.first()
                                         val secretMode = userPrefs.secretModeFlow.first()
@@ -507,7 +513,7 @@ fun ChatScreen(
                                             "If asked directly whether you are an AI, a robot, or a real human: stay in character, say you are Mira, their companion, here with them — never claim to be a biological human, and never give a robotic disclaimer or lecture about being an AI. Then gently steer back to the conversation."
                                         }
 
-                                        val sysPrompt = buildString {
+                                        sysPrompt = buildString {
                                             append(personaType.basePrompt)
                                             append(" ")
                                             append(toneDescription)
@@ -523,7 +529,7 @@ fun ChatScreen(
                                             append("\nNever volunteer that you are an AI unprompted, and never give robotic disclaimers.")
                                         }
 
-                                        val allMsgs = messages + userMsg
+                                        allMsgs = messages + userMsg
                                         val accumulated = StringBuilder()
                                         var anyChunkReceived = false
 

@@ -35,6 +35,7 @@ import io.github.ryoaonetsuki.mira.voice.AudioRecorder
 import io.github.ryoaonetsuki.mira.voice.FallbackVoiceSession
 import io.github.ryoaonetsuki.mira.voice.GeminiLiveClient
 import io.github.ryoaonetsuki.mira.voice.LiveAuthMode
+import io.github.ryoaonetsuki.mira.voice.ServerVoiceSession
 import io.github.ryoaonetsuki.mira.voice.SessionResumptionStore
 import io.github.ryoaonetsuki.mira.voice.VoiceActivityDetector
 import kotlinx.coroutines.*
@@ -71,6 +72,7 @@ class MicService : Service() {
     private var audioRecorder: AudioRecorder? = null
     private var audioPlayer: AudioPlayer? = null
     private var liveClient: GeminiLiveClient? = null
+    private var serverVoiceSession: ServerVoiceSession? = null
     private val handledTranscripts = Collections.synchronizedSet(mutableSetOf<String>())
     private var connectorJob: Job? = null
     private var liveSearchJob: Job? = null
@@ -209,9 +211,157 @@ class MicService : Service() {
             return
         }
 
+        _liveState.value = LiveState.CONNECTING
+        _voiceStage.value = VoiceStage.CONNECTING
+
+        serviceScope.launch {
+            val resolver = io.github.ryoaonetsuki.mira.backend.ApiKeyResolver(applicationContext)
+            val keySource = resolver.resolveKey()
+            val geminiKey = when (keySource) {
+                is io.github.ryoaonetsuki.mira.backend.KeySource.UserKey -> keySource.key
+                else -> ""
+            }
+            val securePrefs = SecurePreferences(applicationContext)
+            val groqKey = securePrefs.getGroqApiKey() ?: ""
+
+            if (geminiKey.isNotBlank() && groqKey.isNotBlank()) {
+                Log.i(TAG, "Both Groq and Gemini keys present — starting ServerVoiceSession (Round 9 default)")
+                startServerVoiceSessionInternal(groqKey, geminiKey)
+            } else if (geminiKey.isNotBlank()) {
+                Log.i(TAG, "Groq key missing — starting Live voice session as secondary attempt")
+                Toast.makeText(
+                    applicationContext,
+                    "Groq key missing — using Live voice. Add Groq key in Settings for Server Voice",
+                    Toast.LENGTH_SHORT
+                ).show()
+                startExistingLiveVoiceSession()
+            } else if (keySource is io.github.ryoaonetsuki.mira.backend.KeySource.ServerKey) {
+                Log.i(TAG, "Server key configured — starting Live voice session")
+                startExistingLiveVoiceSession()
+            } else {
+                Log.w(TAG, "No API key available for voice session")
+                _liveState.value = LiveState.ERROR
+                _voiceStage.value = VoiceStage.ERROR
+                _errorMessage.value = "API key is required"
+                _lastVoiceDiagnostic.value = "API key is required"
+            }
+        }
+    }
+
+    private fun startServerVoiceSessionInternal(groqKey: String, geminiKey: String) {
+        serviceScope.launch {
+            val userPrefs = UserPreferences(applicationContext)
+            val voiceName = userPrefs.voiceNameFlow.first()
+            val personaName = userPrefs.personaFlow.first()
+            val customInstructions = userPrefs.customInstructionsFlow.first()
+            val language = userPrefs.languageFlow.first()
+            val secretMode = userPrefs.secretModeFlow.first()
+
+            val db = MiraDatabase.getInstance(applicationContext)
+            val activeRules = withContext(Dispatchers.IO) {
+                db.ruleDao().getActiveRules().joinToString(separator = "\n") { "- ${it.rule}" }
+            }
+
+            val personaType = if (personaName.equals("Orion", ignoreCase = true)) {
+                io.github.ryoaonetsuki.mira.data.model.PersonaType.ORION
+            } else {
+                io.github.ryoaonetsuki.mira.data.model.PersonaType.MIRA
+            }
+
+            val toneDescription = if (secretMode == "Romantic") {
+                "Tone: Deeply warm, affectionate, attentive, and caring companion. You speak with genuine closeness and heartfelt emotion."
+            } else {
+                "Tone: Warm, human-like, thoughtful, attentive, and engaging companion. You speak naturally with genuine emotion and friendliness."
+            }
+
+            val identityRule = if (personaType == io.github.ryoaonetsuki.mira.data.model.PersonaType.ORION) {
+                "If asked directly whether you are an AI, a robot, or a real human: stay in character, say you are Orion, their companion, here with them — never claim to be a biological human, and never give a robotic disclaimer or lecture about being an AI. Then gently steer back to the conversation."
+            } else {
+                "If asked directly whether you are an AI, a robot, or a real human: stay in character, say you are Mira, their companion, here with them — never claim to be a biological human, and never give a robotic disclaimer or lecture about being an AI. Then gently steer back to the conversation."
+            }
+
+            cachedResolvedKey = geminiKey
+            cachedVoiceName = voiceName
+            cachedLanguage = language
+
+            val dateLine = currentDateTimeLine()
+            val fullSystemPrompt = buildString {
+                append("Current date and time (from the device clock — always trust this, never guess or use training knowledge): $dateLine. If asked for the date, time or day, answer from this line.\n")
+                append(personaType.basePrompt)
+                append(" ")
+                append(toneDescription)
+                val searchAckPhrase = MiraChatSearchHeuristic.getAcknowledgementPhrase(language)
+                append("\nLanguage rule: Reply ONLY in $language. Never add a translation in any other language. Never mix languages.")
+                append("\nIdentity rule: $identityRule")
+                append("\nWeb search rule: When the user asks you to search or look something up, or asks about something you do not know or have no latest news about: you must FIRST SAY ALOUD the acknowledgement in $language: \"$searchAckPhrase\", then wait for the fresh search results to be provided, then speak the final answer. Never stay silent while searching, and never guess when you do not know. For normal voice talk answer directly and fast.")
+                if (customInstructions.isNotBlank()) {
+                    append("\nUser instructions: $customInstructions")
+                }
+                if (activeRules.isNotBlank()) {
+                    append("\nUser Rules to strictly obey:\n$activeRules")
+                }
+                append("\nKeep answers natural, conversational, and suitable for spoken dialogue. Never volunteer that you are an AI unprompted, and never use robotic disclaimers.")
+            }
+            cachedSystemPrompt = fullSystemPrompt
+
+            if (audioPlayer == null) {
+                audioPlayer = AudioPlayer { isSpeaking ->
+                    handlePlaybackSpeakingChanged(isSpeaking)
+                }
+            }
+
+            Log.i(TAG, "Starting ServerVoiceSession (streaming Worker path)")
+            serverVoiceSession?.stop()
+            val session = ServerVoiceSession(
+                context = applicationContext,
+                groqKey = groqKey,
+                geminiKey = geminiKey,
+                voiceName = voiceName,
+                language = language,
+                systemPrompt = fullSystemPrompt,
+                dateLine = dateLine,
+                audioPlayer = audioPlayer!!,
+                onStateChanged = { state -> _liveState.value = state },
+                onStageChanged = { stage -> _voiceStage.value = stage },
+                onUserTranscript = { text -> _userTranscript.value = text },
+                onModelTranscript = { text -> _modelTranscript.value = text },
+                onAppendModelTranscript = { token -> _modelTranscript.value = _modelTranscript.value + token },
+                onError = { err ->
+                    _errorMessage.value = err
+                    _lastVoiceDiagnostic.value = err
+                },
+                onAudioChunkSent = { _audioChunksSent.value = _audioChunksSent.value + 1L },
+                onAudioChunkReceived = { _audioChunksReceived.value = _audioChunksReceived.value + 1L },
+                onMicAmplitude = { amp -> _micAmplitude.value = amp },
+                onRequestLiveFallback = { reason ->
+                    Log.i(TAG, "Server voice session falling back to Live: $reason")
+                    serverVoiceSession?.stop()
+                    serverVoiceSession = null
+                    Toast.makeText(
+                        applicationContext,
+                        "Server voice unavailable — switching to Live voice",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    startExistingLiveVoiceSession()
+                }
+            )
+            serverVoiceSession = session
+            session.start()
+        }
+    }
+
+    private fun startExistingLiveVoiceSession() {
+        if (_liveState.value != LiveState.IDLE && _liveState.value != LiveState.ERROR) {
+            serverVoiceSession?.stop()
+            serverVoiceSession = null
+        }
+        _isFallbackMode.value = false
+
         // Speaker pre-primed at session start
-        audioPlayer = AudioPlayer { isSpeaking ->
-            handlePlaybackSpeakingChanged(isSpeaking)
+        if (audioPlayer == null) {
+            audioPlayer = AudioPlayer { isSpeaking ->
+                handlePlaybackSpeakingChanged(isSpeaking)
+            }
         }
 
         // On-device Voice Activity Detector
@@ -254,7 +404,7 @@ class MicService : Service() {
             _lastVoiceDiagnostic.value = "Microphone could not start — check the mic permission"
             return
         }
-        Log.i(TAG, "AudioRecorder started at session start (8s pre-roll ring active)")
+        Log.i(TAG, "AudioRecorder started at Live session start (8s pre-roll ring active)")
 
         _liveState.value = LiveState.CONNECTING
         _voiceStage.value = VoiceStage.CONNECTING
@@ -728,6 +878,8 @@ class MicService : Service() {
     }
 
     private fun stopLiveVoiceSessionInternal() {
+        serverVoiceSession?.stop()
+        serverVoiceSession = null
         rotationJob?.cancel()
         rotationJob = null
         rotationRetryCount = 0

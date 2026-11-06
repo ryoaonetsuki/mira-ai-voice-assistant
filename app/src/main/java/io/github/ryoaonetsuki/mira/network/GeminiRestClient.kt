@@ -153,8 +153,28 @@ object MiraChatSearchHeuristic {
     // Patterns for dates (e.g. 05/11/2026, 2026-11-06, etc.)
     private val DATE_REGEX = Regex("(?:\\b\\d{1,2}[./-]\\d{1,2}(?:[./-]\\d{2,4})?\\b|\\b\\d{4}[./-]\\d{1,2}[./-]\\d{1,2}\\b)")
 
+    // Date & Time triggers (case-insensitive, substring match)
+    private val DATE_TIME_TRIGGERS = listOf(
+        // English words/phrases
+        "what day is it", "what time is it", "what's the date", "today's date",
+        "current date", "current time", "what date", "what day", "what time",
+        "which day", "date", "day", "time",
+        // Bengali script
+        "কয় তারিখ", "তারিখ", "কয়টা", "কটা", "সময়", "আজকে", "আজ", "বার",
+        // Roman Bangla
+        "koy tarikh", "kototarikh", "kota baje", "ki bar", "kon bar",
+        "tarikh", "tariq", "ajker", "ajke", "koyta", "baje", "akhon", "ekhon", "somoy"
+    )
+
+    fun isDateTimeQuestion(text: String): Boolean {
+        if (text.isBlank()) return false
+        val lower = text.lowercase()
+        return DATE_TIME_TRIGGERS.any { lower.contains(it) }
+    }
+
     fun isTimeSensitive(text: String): Boolean {
         if (text.isBlank()) return false
+        if (isDateTimeQuestion(text)) return true
         val lower = text.lowercase()
 
         // 1. Check Year pattern
@@ -181,6 +201,36 @@ object MiraChatSearchHeuristic {
 
         return false
     }
+
+    private val BUILD_TRIGGERS = listOf(
+        "website", "web app", "webapp", "portfolio", "landing page", "script",
+        "build", "create", "make", "design", "code", "app",
+        "বানাও", "বানিয়ে", "তৈরি", "ওয়েবসাইট",
+        "banao", "baniye", "banai", "toiri", "website"
+    )
+
+    fun isBuildRequest(text: String): Boolean {
+        if (text.isBlank()) return false
+        val lower = text.lowercase()
+        return BUILD_TRIGGERS.any { lower.contains(it) }
+    }
+
+    private val INTERROGATIVE_TRIGGERS = listOf(
+        "what", "who", "when", "where", "why", "how to", "how", "which",
+        "is", "are", "can", "should", "best", "versus", "vs", "compare", "recommend",
+        "কি", "কী", "কে", "কখন", "কোথায়", "কেন", "কিভাবে", "কোন", "সেরা",
+        "kivabe", "kokhon", "kothay", "kokon", "kemon", "keno", "sera", "best", "ki", "ke", "kon"
+    )
+
+    fun isChatSearchWorthy(text: String): Boolean {
+        if (text.isBlank()) return false
+        if (isTimeSensitive(text)) return true
+        if (isBuildRequest(text)) return true
+        val lower = text.lowercase()
+        val words = lower.split(Regex("[\\s,?.!;:'\"()]+"))
+        if (words.any { it in INTERROGATIVE_TRIGGERS }) return true
+        return INTERROGATIVE_TRIGGERS.any { lower.contains(it) }
+    }
 }
 
 class GeminiRestClient {
@@ -202,13 +252,13 @@ class GeminiRestClient {
     private val anonKey: String
         get() = try { io.github.ryoaonetsuki.mira.BuildConfig.SUPABASE_ANON_KEY } catch (_: Throwable) { "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp2bmZ3bHF4ZGJvbW10b3p1Z3p0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM5MTM2NDksImV4cCI6MjEwOTQ4OTY0OX0.uqyERmXVe2GEP2oaU0xc7I9V1ry-43adAEg6jddYBpk" }
 
-    // Chat model ladder: try in order until one returns non-empty text.
-    // gemini-3.5-flash-lite is the primary (cheapest/fastest for new keys).
+    // Chat model ladder (Round-3 addendum): 3.8 Flash is Google's most intelligent free Flash model,
+    // engineered for long-horizon software engineering and complex agent workflows.
+    // Quality beats speed for chat; 3.6 Flash and 3.5 Flash Lite serve as fallbacks.
     private val chatModelLadder = listOf(
-        "gemini-3.5-flash-lite",
         "gemini-3.8-flash",
         "gemini-3.6-flash",
-        "gemini-3.1-flash-lite"
+        "gemini-3.5-flash-lite"
     )
 
     /**
@@ -220,7 +270,7 @@ class GeminiRestClient {
 
     /**
      * Full validation: (1) models-list check, then (2) a real tiny generateContent call
-     * on gemini-3.5-flash-lite asking "Reply with exactly: OK".
+     * on gemini-3.8-flash asking "Reply with exactly: OK".
      * Returns the exact failure reason on failure.
      */
     suspend fun validateApiKeyAndChat(apiKey: String, useServerProxy: Boolean = false): Result<Boolean> = withContext(Dispatchers.IO) {
@@ -228,7 +278,7 @@ class GeminiRestClient {
             return@withContext try {
                 val payload = JSONObject().apply {
                     put("action", "validateKey")
-                    put("model", "gemini-3.5-flash-lite")
+                    put("model", "gemini-3.8-flash")
                 }
                 val request = Request.Builder()
                     .url(edgeFunctionUrl)
@@ -283,7 +333,7 @@ class GeminiRestClient {
                 role = "user",
                 content = "Reply with exactly: OK"
             )
-            val result = executeGenerateContent(key, listOf(testMsg), "", "gemini-3.5-flash-lite", false, attachSearchTool = false)
+            val result = executeGenerateContent(key, listOf(testMsg), "", "gemini-3.8-flash", false, attachSearchTool = false, enableThinking = false)
             if (result.isSuccess) {
                 Result.success(true)
             } else {
@@ -295,46 +345,133 @@ class GeminiRestClient {
         }
     }
 
+    private data class PreparedChatInput(
+        val effectiveHistory: List<ChatMessageEntity>,
+        val effectiveSystemPrompt: String,
+        val sources: List<GroundingSource>
+    )
+
+    private fun extractCoreTopic(text: String): String {
+        val verbsToRemove = listOf(
+            "build me a", "build me an", "build me", "build a", "build an", "build",
+            "create me a", "create me an", "create a", "create an", "create",
+            "make me a", "make me an", "make a", "make an", "make",
+            "design me a", "design me an", "design a", "design an", "design",
+            "develop a", "develop an", "develop",
+            "বানিয়ে দাও", "বানিয়ে দিন", "বানাও", "তৈরি করো", "তৈরি করুন", "একটি", "একটা",
+            "banao", "baniye dao", "banai", "toiri koro"
+        )
+        var result = text
+        for (v in verbsToRemove) {
+            result = result.replace(Regex("(?i)\\b" + Regex.escape(v) + "\\b"), " ")
+        }
+        val cleaned = result.replace(Regex("\\s+"), " ").trim()
+        return if (cleaned.length >= 3) cleaned else text.trim()
+    }
+
+    private suspend fun prepareChatInput(
+        history: List<ChatMessageEntity>,
+        systemPrompt: String,
+        isChatCall: Boolean,
+        enableGrounding: Boolean?
+    ): PreparedChatInput = withContext(Dispatchers.IO) {
+        val lastUserMessage = history.lastOrNull { it.role == "user" }?.content ?: ""
+        val isBuild = MiraChatSearchHeuristic.isBuildRequest(lastUserMessage)
+        val shouldSearch = enableGrounding ?: if (isChatCall) {
+            MiraChatSearchHeuristic.isChatSearchWorthy(lastUserMessage)
+        } else {
+            MiraChatSearchHeuristic.isTimeSensitive(lastUserMessage)
+        }
+
+        var effectiveSysPrompt = systemPrompt
+        val allSources = mutableListOf<GroundingSource>()
+
+        // 1. Research-first for build requests
+        if (isBuild && lastUserMessage.isNotBlank()) {
+            val coreTopic = extractCoreTopic(lastUserMessage)
+            val query1 = lastUserMessage
+            val query2 = "$coreTopic modern website design 2026 best practices examples"
+            val res1 = FreeWebSearch.search(query1, maxResults = 5)
+            val res2 = if (query2 != query1) FreeWebSearch.search(query2, maxResults = 5) else emptyList()
+            val mergedBuildResults = (res1 + res2).distinctBy { it.url }.take(6)
+            if (mergedBuildResults.isNotEmpty()) {
+                val researchBlock = buildString {
+                    appendLine("[Design research — live web results for this build (searched just now):")
+                    mergedBuildResults.forEachIndexed { idx, res ->
+                        appendLine("${idx + 1}. ${res.title} — ${res.snippet} (${res.url})")
+                    }
+                    appendLine("Study these before building. Think step-by-step about layout, palette, typography, sections and real content, then build a premium multi-page site. Do not copy any site's branding or copyrighted text/images.]")
+                }
+                effectiveSysPrompt = if (effectiveSysPrompt.isBlank()) {
+                    researchBlock
+                } else {
+                    researchBlock + "\n\n" + effectiveSysPrompt
+                }
+                allSources.addAll(mergedBuildResults.map { GroundingSource(title = it.title, url = it.url) })
+            }
+        }
+
+        // 2. Embedded web search for time-sensitive or search-worthy queries
+        var effectiveHistory = history
+        if (shouldSearch && lastUserMessage.isNotBlank()) {
+            val maxRes = if (isChatCall) 8 else 5
+            val searchResults = FreeWebSearch.search(lastUserMessage, maxResults = maxRes)
+            if (searchResults.isNotEmpty()) {
+                val dateLine = currentDateTimeLine()
+                val searchBlock = FreeWebSearch.formatForModel(searchResults, dateLine)
+                val newLastMsg = "$lastUserMessage\n\n$searchBlock"
+                val lastUserIdx = history.indexOfLast { it.role == "user" }
+                if (lastUserIdx != -1) {
+                    val mutableHist = history.toMutableList()
+                    mutableHist[lastUserIdx] = history[lastUserIdx].copy(content = newLastMsg)
+                    effectiveHistory = mutableHist
+                }
+                allSources.addAll(searchResults.map { GroundingSource(title = it.title, url = it.url) })
+            }
+        }
+
+        PreparedChatInput(
+            effectiveHistory = effectiveHistory,
+            effectiveSystemPrompt = effectiveSysPrompt,
+            sources = allSources.distinctBy { it.url }
+        )
+    }
+
     suspend fun generateChatResponse(
         apiKey: String,
         history: List<ChatMessageEntity>,
         systemPrompt: String = "",
-        model: String = "gemini-3.5-flash-lite",
+        model: String = "gemini-3.8-flash",
         useServerProxy: Boolean = false,
-        enableGrounding: Boolean? = null
+        enableGrounding: Boolean? = null,
+        enableThinking: Boolean = true,
+        isChatCall: Boolean = true
     ): Result<GroundedChatResult> = withContext(Dispatchers.IO) {
         val key = normalizeApiKey(apiKey)
+        val prepared = prepareChatInput(history, systemPrompt, isChatCall = isChatCall, enableGrounding = enableGrounding)
+
         // Build the ladder starting from the requested model, then fallbacks
         val ladder = buildList {
             add(model)
             chatModelLadder.forEach { m -> if (m != model) add(m) }
         }
 
-        val lastUserMessage = history.lastOrNull { it.role == "user" }?.content ?: ""
-        val shouldGround = enableGrounding ?: MiraChatSearchHeuristic.isTimeSensitive(lastUserMessage)
-        if (shouldGround) {
-            Log.i(TAG_CHAT, "Grounding enabled for message: \"${lastUserMessage.take(60)}\"")
-        } else {
-            Log.d(TAG_CHAT, "Grounding disabled for message: \"${lastUserMessage.take(60)}\"")
-        }
-
         var lastError: Exception = Exception("All models failed")
-        for (i in ladder.indices) {
-            val m = ladder[i]
-            val isPrimary = (i == 0)
-
-            // Try with search tool on primary model if grounding is enabled
-            var result = executeGenerateContent(key, history, systemPrompt, m, useServerProxy, attachSearchTool = (isPrimary && shouldGround))
-
-            // Robustness: If primary model failed with search tool, retry primary model once without tool
-            if (!result.isSuccess && isPrimary && shouldGround) {
-                val err = result.exceptionOrNull()
-                Log.w(TAG_CHAT, "Primary model $m failed with search tool (${err?.message}). Retrying primary model once without tool...")
-                result = executeGenerateContent(key, history, systemPrompt, m, useServerProxy, attachSearchTool = false)
-            }
+        for (m in ladder) {
+            val result = executeGenerateContent(
+                apiKey = key,
+                history = prepared.effectiveHistory,
+                systemPrompt = prepared.effectiveSystemPrompt,
+                model = m,
+                useServerProxy = useServerProxy,
+                attachSearchTool = false,
+                enableThinking = enableThinking
+            )
 
             if (result.isSuccess) {
-                return@withContext result
+                val res = result.getOrNull()
+                val mergedSources = (prepared.sources + (res?.sources ?: emptyList())).distinctBy { it.url }
+                return@withContext Result.success(GroundedChatResult(text = res?.text ?: "", sources = mergedSources))
             }
             val err = result.exceptionOrNull() ?: Exception("Unknown error")
             Log.w(TAG, "Model $m failed: ${err.message}. Trying next...")
@@ -347,164 +484,150 @@ class GeminiRestClient {
         apiKey: String,
         history: List<ChatMessageEntity>,
         systemPrompt: String = "",
-        model: String = "gemini-3.5-flash-lite",
+        model: String = "gemini-3.8-flash",
         useServerProxy: Boolean = false,
         enableGrounding: Boolean? = null,
+        enableThinking: Boolean = true,
+        isChatCall: Boolean = true,
         onSourcesReceived: ((List<GroundingSource>) -> Unit)? = null
     ): Flow<String> = flow {
         val key = normalizeApiKey(apiKey)
+        val prepared = prepareChatInput(history, systemPrompt, isChatCall = isChatCall, enableGrounding = enableGrounding)
+
+        if (prepared.sources.isNotEmpty()) {
+            onSourcesReceived?.invoke(prepared.sources.take(4))
+        }
+
         val ladder = buildList {
             add(model)
             chatModelLadder.forEach { m -> if (m != model) add(m) }
         }
 
-        val lastUserMessage = history.lastOrNull { it.role == "user" }?.content ?: ""
-        val shouldGround = enableGrounding ?: MiraChatSearchHeuristic.isTimeSensitive(lastUserMessage)
-        if (shouldGround) {
-            Log.i(TAG_CHAT, "Grounding enabled for message: \"${lastUserMessage.take(60)}\"")
-        } else {
-            Log.d(TAG_CHAT, "Grounding disabled for message: \"${lastUserMessage.take(60)}\"")
-        }
-
         var tokensEmittedTotal = 0
         var lastError: Exception = Exception("All models in streaming ladder failed")
 
-        for (i in ladder.indices) {
-            val m = ladder[i]
-            val isPrimary = (i == 0)
-            var tryWithTool = isPrimary && shouldGround
+        for (m in ladder) {
+            var modelTokensEmitted = 0
+            val streamSources = mutableListOf<GroundingSource>()
+            try {
+                val root = JSONObject()
 
-            // Up to 2 attempts on primary model if tool is rejected:
-            // 1st attempt: with tool
-            // 2nd attempt: without tool
-            while (true) {
-                var modelTokensEmitted = 0
-                val streamSources = mutableListOf<GroundingSource>()
-                try {
-                    val root = JSONObject()
+                if (prepared.effectiveSystemPrompt.isNotBlank()) {
+                    val sysInst = JSONObject()
+                    val parts = JSONArray()
+                    parts.put(JSONObject().put("text", prepared.effectiveSystemPrompt))
+                    sysInst.put("parts", parts)
+                    root.put("systemInstruction", sysInst)
+                }
 
-                    if (systemPrompt.isNotBlank()) {
-                        val sysInst = JSONObject()
-                        val parts = JSONArray()
-                        parts.put(JSONObject().put("text", systemPrompt))
-                        sysInst.put("parts", parts)
-                        root.put("systemInstruction", sysInst)
-                    }
+                val contents = JSONArray()
+                for (msg in prepared.effectiveHistory.takeLast(20)) {
+                    val turn = JSONObject()
+                    turn.put("role", if (msg.role == "user") "user" else "model")
+                    val parts = JSONArray()
+                    parts.put(JSONObject().put("text", msg.content))
+                    turn.put("parts", parts)
+                    contents.put(turn)
+                }
+                root.put("contents", contents)
 
-                    val contents = JSONArray()
-                    for (msg in history.takeLast(20)) {
-                        val turn = JSONObject()
-                        turn.put("role", if (msg.role == "user") "user" else "model")
-                        val parts = JSONArray()
-                        parts.put(JSONObject().put("text", msg.content))
-                        turn.put("parts", parts)
-                        contents.put(turn)
-                    }
-                    root.put("contents", contents)
+                if (enableThinking) {
+                    val genConfig = JSONObject()
+                    val thinkingConfig = JSONObject()
+                    thinkingConfig.put("thinkingBudget", 8192)
+                    genConfig.put("thinkingConfig", thinkingConfig)
+                    root.put("generationConfig", genConfig)
+                }
 
-                    if (tryWithTool) {
-                        val tools = JSONArray().put(JSONObject().put("googleSearch", JSONObject()))
-                        root.put("tools", tools)
-                    }
+                val request = if (useServerProxy) {
+                    root.put("action", "streamGenerateContent")
+                    root.put("model", m)
+                    Request.Builder()
+                        .url(edgeFunctionUrl)
+                        .addHeader("apikey", anonKey)
+                        .addHeader("Authorization", "Bearer $anonKey")
+                        .post(root.toString().toRequestBody(jsonMediaType))
+                        .build()
+                } else {
+                    val url = "https://generativelanguage.googleapis.com/v1beta/models/$m:streamGenerateContent?alt=sse&key=$key"
+                    Request.Builder().url(url).header("x-goog-api-key", key).post(root.toString().toRequestBody(jsonMediaType)).build()
+                }
 
-                    val request = if (useServerProxy) {
-                        root.put("action", "streamGenerateContent")
-                        root.put("model", m)
-                        Request.Builder()
-                            .url(edgeFunctionUrl)
-                            .addHeader("apikey", anonKey)
-                            .addHeader("Authorization", "Bearer $anonKey")
-                            .post(root.toString().toRequestBody(jsonMediaType))
-                            .build()
-                    } else {
-                        val url = "https://generativelanguage.googleapis.com/v1beta/models/$m:streamGenerateContent?alt=sse&key=$key"
-                        Request.Builder().url(url).header("x-goog-api-key", key).post(root.toString().toRequestBody(jsonMediaType)).build()
-                    }
-
-                    val call = client.newCall(request)
-                    call.execute().use { response ->
-                        if (!response.isSuccessful) {
-                            val body = response.body?.string() ?: ""
-                            val msg = try {
-                                JSONObject(body).optJSONObject("error")?.optString("message") ?: body.take(200)
-                            } catch (_: Exception) {
-                                "HTTP ${response.code}"
-                            }
-                            throw Exception("HTTP ${response.code}: $msg")
+                val call = client.newCall(request)
+                call.execute().use { response ->
+                    if (!response.isSuccessful) {
+                        val body = response.body?.string() ?: ""
+                        val msg = try {
+                            JSONObject(body).optJSONObject("error")?.optString("message") ?: body.take(200)
+                        } catch (_: Exception) {
+                            "HTTP ${response.code}"
                         }
+                        throw Exception("HTTP ${response.code}: $msg")
+                    }
 
-                        val source = response.body?.source() ?: throw Exception("Empty response body from $m")
-                        while (!source.exhausted()) {
-                            val line = source.readUtf8Line() ?: break
-                            val trimmed = line.trim()
-                            if (trimmed.startsWith("data:")) {
-                                val dataJson = trimmed.removePrefix("data:").trim()
-                                if (dataJson.isNotEmpty() && dataJson != "[DONE]") {
-                                    try {
-                                        val obj = JSONObject(dataJson)
-                                        val candidates = obj.optJSONArray("candidates")
-                                        if (candidates != null && candidates.length() > 0) {
-                                            val firstCand = candidates.getJSONObject(0)
+                    val source = response.body?.source() ?: throw Exception("Empty response body from $m")
+                    while (!source.exhausted()) {
+                        val line = source.readUtf8Line() ?: break
+                        val trimmed = line.trim()
+                        if (trimmed.startsWith("data:")) {
+                            val dataJson = trimmed.removePrefix("data:").trim()
+                            if (dataJson.isNotEmpty() && dataJson != "[DONE]") {
+                                try {
+                                    val obj = JSONObject(dataJson)
+                                    val candidates = obj.optJSONArray("candidates")
+                                    if (candidates != null && candidates.length() > 0) {
+                                        val firstCand = candidates.getJSONObject(0)
 
-                                            // Parse grounding sources if present
-                                            val candSources = GroundingSource.parseFromCandidate(firstCand)
-                                            if (candSources.isNotEmpty()) {
-                                                streamSources.addAll(candSources)
+                                        // Parse grounding sources if present
+                                        val candSources = GroundingSource.parseFromCandidate(firstCand)
+                                        if (candSources.isNotEmpty()) {
+                                            streamSources.addAll(candSources)
+                                        }
+
+                                        val content = firstCand.optJSONObject("content")
+                                        val parts = content?.optJSONArray("parts")
+                                        if (parts != null) {
+                                            val chunkBuilder = StringBuilder()
+                                            for (p in 0 until parts.length()) {
+                                                val part = parts.getJSONObject(p)
+                                                val text = part.optString("text", "")
+                                                if (text.isNotEmpty()) {
+                                                    chunkBuilder.append(text)
+                                                }
                                             }
-
-                                            val content = firstCand.optJSONObject("content")
-                                            val parts = content?.optJSONArray("parts")
-                                            if (parts != null) {
-                                                val chunkBuilder = StringBuilder()
-                                                for (p in 0 until parts.length()) {
-                                                    val part = parts.getJSONObject(p)
-                                                    val text = part.optString("text", "")
-                                                    if (text.isNotEmpty()) {
-                                                        chunkBuilder.append(text)
-                                                    }
-                                                }
-                                                val chunk = chunkBuilder.toString()
-                                                if (chunk.isNotEmpty()) {
-                                                    modelTokensEmitted++
-                                                    tokensEmittedTotal++
-                                                    emit(chunk)
-                                                }
+                                            val chunk = chunkBuilder.toString()
+                                            if (chunk.isNotEmpty()) {
+                                                modelTokensEmitted++
+                                                tokensEmittedTotal++
+                                                emit(chunk)
                                             }
                                         }
-                                    } catch (parseErr: Exception) {
-                                        Log.w(TAG, "Error parsing SSE chunk from $m: ${parseErr.message}")
                                     }
+                                } catch (parseErr: Exception) {
+                                    Log.w(TAG, "Error parsing SSE chunk from $m: ${parseErr.message}")
                                 }
                             }
                         }
                     }
-
-                    if (modelTokensEmitted > 0) {
-                        if (streamSources.isNotEmpty()) {
-                            val finalSources = streamSources.distinctBy { it.url }.take(4)
-                            onSourcesReceived?.invoke(finalSources)
-                        }
-                        return@flow
-                    } else {
-                        Log.w(TAG, "Model $m returned 0 tokens over stream, trying next fallback...")
-                        lastError = Exception("$m returned empty stream")
-                    }
-                } catch (e: Exception) {
-                    if (modelTokensEmitted > 0) {
-                        Log.e(TAG, "Streaming failed mid-stream on $m: ${e.message}", e)
-                        throw e
-                    }
-                    Log.w(TAG, "Stream failed before tokens on $m: ${e.message}. Trying next...")
-                    lastError = e
-
-                    // Robustness: If primary model failed with search tool before emitting tokens, retry once without tool
-                    if (isPrimary && tryWithTool) {
-                        Log.w(TAG_CHAT, "Primary model $m failed with search tool: ${e.message}. Retrying primary model once without tool...")
-                        tryWithTool = false
-                        continue // Retry while(true) on primary model without search tool
-                    }
                 }
-                break // Done with this model attempt
+
+                if (modelTokensEmitted > 0) {
+                    val finalSources = (prepared.sources + streamSources).distinctBy { it.url }.take(4)
+                    if (finalSources.isNotEmpty()) {
+                        onSourcesReceived?.invoke(finalSources)
+                    }
+                    return@flow
+                } else {
+                    Log.w(TAG, "Model $m returned 0 tokens over stream, trying next fallback...")
+                    lastError = Exception("$m returned empty stream")
+                }
+            } catch (e: Exception) {
+                if (modelTokensEmitted > 0) {
+                    Log.e(TAG, "Streaming failed mid-stream on $m: ${e.message}", e)
+                    throw e
+                }
+                Log.w(TAG, "Stream failed before tokens on $m: ${e.message}. Trying next...")
+                lastError = e
             }
         }
 
@@ -519,7 +642,8 @@ class GeminiRestClient {
         systemPrompt: String,
         model: String,
         useServerProxy: Boolean = false,
-        attachSearchTool: Boolean = false
+        attachSearchTool: Boolean = false,
+        enableThinking: Boolean = false
     ): Result<GroundedChatResult> {
         return try {
             val root = JSONObject()
@@ -548,6 +672,14 @@ class GeminiRestClient {
             if (attachSearchTool) {
                 val tools = JSONArray().put(JSONObject().put("googleSearch", JSONObject()))
                 root.put("tools", tools)
+            }
+
+            if (enableThinking) {
+                val genConfig = JSONObject()
+                val thinkingConfig = JSONObject()
+                thinkingConfig.put("thinkingBudget", 8192)
+                genConfig.put("thinkingConfig", thinkingConfig)
+                root.put("generationConfig", genConfig)
             }
 
             val request = if (useServerProxy) {

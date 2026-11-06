@@ -1,5 +1,7 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
+import android.os.Build
+import android.os.Environment
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -138,13 +140,27 @@ fun SplashScreen(
 
         // 5. Normal setup check: proceed to Home if user has a key OR server key is configured
         val key = securePrefs.getGeminiApiKey()
-        if (key.isNullOrBlank()) {
+        val hasKey = if (key.isNullOrBlank()) {
             val resolver = io.github.ryoaonetsuki.mira.backend.ApiKeyResolver(context)
-            if (resolver.isServerKeyConfigured()) {
-                onNavigate(Screen.Home.route)
-            } else {
-                onNavigate(Screen.Setup.route)
-            }
+            resolver.isServerKeyConfigured()
+        } else {
+            true
+        }
+
+        if (!hasKey) {
+            onNavigate("setup?startStep=1")
+            return@LaunchedEffect
+        }
+
+        // Before navigating to Home, verify File Management permission (required setup step)
+        val hasFileAccess = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Environment.isExternalStorageManager()
+        } else {
+            true
+        }
+
+        if (!hasFileAccess) {
+            onNavigate("setup?startStep=2")
         } else {
             onNavigate(Screen.Home.route)
         }

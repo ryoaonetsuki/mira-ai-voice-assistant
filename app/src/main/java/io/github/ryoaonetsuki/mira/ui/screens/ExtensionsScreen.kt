@@ -1,6 +1,14 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
-import io.github.ryoaonetsuki.mira.ui.icons.Lucide
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Call
+import androidx.compose.material.icons.rounded.Chat
+import androidx.compose.material.icons.rounded.CloudQueue
+import androidx.compose.material.icons.rounded.Map
+import androidx.compose.material.icons.rounded.PlayCircle
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Sms
 import android.content.Intent
 import android.provider.Settings
 import androidx.compose.foundation.background
@@ -82,7 +90,7 @@ fun ExtensionsScreen(
                 title = { Text("Extensions & Macros", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Lucide.arrowLeft, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -229,7 +237,7 @@ fun ExtensionsScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Icon(
-                        imageVector = Lucide.cloud,
+                        imageVector = Icons.Rounded.CloudQueue,
                         contentDescription = null,
                         tint = palette.primary,
                         modifier = Modifier.size(24.dp)
@@ -375,12 +383,12 @@ fun ExtensionsScreen(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             val icon = when (macro.actionType) {
-                                MacroActionType.WHATSAPP -> Lucide.messageCircle
-                                MacroActionType.YOUTUBE -> Lucide.circlePlay
-                                MacroActionType.MAPS -> Lucide.map
-                                MacroActionType.CALL -> Lucide.phoneCall
-                                MacroActionType.SMS -> Lucide.messageSquareText
-                                MacroActionType.WEB_SEARCH -> Lucide.search
+                                MacroActionType.WHATSAPP -> Icons.Rounded.Chat
+                                MacroActionType.YOUTUBE -> Icons.Rounded.PlayCircle
+                                MacroActionType.MAPS -> Icons.Rounded.Map
+                                MacroActionType.CALL -> Icons.Rounded.Call
+                                MacroActionType.SMS -> Icons.Rounded.Sms
+                                MacroActionType.WEB_SEARCH -> Icons.Rounded.Search
                             }
 
                             Icon(

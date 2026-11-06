@@ -28,7 +28,6 @@ enum class LiveVoiceModel(
     val displayName: String,
     val subtitle: String
 ) {
-    MIND("models/gemini-3.8-live", "Mira Mind", "Sharper brain & advanced analysis"),
-    SOUL("models/gemini-2.5-flash-native-audio-preview-12-2025", "Mira Soul", "Warm voice & rich emotional intonation"),
-    SWIFT("models/gemini-3.1-flash-live-preview", "Mira Swift", "Ultra-low latency & fastest replies")
+    // SOUL and SWIFT were removed Nov 2026 after Google shut those Live preview models down.
+    MIND("models/gemini-3.8-live", "Mira Mind", "Sharper brain & advanced analysis")
 }

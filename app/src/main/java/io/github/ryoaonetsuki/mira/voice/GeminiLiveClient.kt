@@ -44,14 +44,19 @@ class GeminiLiveClient(
     private val isRunning = AtomicBoolean(false)
 
     // Handshake fallback model ladder.
-    // NOTE: models/gemini-2.5-flash-native-audio-preview-12-2025 and
-    //       models/gemini-3.1-flash-live-preview are legacy models scheduled
-    //       to shut down on 2026-11-17 but are still live as of now.
+    // NOTE: Legacy Live preview models were removed because Google shut them down
+    //       on Nov 17, 2026 (verified against the deprecations page) and
+    //       gemini-3.8-live is the replacement.
+    private val sanitizedInitialModel = if (
+        initialModel.contains("native-audio") || initialModel.contains("live-preview")
+    ) {
+        "models/gemini-3.8-live"
+    } else {
+        initialModel
+    }
     private val modelFallbackLadder = listOf(
-        initialModel,
-        "models/gemini-3.8-live",
-        "models/gemini-2.5-flash-native-audio-preview-12-2025",
-        "models/gemini-3.1-flash-live-preview"
+        sanitizedInitialModel,
+        "models/gemini-3.8-live"
     ).distinct()
 
     private val currentModelIndex = AtomicInteger(0)

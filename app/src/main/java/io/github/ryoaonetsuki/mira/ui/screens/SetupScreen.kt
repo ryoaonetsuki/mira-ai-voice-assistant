@@ -42,6 +42,7 @@ import io.github.ryoaonetsuki.mira.ui.components.MiraCard
 import io.github.ryoaonetsuki.mira.ui.navigation.Screen
 import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 private enum class SetupKeyStatus {
     IDLE,
@@ -289,9 +290,14 @@ fun SetupScreen(
                         }
                         isCheckingKey = true
                         keyStatus = SetupKeyStatus.CHECKING
-                        keyValidationMessage = "Validating key with Google... (retrying if Google is busy)"
+                        keyValidationMessage = "Validating key with Google..."
                         scope.launch {
-                            val outcome = restClient.validateApiKeyAndChat(normalized)
+                            // ROUND 6 safety net: even if validation somehow hung, the
+                            // spinner stops at 25s and a plausible key is saved + enters.
+                            // (validateApiKeyAndChat itself is already capped at ~12s.)
+                            val outcome = withTimeoutOrNull(25_000L) {
+                                restClient.validateApiKeyAndChat(normalized)
+                            } ?: KeyValidationOutcome.TransientServerBusy()
                             isCheckingKey = false
                             when (outcome) {
                                 is KeyValidationOutcome.Valid -> {

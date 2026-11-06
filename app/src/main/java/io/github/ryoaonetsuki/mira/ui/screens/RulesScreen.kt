@@ -1,13 +1,10 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
+import io.github.ryoaonetsuki.mira.ui.icons.Lucide
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material3.*
 import io.github.ryoaonetsuki.mira.ui.components.MiraSwitch
 import androidx.compose.runtime.*
@@ -43,12 +40,12 @@ fun RulesScreen(
                 title = { Text("Mira Rules", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(Lucide.arrowLeft, contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 actions = {
                     IconButton(onClick = { showAddDialog = true }) {
-                        Icon(Icons.Rounded.Add, contentDescription = "Add Rule", tint = palette.primary)
+                        Icon(Lucide.plus, contentDescription = "Add Rule", tint = palette.primary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -119,7 +116,7 @@ fun RulesScreen(
                                     }
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Rounded.DeleteOutline,
+                                        imageVector = Lucide.trash,
                                         contentDescription = "Delete",
                                         tint = palette.textSecondary
                                     )

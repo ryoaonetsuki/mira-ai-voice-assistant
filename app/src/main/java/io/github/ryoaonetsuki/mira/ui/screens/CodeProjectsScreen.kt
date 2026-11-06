@@ -126,7 +126,8 @@ fun CodeProjectsScreen(
                                 isGenerating = false
                                 if (result.isSuccess) {
                                     val rawCode = result.getOrThrow()
-                                    val saved = WebsiteProjectManager.parseAndSaveProject(projectsBaseDir, name, rawCode)
+                                    val extBase = context.getExternalFilesDir(null)?.let { File(it, "Mira/Projects") }
+                                    val saved = WebsiteProjectManager.parseAndSaveProject(projectsBaseDir, name, rawCode, extBase)
                                     projectNameInput = ""
                                     promptInput = ""
                                     refreshProjects()

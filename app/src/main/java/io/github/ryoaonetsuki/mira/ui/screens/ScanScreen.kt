@@ -1,5 +1,6 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
+import io.github.ryoaonetsuki.mira.ui.icons.Lucide
 import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -17,8 +18,6 @@ import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -81,7 +80,7 @@ fun ScanScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
-                            imageVector = Icons.Rounded.ArrowBack,
+                            imageVector = Lucide.arrowLeft,
                             contentDescription = "Back",
                             tint = palette.textPrimary
                         )
@@ -109,7 +108,7 @@ fun ScanScreen(
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Icon(
-                            imageVector = Icons.Rounded.CameraAlt,
+                            imageVector = Lucide.camera,
                             contentDescription = null,
                             tint = palette.textSecondary,
                             modifier = Modifier.size(56.dp)
@@ -146,7 +145,7 @@ fun ScanScreen(
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Icon(
-                        imageVector = Icons.Rounded.CheckCircle,
+                        imageVector = Lucide.circleCheck,
                         contentDescription = null,
                         tint = Color(0xFF10B981),
                         modifier = Modifier.size(56.dp)
@@ -195,7 +194,7 @@ fun ScanScreen(
                         colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Icon(Icons.Rounded.ContentCopy, contentDescription = null, tint = Color.Black)
+                        Icon(Lucide.copy, contentDescription = null, tint = Color.Black)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Copy", color = Color.Black, fontWeight = FontWeight.SemiBold)
                     }
@@ -213,7 +212,7 @@ fun ScanScreen(
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = palette.primary),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Icon(Icons.Rounded.QrCodeScanner, contentDescription = null)
+                        Icon(Lucide.scanQrCode, contentDescription = null)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Scan Again")
                     }

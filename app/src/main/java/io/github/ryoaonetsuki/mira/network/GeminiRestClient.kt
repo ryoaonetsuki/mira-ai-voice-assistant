@@ -13,6 +13,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 /**
@@ -115,6 +116,14 @@ data class GroundingSource(
 data class GroundedChatResult(
     val text: String,
     val sources: List<GroundingSource> = emptyList()
+)
+
+data class ChatAttachment(
+    val mimeType: String,
+    val base64Data: String? = null,
+    val fileUri: String? = null,
+    val textContent: String? = null,
+    val fileName: String? = null
 )
 
 object MiraChatSearchHeuristic {
@@ -230,6 +239,49 @@ object MiraChatSearchHeuristic {
         val words = lower.split(Regex("[\\s,?.!;:'\"()]+"))
         if (words.any { it in INTERROGATIVE_TRIGGERS }) return true
         return INTERROGATIVE_TRIGGERS.any { lower.contains(it) }
+    }
+
+    val ACKNOWLEDGEMENT_PHRASES: Map<String, String>
+        get() = SearchAcknowledgement.PHRASES
+
+    fun getAcknowledgementPhrase(language: String): String =
+        SearchAcknowledgement.getPhrase(language)
+
+    private val EXPLICIT_SEARCH_PHRASES = listOf(
+        "search koro", "khoje dekho", "khuje dekho",
+        "khoje bolo", "khuje bolo", "look up", "google it",
+        "খুঁজে দেখো", "খুঁজে বের করো", "খুঁজে বল", "খুঁজে বলো",
+        "সার্চ করো", "সার্চ কর"
+    )
+
+    private val EXPLICIT_SEARCH_TOKENS = setOf(
+        "search", "google", "lookup", "khoje", "khuje",
+        "খুঁজে", "সার্চ", "খোঁজ", "খোজ"
+    )
+
+    fun isSearchRequest(text: String): Boolean {
+        if (text.isBlank()) return false
+        if (isTimeSensitive(text)) return true
+
+        val lower = text.lowercase(Locale.ROOT)
+        for (phrase in EXPLICIT_SEARCH_PHRASES) {
+            if (lower.contains(phrase)) return true
+        }
+
+        if (lower.contains("খুঁজে") || lower.contains("সার্চ") || lower.contains("খোঁজ") || lower.contains("খোজ")) {
+            return true
+        }
+
+        val tokens = lower.split(Regex("[\\s,?.!;:'\"()]+"))
+        for (token in tokens) {
+            if (token in EXPLICIT_SEARCH_TOKENS) return true
+            if (token.startsWith("search") || token.startsWith("googl") ||
+                token.startsWith("khoj") || token.startsWith("khuj")) {
+                return true
+            }
+        }
+
+        return false
     }
 }
 
@@ -380,14 +432,14 @@ class GeminiRestClient {
         val shouldSearch = enableGrounding ?: if (isChatCall) {
             MiraChatSearchHeuristic.isChatSearchWorthy(lastUserMessage)
         } else {
-            MiraChatSearchHeuristic.isTimeSensitive(lastUserMessage)
+            MiraChatSearchHeuristic.isSearchRequest(lastUserMessage)
         }
 
         var effectiveSysPrompt = systemPrompt
         val allSources = mutableListOf<GroundingSource>()
 
-        // 1. Research-first for build requests
-        if (isBuild && lastUserMessage.isNotBlank()) {
+        // 1. Research-first for build requests (gated on shouldSearch)
+        if (shouldSearch && isBuild && lastUserMessage.isNotBlank()) {
             val coreTopic = extractCoreTopic(lastUserMessage)
             val query1 = lastUserMessage
             val query2 = "$coreTopic modern website design 2026 best practices examples"
@@ -445,10 +497,21 @@ class GeminiRestClient {
         useServerProxy: Boolean = false,
         enableGrounding: Boolean? = null,
         enableThinking: Boolean = true,
-        isChatCall: Boolean = true
+        isChatCall: Boolean = true,
+        attachments: List<ChatAttachment> = emptyList()
     ): Result<GroundedChatResult> = withContext(Dispatchers.IO) {
         val key = normalizeApiKey(apiKey)
         val prepared = prepareChatInput(history, systemPrompt, isChatCall = isChatCall, enableGrounding = enableGrounding)
+
+        // Server-proxy mode handling for attachments:
+        // Respect server-proxy mode: if useServerProxy and attachments are present,
+        // prefer direct API if user key is available to avoid edge function payload size limits;
+        // otherwise send attachments through the edge function payload.
+        val effectiveUseServerProxy = if (useServerProxy && attachments.isNotEmpty() && key.isNotBlank()) {
+            false
+        } else {
+            useServerProxy
+        }
 
         // Build the ladder starting from the requested model, then fallbacks
         val ladder = buildList {
@@ -463,9 +526,10 @@ class GeminiRestClient {
                 history = prepared.effectiveHistory,
                 systemPrompt = prepared.effectiveSystemPrompt,
                 model = m,
-                useServerProxy = useServerProxy,
+                useServerProxy = effectiveUseServerProxy,
                 attachSearchTool = false,
-                enableThinking = enableThinking
+                enableThinking = enableThinking,
+                attachments = attachments
             )
 
             if (result.isSuccess) {
@@ -489,6 +553,7 @@ class GeminiRestClient {
         enableGrounding: Boolean? = null,
         enableThinking: Boolean = true,
         isChatCall: Boolean = true,
+        attachments: List<ChatAttachment> = emptyList(),
         onSourcesReceived: ((List<GroundingSource>) -> Unit)? = null
     ): Flow<String> = flow {
         val key = normalizeApiKey(apiKey)
@@ -496,6 +561,16 @@ class GeminiRestClient {
 
         if (prepared.sources.isNotEmpty()) {
             onSourcesReceived?.invoke(prepared.sources.take(4))
+        }
+
+        // Server-proxy mode handling for attachments:
+        // Respect server-proxy mode: if useServerProxy and attachments are present,
+        // prefer direct API if user key is available to avoid edge function payload size limits;
+        // otherwise send attachments through the edge function payload.
+        val effectiveUseServerProxy = if (useServerProxy && attachments.isNotEmpty() && key.isNotBlank()) {
+            false
+        } else {
+            useServerProxy
         }
 
         val ladder = buildList {
@@ -521,14 +596,70 @@ class GeminiRestClient {
                 }
 
                 val contents = JSONArray()
-                for (msg in prepared.effectiveHistory.takeLast(20)) {
+                val effectiveTurns = prepared.effectiveHistory.takeLast(20)
+                val lastUserIndex = effectiveTurns.indexOfLast { it.role == "user" }
+
+                for ((idx, msg) in effectiveTurns.withIndex()) {
                     val turn = JSONObject()
                     turn.put("role", if (msg.role == "user") "user" else "model")
                     val parts = JSONArray()
                     parts.put(JSONObject().put("text", msg.content))
+                    if (idx == lastUserIndex && attachments.isNotEmpty()) {
+                        for (att in attachments) {
+                            when {
+                                att.base64Data != null -> {
+                                    val inlineDataObj = JSONObject().apply {
+                                        put("mimeType", att.mimeType)
+                                        put("data", att.base64Data)
+                                    }
+                                    parts.put(JSONObject().put("inlineData", inlineDataObj))
+                                }
+                                att.fileUri != null -> {
+                                    val fileDataObj = JSONObject().apply {
+                                        put("mimeType", att.mimeType)
+                                        put("fileUri", att.fileUri)
+                                    }
+                                    parts.put(JSONObject().put("fileData", fileDataObj))
+                                }
+                                att.textContent != null -> {
+                                    val label = if (!att.fileName.isNullOrBlank()) "Attachment [${att.fileName}]:\n" else ""
+                                    parts.put(JSONObject().put("text", "$label${att.textContent}"))
+                                }
+                            }
+                        }
+                    }
                     turn.put("parts", parts)
                     contents.put(turn)
                 }
+
+                if (lastUserIndex == -1 && attachments.isNotEmpty()) {
+                    val turn = JSONObject()
+                    turn.put("role", "user")
+                    val parts = JSONArray()
+                    for (att in attachments) {
+                        when {
+                            att.base64Data != null -> {
+                                parts.put(JSONObject().put("inlineData", JSONObject().apply {
+                                    put("mimeType", att.mimeType)
+                                    put("data", att.base64Data)
+                                }))
+                            }
+                            att.fileUri != null -> {
+                                parts.put(JSONObject().put("fileData", JSONObject().apply {
+                                    put("mimeType", att.mimeType)
+                                    put("fileUri", att.fileUri)
+                                }))
+                            }
+                            att.textContent != null -> {
+                                val label = if (!att.fileName.isNullOrBlank()) "Attachment [${att.fileName}]:\n" else ""
+                                parts.put(JSONObject().put("text", "$label${att.textContent}"))
+                            }
+                        }
+                    }
+                    turn.put("parts", parts)
+                    contents.put(turn)
+                }
+
                 root.put("contents", contents)
 
                 if (enableThinking) {
@@ -539,7 +670,7 @@ class GeminiRestClient {
                     root.put("generationConfig", genConfig)
                 }
 
-                val request = if (useServerProxy) {
+                val request = if (effectiveUseServerProxy) {
                     root.put("action", "streamGenerateContent")
                     root.put("model", m)
                     Request.Builder()
@@ -643,7 +774,8 @@ class GeminiRestClient {
         model: String,
         useServerProxy: Boolean = false,
         attachSearchTool: Boolean = false,
-        enableThinking: Boolean = false
+        enableThinking: Boolean = false,
+        attachments: List<ChatAttachment> = emptyList()
     ): Result<GroundedChatResult> {
         return try {
             val root = JSONObject()
@@ -659,14 +791,70 @@ class GeminiRestClient {
 
             // Contents array
             val contents = JSONArray()
-            for (msg in history.takeLast(20)) {
+            val effectiveTurns = history.takeLast(20)
+            val lastUserIndex = effectiveTurns.indexOfLast { it.role == "user" }
+
+            for ((idx, msg) in effectiveTurns.withIndex()) {
                 val turn = JSONObject()
                 turn.put("role", if (msg.role == "user") "user" else "model")
                 val parts = JSONArray()
                 parts.put(JSONObject().put("text", msg.content))
+                if (idx == lastUserIndex && attachments.isNotEmpty()) {
+                    for (att in attachments) {
+                        when {
+                            att.base64Data != null -> {
+                                val inlineDataObj = JSONObject().apply {
+                                    put("mimeType", att.mimeType)
+                                    put("data", att.base64Data)
+                                }
+                                parts.put(JSONObject().put("inlineData", inlineDataObj))
+                            }
+                            att.fileUri != null -> {
+                                val fileDataObj = JSONObject().apply {
+                                    put("mimeType", att.mimeType)
+                                    put("fileUri", att.fileUri)
+                                }
+                                parts.put(JSONObject().put("fileData", fileDataObj))
+                            }
+                            att.textContent != null -> {
+                                val label = if (!att.fileName.isNullOrBlank()) "Attachment [${att.fileName}]:\n" else ""
+                                parts.put(JSONObject().put("text", "$label${att.textContent}"))
+                            }
+                        }
+                    }
+                }
                 turn.put("parts", parts)
                 contents.put(turn)
             }
+
+            if (lastUserIndex == -1 && attachments.isNotEmpty()) {
+                val turn = JSONObject()
+                turn.put("role", "user")
+                val parts = JSONArray()
+                for (att in attachments) {
+                    when {
+                        att.base64Data != null -> {
+                            parts.put(JSONObject().put("inlineData", JSONObject().apply {
+                                put("mimeType", att.mimeType)
+                                put("data", att.base64Data)
+                            }))
+                        }
+                        att.fileUri != null -> {
+                            parts.put(JSONObject().put("fileData", JSONObject().apply {
+                                put("mimeType", att.mimeType)
+                                put("fileUri", att.fileUri)
+                            }))
+                        }
+                        att.textContent != null -> {
+                            val label = if (!att.fileName.isNullOrBlank()) "Attachment [${att.fileName}]:\n" else ""
+                            parts.put(JSONObject().put("text", "$label${att.textContent}"))
+                        }
+                    }
+                }
+                turn.put("parts", parts)
+                contents.put(turn)
+            }
+
             root.put("contents", contents)
 
             if (attachSearchTool) {
@@ -682,7 +870,17 @@ class GeminiRestClient {
                 root.put("generationConfig", genConfig)
             }
 
-            val request = if (useServerProxy) {
+            // Server-proxy mode handling for attachments:
+            // Respect server-proxy mode: if useServerProxy and attachments are present,
+            // prefer direct API if user key is available to avoid edge function payload size limits;
+            // otherwise send attachments through the edge function payload.
+            val effectiveUseProxy = if (useServerProxy && attachments.isNotEmpty() && apiKey.isNotBlank()) {
+                false
+            } else {
+                useServerProxy
+            }
+
+            val request = if (effectiveUseProxy) {
                 root.put("action", "generateContent")
                 root.put("model", model)
                 Request.Builder()

@@ -7,7 +7,12 @@ import android.os.Build
 import io.github.ryoaonetsuki.mira.data.local.MiraDatabase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+
+object MiraAppScope {
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+}
 
 class MiraApplication : Application() {
 

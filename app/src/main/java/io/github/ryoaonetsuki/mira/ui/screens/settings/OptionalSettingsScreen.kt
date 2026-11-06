@@ -19,12 +19,14 @@ import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
 fun OptionalSettingsScreen(
     onBack: () -> Unit
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val palette = LocalMiraPalette.current
+    val securePrefs = remember { io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences(context) }
 
     var selectedImageProvider by remember { mutableStateOf("Pollinations (Free)") }
     var selectedSearchEngine by remember { mutableStateOf("DuckDuckGo (Free)") }
-    var mapsApiKey by remember { mutableStateOf("") }
-    var searchApiKey by remember { mutableStateOf("") }
+    var mapsApiKey by remember { mutableStateOf(securePrefs.getConnectorToken("maps") ?: "") }
+    var searchApiKey by remember { mutableStateOf(securePrefs.getConnectorToken("search_engine") ?: "") }
 
     Scaffold(
         topBar = {
@@ -57,7 +59,7 @@ fun OptionalSettingsScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        val providers = listOf("Pollinations (Free)", "Gemini BYOK")
+                        val providers = listOf("Pollinations (Free)", "Default Engine")
                         for (p in providers) {
                             FilterChip(
                                 selected = selectedImageProvider == p,
@@ -94,7 +96,10 @@ fun OptionalSettingsScreen(
                         Spacer(modifier = Modifier.height(10.dp))
                         OutlinedTextField(
                             value = searchApiKey,
-                            onValueChange = { searchApiKey = it },
+                            onValueChange = {
+                                searchApiKey = it
+                                securePrefs.setConnectorToken("search_engine", it)
+                            },
                             label = { Text("$selectedSearchEngine API Key") },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth()
@@ -111,7 +116,10 @@ fun OptionalSettingsScreen(
                 MiraCard(modifier = Modifier.fillMaxWidth()) {
                     OutlinedTextField(
                         value = mapsApiKey,
-                        onValueChange = { mapsApiKey = it },
+                        onValueChange = {
+                            mapsApiKey = it
+                            securePrefs.setConnectorToken("maps", it)
+                        },
                         label = { Text("Maps API Key (Optional)") },
                         placeholder = { Text("AIza...") },
                         singleLine = true,

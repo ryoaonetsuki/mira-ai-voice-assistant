@@ -41,7 +41,7 @@ class UserPreferences(private val context: Context) {
     }
 
     val languageFlow: Flow<String> = context.dataStore.data.catch { emitDefaults(it) }.map {
-        it[KEY_LANGUAGE] ?: "English"
+        it[KEY_LANGUAGE] ?: "Bangla (Bengali)"
     }
 
     val customInstructionsFlow: Flow<String> = context.dataStore.data.catch { emitDefaults(it) }.map {
@@ -116,6 +116,18 @@ class UserPreferences(private val context: Context) {
         it[KEY_AUTO_REPLY_TEMPLATE] ?: "Hi! I am away right now. Mira AI will notify me."
     }
 
+    val userHandleFlow: Flow<String> = context.dataStore.data.catch { emitDefaults(it) }.map {
+        it[KEY_USER_HANDLE] ?: "@mira_creator"
+    }
+
+    val captionVoiceFlow: Flow<String> = context.dataStore.data.catch { emitDefaults(it) }.map {
+        it[KEY_CAPTION_VOICE] ?: "Witty, bold and tech-savvy"
+    }
+
+    val dailyStoryFlow: Flow<Boolean> = context.dataStore.data.catch { emitDefaults(it) }.map {
+        it[KEY_DAILY_STORY] ?: true
+    }
+
     private suspend fun emitDefaults(throwable: Throwable) {
         if (throwable !is IOException) throw throwable
     }
@@ -146,6 +158,9 @@ class UserPreferences(private val context: Context) {
     suspend fun setFavoriteSong(song: String) = context.dataStore.edit { it[KEY_FAVORITE_SONG] = song }
     suspend fun setWhatsappAutoReply(enabled: Boolean) = context.dataStore.edit { it[KEY_WHATSAPP_AUTO_REPLY] = enabled }
     suspend fun setAutoReplyTemplate(template: String) = context.dataStore.edit { it[KEY_AUTO_REPLY_TEMPLATE] = template }
+    suspend fun setUserHandle(handle: String) = context.dataStore.edit { it[KEY_USER_HANDLE] = handle }
+    suspend fun setCaptionVoice(voice: String) = context.dataStore.edit { it[KEY_CAPTION_VOICE] = voice }
+    suspend fun setDailyStory(enabled: Boolean) = context.dataStore.edit { it[KEY_DAILY_STORY] = enabled }
 
     companion object {
         private val KEY_USER_NAME = stringPreferencesKey("user_name")
@@ -174,5 +189,8 @@ class UserPreferences(private val context: Context) {
         private val KEY_FAVORITE_SONG = stringPreferencesKey("favorite_song")
         private val KEY_WHATSAPP_AUTO_REPLY = booleanPreferencesKey("whatsapp_auto_reply")
         private val KEY_AUTO_REPLY_TEMPLATE = stringPreferencesKey("auto_reply_template")
+        private val KEY_USER_HANDLE = stringPreferencesKey("user_handle")
+        private val KEY_CAPTION_VOICE = stringPreferencesKey("caption_voice")
+        private val KEY_DAILY_STORY = booleanPreferencesKey("daily_story")
     }
 }

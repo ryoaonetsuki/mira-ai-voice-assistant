@@ -1,6 +1,8 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
-import io.github.ryoaonetsuki.mira.ui.icons.Lucide
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.PhotoLibrary
 import android.Manifest
 import android.content.ContentUris
 import android.content.pm.PackageManager
@@ -106,7 +108,7 @@ fun PhotosScreen(
                 title = { Text("Photos", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Lucide.arrowLeft, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -124,7 +126,7 @@ fun PhotosScreen(
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(
-                        imageVector = Lucide.images,
+                        imageVector = Icons.Rounded.PhotoLibrary,
                         contentDescription = null,
                         tint = palette.primary,
                         modifier = Modifier.size(56.dp)

@@ -9,6 +9,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
+import io.github.ryoaonetsuki.mira.ui.components.MiraSwitch
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -160,10 +161,9 @@ fun VoiceEngineScreen(
                             Text("Fast Listening", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
                             Text("Streams speech continuously with low audio latency", fontSize = 12.sp, color = palette.textSecondary)
                         }
-                        Switch(
+                        MiraSwitch(
                             checked = fastListening,
-                            onCheckedChange = { scope.launch { userPrefs.setFastListening(it) } },
-                            colors = SwitchDefaults.colors(checkedThumbColor = palette.primary)
+                            onCheckedChange = { scope.launch { userPrefs.setFastListening(it) } }
                         )
                     }
                 }
@@ -177,10 +177,9 @@ fun VoiceEngineScreen(
                             Text("Echo Guard", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
                             Text("Stops Mira replying to her own voice during loudspeaker playback", fontSize = 12.sp, color = palette.textSecondary)
                         }
-                        Switch(
+                        MiraSwitch(
                             checked = echoGuard,
-                            onCheckedChange = { scope.launch { userPrefs.setEchoGuard(it) } },
-                            colors = SwitchDefaults.colors(checkedThumbColor = palette.primary)
+                            onCheckedChange = { scope.launch { userPrefs.setEchoGuard(it) } }
                         )
                     }
                 }

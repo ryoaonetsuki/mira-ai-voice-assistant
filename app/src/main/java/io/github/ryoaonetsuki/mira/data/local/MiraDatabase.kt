@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import io.github.ryoaonetsuki.mira.data.local.dao.*
 import io.github.ryoaonetsuki.mira.data.local.entities.*
 
@@ -18,7 +20,7 @@ import io.github.ryoaonetsuki.mira.data.local.entities.*
         ScheduledPostEntity::class,
         SosContactEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class MiraDatabase : RoomDatabase() {
@@ -34,6 +36,12 @@ abstract class MiraDatabase : RoomDatabase() {
         @Volatile
         private var INSTANCE: MiraDatabase? = null
 
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE chat_messages ADD COLUMN sourcesJson TEXT DEFAULT NULL")
+            }
+        }
+
         fun getInstance(context: Context): MiraDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -41,6 +49,7 @@ abstract class MiraDatabase : RoomDatabase() {
                     MiraDatabase::class.java,
                     "mira_database"
                 )
+                    .addMigrations(MIGRATION_1_2)
                     .fallbackToDestructiveMigration()
                     .build()
                 INSTANCE = instance

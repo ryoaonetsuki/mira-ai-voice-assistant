@@ -1,6 +1,9 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
-import io.github.ryoaonetsuki.mira.ui.icons.Lucide
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -40,12 +43,12 @@ fun RulesScreen(
                 title = { Text("Mira Rules", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Lucide.arrowLeft, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 actions = {
                     IconButton(onClick = { showAddDialog = true }) {
-                        Icon(Lucide.plus, contentDescription = "Add Rule", tint = palette.primary)
+                        Icon(Icons.Rounded.Add, contentDescription = "Add Rule", tint = palette.primary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -116,7 +119,7 @@ fun RulesScreen(
                                     }
                                 ) {
                                     Icon(
-                                        imageVector = Lucide.trash,
+                                        imageVector = Icons.Rounded.DeleteOutline,
                                         contentDescription = "Delete",
                                         tint = palette.textSecondary
                                     )

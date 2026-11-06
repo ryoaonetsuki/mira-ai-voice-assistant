@@ -14,6 +14,8 @@ class GeminiLiveClient(
     private val voiceName: String,
     private val systemPrompt: String,
     private val initialModel: String = "models/gemini-3.8-live",
+    private val language: String = "Bangla (Bengali)",
+    private val ephemeralToken: String? = null,
     private val listener: LiveEventsListener
 ) {
     interface LiveEventsListener {
@@ -59,8 +61,8 @@ class GeminiLiveClient(
     private var setupTimeoutThread: Thread? = null
 
     fun startSession() {
-        if (apiKey.isBlank()) {
-            listener.onError("Missing Gemini API key. Please configure in Setup.")
+        if (ephemeralToken.isNullOrBlank() && apiKey.isBlank()) {
+            listener.onError("Missing API key. Please configure in Setup.")
             return
         }
         isRunning.set(true)
@@ -89,16 +91,20 @@ class GeminiLiveClient(
         attemptedIndices.add(idx)
 
         val model = modelFallbackLadder[idx]
-        // Send both ?key= param and x-goog-api-key header
-        val wsUrl = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=$apiKey"
+        val request = if (!ephemeralToken.isNullOrBlank()) {
+            val wsUrl = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained?access_token=$ephemeralToken"
+            Log.i(TAG, "Connecting to Gemini Live WS using ephemeral token, model: $model (index $idx)")
+            Request.Builder().url(wsUrl).build()
+        } else {
+            val wsUrl = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=$apiKey"
+            Log.i(TAG, "Connecting to Gemini Live WS using model: $model (index $idx)")
+            Request.Builder()
+                .url(wsUrl)
+                .header("x-goog-api-key", apiKey)
+                .build()
+        }
 
-        Log.i(TAG, "Connecting to Gemini Live WS using model: $model (index $idx)")
         listener.onConnecting(model)
-
-        val request = Request.Builder()
-            .url(wsUrl)
-            .header("x-goog-api-key", apiKey)
-            .build()
 
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
@@ -203,20 +209,21 @@ class GeminiLiveClient(
             val setupDetails = JSONObject()
             setupDetails.put("model", model)
 
-            // Response modalities at setup top level (AUDIO)
+            // Generation config with responseModalities inside it (ai.google.dev/api/live)
+            val genConfig = JSONObject()
             val modalities = JSONArray()
             modalities.put("AUDIO")
-            setupDetails.put("responseModalities", modalities)
+            genConfig.put("responseModalities", modalities)
 
-            // Generation config
-            val genConfig = JSONObject()
             val speechConfig = JSONObject()
             val voiceConfig = JSONObject()
             val prebuiltVoiceConfig = JSONObject()
             prebuiltVoiceConfig.put("voiceName", voiceName.ifBlank { "Aoede" })
             voiceConfig.put("prebuiltVoiceConfig", prebuiltVoiceConfig)
             speechConfig.put("voiceConfig", voiceConfig)
+            speechConfig.put("languageCode", mapLanguageToBcp47(language))
             genConfig.put("speechConfig", speechConfig)
+
             setupDetails.put("generationConfig", genConfig)
 
             // System instructions
@@ -291,6 +298,24 @@ class GeminiLiveClient(
                     listener.onInterrupted()
                 }
 
+                // Input audio transcription (user transcript from serverContent.inputTranscription)
+                if (serverContent.has("inputTranscription")) {
+                    val inputTx = serverContent.getJSONObject("inputTranscription")
+                    val text = inputTx.optString("text")
+                    if (text.isNotBlank()) {
+                        listener.onTranscript(text, true)
+                    }
+                }
+
+                // Output audio transcription (model transcript from serverContent.outputTranscription)
+                if (serverContent.has("outputTranscription")) {
+                    val outputTx = serverContent.getJSONObject("outputTranscription")
+                    val text = outputTx.optString("text")
+                    if (text.isNotBlank()) {
+                        listener.onTranscript(text, false)
+                    }
+                }
+
                 // Model turn (audio / text parts)
                 if (serverContent.has("modelTurn")) {
                     val modelTurn = serverContent.getJSONObject("modelTurn")
@@ -327,15 +352,7 @@ class GeminiLiveClient(
                 }
             }
 
-            // 3. User input transcription
-            if (json.has("realtimeInputTranscription")) {
-                val transcript = json.getJSONObject("realtimeInputTranscription").optString("text")
-                if (transcript.isNotBlank()) {
-                    listener.onTranscript(transcript, true)
-                }
-            }
-
-            // 4. GoAway warning
+            // 3. GoAway warning
             if (json.has("goAway")) {
                 Log.w(TAG, "Server sent GoAway frame: session time limit approaching")
             }
@@ -367,6 +384,33 @@ class GeminiLiveClient(
         }
     }
 
+    /**
+     * Sends a client text turn to Gemini Live using clientContent.
+     */
+    fun sendTextMessage(text: String) {
+        if (!isSetupComplete.get() || webSocket == null) return
+        try {
+            val root = JSONObject()
+            val clientContent = JSONObject()
+            val turns = JSONArray()
+            val turn = JSONObject()
+            turn.put("role", "user")
+            val parts = JSONArray()
+            val part = JSONObject()
+            part.put("text", text)
+            parts.put(part)
+            turn.put("parts", parts)
+            turns.put(turn)
+            clientContent.put("turns", turns)
+            clientContent.put("turnComplete", true)
+            root.put("clientContent", clientContent)
+
+            webSocket?.send(root.toString())
+        } catch (e: Exception) {
+            Log.e(TAG, "Error sending text message: ${e.message}")
+        }
+    }
+
     fun endSession() {
         isRunning.set(false)
         isSetupComplete.set(false)
@@ -381,5 +425,39 @@ class GeminiLiveClient(
 
     companion object {
         private const val TAG = "MiraLive"
+
+        fun mapLanguageToBcp47(lang: String): String {
+            val l = lang.lowercase()
+            return when {
+                l.contains("bangla") || l.contains("bengali") || l.contains("bn") -> "bn-IN"
+                l.contains("english") || l.contains("en") -> "en-US"
+                l.contains("hindi") || l.contains("hi") -> "hi-IN"
+                l.contains("urdu") || l.contains("ur") -> "ur-PK"
+                l.contains("arabic") || l.contains("ar") -> "ar-SA"
+                l.contains("spanish") || l.contains("es") -> "es-ES"
+                l.contains("french") || l.contains("fr") -> "fr-FR"
+                l.contains("german") || l.contains("de") -> "de-DE"
+                l.contains("japanese") || l.contains("ja") -> "ja-JP"
+                l.contains("korean") || l.contains("ko") -> "ko-KR"
+                l.contains("portuguese") || l.contains("pt") -> "pt-BR"
+                l.contains("russian") || l.contains("ru") -> "ru-RU"
+                l.contains("turkish") || l.contains("tr") -> "tr-TR"
+                l.contains("indonesian") || l.contains("id") -> "id-ID"
+                l.contains("vietnamese") || l.contains("vi") -> "vi-VN"
+                l.contains("thai") || l.contains("th") -> "th-TH"
+                l.contains("tamil") || l.contains("ta") -> "ta-IN"
+                l.contains("telugu") || l.contains("te") -> "te-IN"
+                l.contains("marathi") || l.contains("mr") -> "mr-IN"
+                l.contains("gujarati") || l.contains("gu") -> "gu-IN"
+                l.contains("punjabi") || l.contains("pa") -> "pa-IN"
+                l.contains("malayalam") || l.contains("ml") -> "ml-IN"
+                l.contains("kannada") || l.contains("kn") -> "kn-IN"
+                l.contains("italian") || l.contains("it") -> "it-IT"
+                l.contains("dutch") || l.contains("nl") -> "nl-NL"
+                l.contains("polish") || l.contains("pl") -> "pl-PL"
+                l.contains("swedish") || l.contains("sv") -> "sv-SE"
+                else -> "en-US"
+            }
+        }
     }
 }

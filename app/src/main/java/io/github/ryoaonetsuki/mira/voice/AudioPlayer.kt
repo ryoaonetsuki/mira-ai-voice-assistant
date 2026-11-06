@@ -65,6 +65,7 @@ class AudioPlayer(
                 return false
             }
 
+            // Pre-primed: play() called immediately upon initialization
             track.play()
             if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
                 Log.e(TAG, "AudioTrack.play() failed to enter PLAYSTATE_PLAYING (playState=${track.playState})")
@@ -90,55 +91,57 @@ class AudioPlayer(
         playbackThread = Thread({
             while (isPlaying.get()) {
                 try {
-                    // Grace period check: if currently speaking, wait up to 300ms for next chunk
-                    // before declaring utterance finished. If not speaking, block on take().
-                    val chunk = if (isSpeakingState) {
-                        audioQueue.poll(300, TimeUnit.MILLISECONDS)
-                    } else {
-                        audioQueue.take()
-                    }
+                    if (!isSpeakingState) {
+                        // Idle state: block until the first chunk of an utterance arrives
+                        val firstChunk = audioQueue.take()
+                        if (firstChunk.isEmpty()) continue
 
-                    if (chunk == null) {
-                        // Queue has stayed empty for 300ms grace period mid-utterance
-                        if (isSpeakingState) {
+                        // Start utterance pre-buffer collection:
+                        // Drain rule: wait until queued audio reaches >= 9,600 bytes OR 350 ms elapsed
+                        val firstArrivalMs = System.currentTimeMillis()
+                        val prebufferBatch = mutableListOf<ByteArray>()
+                        prebufferBatch.add(firstChunk)
+                        var totalPrebufferBytes = firstChunk.size
+
+                        while (totalPrebufferBytes < PREBUFFER_MAX_BYTES) {
+                            val elapsed = System.currentTimeMillis() - firstArrivalMs
+                            val remainingMs = PREBUFFER_TIMEOUT_MS - elapsed
+                            if (remainingMs <= 0) break
+
+                            val nextChunk = audioQueue.poll(remainingMs, TimeUnit.MILLISECONDS)
+                            if (nextChunk != null && nextChunk.isNotEmpty()) {
+                                prebufferBatch.add(nextChunk)
+                                totalPrebufferBytes += nextChunk.size
+                            } else {
+                                // Timeout elapsed
+                                break
+                            }
+                        }
+
+                        val prebufferMs = System.currentTimeMillis() - firstArrivalMs
+                        Log.i(TAG, "t5 playback-start prebuffer_ms=$prebufferMs queued_bytes=$totalPrebufferBytes")
+
+                        isSpeakingState = true
+                        onSpeakingStateChanged(true)
+
+                        // Write initial pre-buffered chunks
+                        for (chunk in prebufferBatch) {
+                            if (!isPlaying.get() || !isSpeakingState) break
+                            writeChunkToTrack(chunk)
+                        }
+                    } else {
+                        // Speaking state: poll with 300ms grace period mid-utterance
+                        val chunk = audioQueue.poll(300, TimeUnit.MILLISECONDS)
+                        if (chunk == null) {
+                            // Queue has stayed empty for 300ms grace period -> utterance complete
                             isSpeakingState = false
                             onSpeakingStateChanged(false)
                             Log.d(TAG, "Speaking grace period expired (300ms queue empty) — switched speaking state to false")
-                        }
-                        continue
-                    }
-
-                    if (chunk.isNotEmpty()) {
-                        if (!isSpeakingState) {
-                            isSpeakingState = true
-                            onSpeakingStateChanged(true)
+                            continue
                         }
 
-                        val track = audioTrack
-                        if (track != null && track.state == AudioTrack.STATE_INITIALIZED) {
-                            val written = track.write(chunk, 0, chunk.size)
-                            totalAudioChunksWritten++
-                            if (written >= 0) {
-                                totalAudioBytesWritten += written
-                                lastPlaybackDiag = "chunks=$totalAudioChunksWritten, bytes=$totalAudioBytesWritten"
-                                if (written < chunk.size) {
-                                    Log.w(TAG, "AudioTrack.write partial write: $written/${chunk.size} bytes (chunk #$totalAudioChunksWritten)")
-                                } else if (totalAudioChunksWritten == 1L || totalAudioChunksWritten % 50L == 0L) {
-                                    Log.d(TAG, "AudioTrack wrote chunk #$totalAudioChunksWritten: $written bytes (total: $totalAudioBytesWritten bytes)")
-                                }
-                            } else {
-                                val errMeaning = when (written) {
-                                    AudioTrack.ERROR_INVALID_OPERATION -> "ERROR_INVALID_OPERATION"
-                                    AudioTrack.ERROR_BAD_VALUE -> "ERROR_BAD_VALUE"
-                                    AudioTrack.ERROR_DEAD_OBJECT -> "ERROR_DEAD_OBJECT"
-                                    AudioTrack.ERROR -> "ERROR"
-                                    else -> "UNKNOWN ($written)"
-                                }
-                                lastPlaybackDiag = "chunks=$totalAudioChunksWritten, bytes=$totalAudioBytesWritten, writeError=$errMeaning"
-                                Log.e(TAG, "AudioTrack.write failed: code $written ($errMeaning) for chunk of ${chunk.size} bytes (chunk #$totalAudioChunksWritten)")
-                            }
-                        } else {
-                            Log.e(TAG, "Cannot write audio: AudioTrack is null or not initialized")
+                        if (chunk.isNotEmpty()) {
+                            writeChunkToTrack(chunk)
                         }
                     }
                 } catch (e: InterruptedException) {
@@ -153,6 +156,35 @@ class AudioPlayer(
             }
         }, "MiraAudioPlaybackThread")
         playbackThread?.start()
+    }
+
+    private fun writeChunkToTrack(chunk: ByteArray) {
+        val track = audioTrack
+        if (track != null && track.state == AudioTrack.STATE_INITIALIZED) {
+            val written = track.write(chunk, 0, chunk.size)
+            totalAudioChunksWritten++
+            if (written >= 0) {
+                totalAudioBytesWritten += written
+                lastPlaybackDiag = "chunks=$totalAudioChunksWritten, bytes=$totalAudioBytesWritten"
+                if (written < chunk.size) {
+                    Log.w(TAG, "AudioTrack.write partial write: $written/${chunk.size} bytes (chunk #$totalAudioChunksWritten)")
+                } else if (totalAudioChunksWritten == 1L || totalAudioChunksWritten % 50L == 0L) {
+                    Log.d(TAG, "AudioTrack wrote chunk #$totalAudioChunksWritten: $written bytes (total: $totalAudioBytesWritten bytes)")
+                }
+            } else {
+                val errMeaning = when (written) {
+                    AudioTrack.ERROR_INVALID_OPERATION -> "ERROR_INVALID_OPERATION"
+                    AudioTrack.ERROR_BAD_VALUE -> "ERROR_BAD_VALUE"
+                    AudioTrack.ERROR_DEAD_OBJECT -> "ERROR_DEAD_OBJECT"
+                    AudioTrack.ERROR -> "ERROR"
+                    else -> "UNKNOWN ($written)"
+                }
+                lastPlaybackDiag = "chunks=$totalAudioChunksWritten, bytes=$totalAudioBytesWritten, writeError=$errMeaning"
+                Log.e(TAG, "AudioTrack.write failed: code $written ($errMeaning) for chunk of ${chunk.size} bytes (chunk #$totalAudioChunksWritten)")
+            }
+        } else {
+            Log.e(TAG, "Cannot write audio: AudioTrack is null or not initialized")
+        }
     }
 
     fun playAudioChunk(pcmData: ByteArray) {
@@ -221,5 +253,7 @@ class AudioPlayer(
     companion object {
         private const val TAG = "MiraAudioPlayer"
         const val SAMPLE_RATE = 24000
+        const val PREBUFFER_MAX_BYTES = 9600
+        const val PREBUFFER_TIMEOUT_MS = 350L
     }
 }

@@ -1,6 +1,8 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
-import io.github.ryoaonetsuki.mira.ui.icons.Lucide
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Search
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.background
@@ -86,7 +88,7 @@ fun WebSearchScreen(
                 title = { Text("Web Search", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Lucide.arrowLeft, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -128,7 +130,7 @@ fun WebSearchScreen(
                         .size(48.dp)
                         .background(palette.primary, RoundedCornerShape(14.dp))
                 ) {
-                    Icon(Lucide.search, contentDescription = "Search", tint = androidx.compose.ui.graphics.Color.Black)
+                    Icon(Icons.Rounded.Search, contentDescription = "Search", tint = androidx.compose.ui.graphics.Color.Black)
                 }
             }
 

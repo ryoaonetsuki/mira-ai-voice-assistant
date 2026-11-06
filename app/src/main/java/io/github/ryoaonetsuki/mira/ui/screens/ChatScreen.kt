@@ -1,6 +1,23 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
-import io.github.ryoaonetsuki.mira.ui.icons.Lucide
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.AddComment
+import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.ArrowOutward
+import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.ChatBubble
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Code
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.Description
+import androidx.compose.material.icons.rounded.FolderOpen
+import androidx.compose.material.icons.rounded.Language
+import androidx.compose.material.icons.rounded.OpenInNew
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Send
 import android.widget.Toast
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Image
@@ -315,7 +332,7 @@ fun ChatScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
-                            imageVector = Lucide.arrowLeft,
+                            imageVector = Icons.Rounded.ArrowBack,
                             contentDescription = "Back",
                             tint = palette.textPrimary
                         )
@@ -336,7 +353,7 @@ fun ChatScreen(
                         }
                     }) {
                         Icon(
-                            imageVector = Lucide.messageSquarePlus,
+                            imageVector = Icons.Rounded.AddComment,
                             contentDescription = "New Chat",
                             tint = palette.textPrimary
                         )
@@ -345,7 +362,7 @@ fun ChatScreen(
                     // Clear history
                     IconButton(onClick = { showClearConfirm = true }) {
                         Icon(
-                            imageVector = Lucide.trash,
+                            imageVector = Icons.Rounded.DeleteOutline,
                             contentDescription = "Clear History",
                             tint = palette.textSecondary
                         )
@@ -374,7 +391,7 @@ fun ChatScreen(
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Icon(
-                            imageVector = Lucide.messageSquare,
+                            imageVector = Icons.Rounded.ChatBubble,
                             contentDescription = null,
                             tint = palette.surfaceVariant,
                             modifier = Modifier.size(54.dp)
@@ -519,7 +536,7 @@ fun ChatScreen(
                                             modifier = Modifier.padding(start = 2.dp, top = 2.dp, bottom = 4.dp)
                                         ) {
                                             Icon(
-                                                imageVector = Lucide.search,
+                                                imageVector = Icons.Rounded.Search,
                                                 contentDescription = "Search",
                                                 tint = palette.textSecondary,
                                                 modifier = Modifier.size(13.dp)
@@ -552,7 +569,7 @@ fun ChatScreen(
                                                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                                     ) {
                                                         Icon(
-                                                            imageVector = Lucide.globe,
+                                                            imageVector = Icons.Rounded.Language,
                                                             contentDescription = null,
                                                             tint = palette.primary,
                                                             modifier = Modifier.size(12.dp)
@@ -695,7 +712,7 @@ fun ChatScreen(
                             },
                             leadingIcon = {
                                 Icon(
-                                    imageVector = Lucide.search,
+                                    imageVector = Icons.Rounded.Search,
                                     contentDescription = null,
                                     modifier = Modifier.size(15.dp)
                                 )
@@ -722,7 +739,7 @@ fun ChatScreen(
                             },
                             leadingIcon = {
                                 Icon(
-                                    imageVector = Lucide.sparkles,
+                                    imageVector = Icons.Rounded.AutoAwesome,
                                     contentDescription = null,
                                     modifier = Modifier.size(15.dp)
                                 )
@@ -755,7 +772,7 @@ fun ChatScreen(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Icon(
-                                    imageVector = Lucide.fileText,
+                                    imageVector = Icons.Rounded.Description,
                                     contentDescription = null,
                                     tint = palette.primary,
                                     modifier = Modifier.size(18.dp)
@@ -774,7 +791,7 @@ fun ChatScreen(
                                     modifier = Modifier.size(24.dp)
                                 ) {
                                     Icon(
-                                        imageVector = Lucide.x,
+                                        imageVector = Icons.Rounded.Close,
                                         contentDescription = "Remove attachment",
                                         tint = palette.textSecondary,
                                         modifier = Modifier.size(16.dp)
@@ -801,7 +818,7 @@ fun ChatScreen(
                             modifier = Modifier.size(38.dp)
                         ) {
                             Icon(
-                                imageVector = Lucide.plus,
+                                imageVector = Icons.Rounded.Add,
                                 contentDescription = "Add attachment",
                                 tint = palette.primary,
                                 modifier = Modifier.size(22.dp)
@@ -1154,7 +1171,7 @@ fun ChatScreen(
                                 .background(palette.primary)
                         ) {
                             Icon(
-                                imageVector = Lucide.send,
+                                imageVector = Icons.Rounded.Send,
                                 contentDescription = "Send",
                                 tint = Color.Black,
                                 modifier = Modifier.size(20.dp)
@@ -1254,7 +1271,7 @@ fun CodeViewerDialog(
                             .background(palette.primary.copy(alpha = 0.2f))
                     ) {
                         Icon(
-                            imageVector = Lucide.code,
+                            imageVector = Icons.Rounded.Code,
                             contentDescription = null,
                             tint = palette.primary,
                             modifier = Modifier.size(20.dp)
@@ -1276,7 +1293,7 @@ fun CodeViewerDialog(
                     }
                     IconButton(onClick = onDismiss) {
                         Icon(
-                            imageVector = Lucide.x,
+                            imageVector = Icons.Rounded.Close,
                             contentDescription = "Close",
                             tint = palette.textSecondary
                         )
@@ -1297,7 +1314,7 @@ fun CodeViewerDialog(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Icon(
-                                imageVector = Lucide.folderOpen,
+                                imageVector = Icons.Rounded.FolderOpen,
                                 contentDescription = null,
                                 tint = palette.primary,
                                 modifier = Modifier.size(16.dp)
@@ -1376,7 +1393,7 @@ fun CodeViewerDialog(
                             modifier = Modifier.height(28.dp)
                         ) {
                             Icon(
-                                imageVector = if (codeCopied) Lucide.check else Lucide.copy,
+                                imageVector = if (codeCopied) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
                                 contentDescription = null,
                                 tint = Color.Black,
                                 modifier = Modifier.size(14.dp)
@@ -1644,9 +1661,9 @@ fun MiraLinkItem(
             ) {
                 Icon(
                     imageVector = when {
-                        isWebsite -> Lucide.globe
-                        isCode -> Lucide.code
-                        else -> Lucide.externalLink
+                        isWebsite -> Icons.Rounded.Language
+                        isCode -> Icons.Rounded.Code
+                        else -> Icons.Rounded.OpenInNew
                     },
                     contentDescription = null,
                     tint = palette.primary,
@@ -1672,7 +1689,7 @@ fun MiraLinkItem(
                 )
             }
             Icon(
-                imageVector = Lucide.arrowUpRight,
+                imageVector = Icons.Rounded.ArrowOutward,
                 contentDescription = null,
                 tint = palette.primary,
                 modifier = Modifier.size(18.dp)

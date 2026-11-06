@@ -1,5 +1,6 @@
 package io.github.ryoaonetsuki.mira.ui.screens.settings
 
+import io.github.ryoaonetsuki.mira.ui.icons.Lucide
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -8,10 +9,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.Download
-import androidx.compose.material.icons.rounded.Upload
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -137,7 +134,7 @@ fun BackupSettingsScreen(
                 title = { Text("Backup & Restore", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(Lucide.arrowLeft, contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -174,7 +171,7 @@ fun BackupSettingsScreen(
                         colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Icon(Icons.Rounded.Download, contentDescription = null, tint = Color.Black)
+                        Icon(Lucide.download, contentDescription = null, tint = Color.Black)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Export to File (JSON)", color = Color.Black)
                     }
@@ -198,7 +195,7 @@ fun BackupSettingsScreen(
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Icon(Icons.Rounded.Upload, contentDescription = null)
+                        Icon(Lucide.upload, contentDescription = null)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Choose Backup File")
                     }

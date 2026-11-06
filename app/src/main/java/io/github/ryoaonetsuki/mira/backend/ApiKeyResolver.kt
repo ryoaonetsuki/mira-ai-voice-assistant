@@ -1,0 +1,110 @@
+package io.github.ryoaonetsuki.mira.backend
+
+import android.content.Context
+import android.util.Log
+import io.github.ryoaonetsuki.mira.BuildConfig
+import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
+import java.util.concurrent.TimeUnit
+
+sealed class KeySource {
+    data class UserKey(val key: String) : KeySource()
+    object ServerKey : KeySource()
+    object NoKey : KeySource()
+}
+
+class ApiKeyResolver(private val context: Context) {
+    private val securePrefs = SecurePreferences(context)
+
+    private val httpClient = OkHttpClient.Builder()
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(5, TimeUnit.SECONDS)
+        .build()
+
+    val edgeFunctionUrl: String
+        get() {
+            val base = try { BuildConfig.SUPABASE_URL } catch (_: Throwable) { "https://zvnfwlqxdbommtozugzt.supabase.co" }
+            return "$base/functions/v1/mira-gemini"
+        }
+
+    val anonKey: String
+        get() = try { BuildConfig.SUPABASE_ANON_KEY } catch (_: Throwable) { "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp2bmZ3bHF4ZGJvbW10b3p1Z3p0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM5MTM2NDksImV4cCI6MjEwOTQ4OTY0OX0.uqyERmXVe2GEP2oaU0xc7I9V1ry-43adAEg6jddYBpk" }
+
+    suspend fun resolveKey(): KeySource = withContext(Dispatchers.IO) {
+        // 1. User's own key in settings (BYOK override)
+        val userKey = securePrefs.getGeminiApiKey()
+        if (!userKey.isNullOrBlank()) {
+            return@withContext KeySource.UserKey(userKey)
+        }
+
+        // 2. Check if server key is configured in Supabase Edge Function
+        if (isServerKeyConfigured()) {
+            return@withContext KeySource.ServerKey
+        }
+
+        // 3. Neither available
+        KeySource.NoKey
+    }
+
+    suspend fun isServerKeyConfigured(): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val req = Request.Builder()
+                .url("$edgeFunctionUrl?action=health")
+                .addHeader("apikey", anonKey)
+                .addHeader("Authorization", "Bearer $anonKey")
+                .get()
+                .build()
+
+            httpClient.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext false
+                val body = resp.body?.string() ?: return@withContext false
+                val json = JSONObject(body)
+                json.optBoolean("configured", false)
+            }
+        } catch (e: Exception) {
+            Log.d(TAG, "Server key probe failed: ${e.message}")
+            false
+        }
+    }
+
+    suspend fun mintLiveToken(): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val payload = JSONObject().apply {
+                put("action", "mintLiveToken")
+            }
+            val req = Request.Builder()
+                .url(edgeFunctionUrl)
+                .addHeader("apikey", anonKey)
+                .addHeader("Authorization", "Bearer $anonKey")
+                .post(payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
+                .build()
+
+            httpClient.newCall(req).execute().use { resp ->
+                val body = resp.body?.string() ?: ""
+                if (!resp.isSuccessful) {
+                    return@withContext Result.failure(Exception("HTTP ${resp.code}: $body"))
+                }
+                val json = JSONObject(body)
+                val token = json.optString("token")
+                if (token.isNotBlank()) {
+                    Result.success(token)
+                } else {
+                    Result.failure(Exception("Edge function returned empty token: $body"))
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "mintLiveToken failed: ${e.message}", e)
+            Result.failure(e)
+        }
+    }
+
+    companion object {
+        private const val TAG = "ApiKeyResolver"
+    }
+}

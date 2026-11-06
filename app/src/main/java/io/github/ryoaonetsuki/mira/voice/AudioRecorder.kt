@@ -27,7 +27,7 @@ class AudioRecorder(
         val bufferSize = maxOf(minBufferSize, CHUNK_SIZE_BYTES * 2)
 
         try {
-            audioRecord = AudioRecord(
+            val record = AudioRecord(
                 MediaRecorder.AudioSource.MIC,
                 sampleRate,
                 channelConfig,
@@ -35,12 +35,23 @@ class AudioRecorder(
                 bufferSize
             )
 
-            if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
-                Log.e(TAG, "AudioRecord initialization failed")
+            if (record.state != AudioRecord.STATE_INITIALIZED) {
+                Log.e(TAG, "AudioRecord initialization failed (state != STATE_INITIALIZED)")
+                try { record.release() } catch (_: Exception) {}
+                audioRecord = null
                 return false
             }
 
-            audioRecord?.startRecording()
+            record.startRecording()
+            if (record.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+                Log.e(TAG, "AudioRecord failed to enter RECORDING state")
+                try { record.stop() } catch (_: Exception) {}
+                try { record.release() } catch (_: Exception) {}
+                audioRecord = null
+                return false
+            }
+
+            audioRecord = record
             isRecording.set(true)
 
             recordingThread = Thread({
@@ -83,14 +94,30 @@ class AudioRecorder(
         try {
             recordingThread?.interrupt()
             recordingThread = null
-            audioRecord?.stop()
-            audioRecord?.release()
-            audioRecord = null
-            onAmplitude(0f)
-            Log.d(TAG, "Audio recording stopped")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error stopping AudioRecord: ${e.message}", e)
+        } catch (_: Exception) {}
+
+        val record = audioRecord
+        audioRecord = null
+
+        if (record != null) {
+            try {
+                if (record.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                    record.stop()
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Error stopping AudioRecord: ${e.message}")
+            } finally {
+                try {
+                    record.release()
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error releasing AudioRecord: ${e.message}")
+                }
+            }
         }
+        try {
+            onAmplitude(0f)
+        } catch (_: Exception) {}
+        Log.d(TAG, "Audio recording stopped")
     }
 
     companion object {

@@ -25,6 +25,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
 import io.github.ryoaonetsuki.mira.data.preferences.UserPreferences
 import io.github.ryoaonetsuki.mira.network.WeatherClient
 import io.github.ryoaonetsuki.mira.network.WeatherData
@@ -46,6 +47,8 @@ fun HomeScreen(
     val context = LocalContext.current
     val palette = LocalMiraPalette.current
     val userPrefs = remember { UserPreferences(context) }
+    val securePrefs = remember { SecurePreferences(context) }
+    val cachedConfig = remember { securePrefs.getCachedRemoteConfig() }
     val weatherClient = remember { WeatherClient() }
 
     val liveState by MicService.liveState.collectAsState()
@@ -53,6 +56,7 @@ fun HomeScreen(
     val userName by userPrefs.userNameFlow.collectAsState(initial = "Alex")
     val orbStyle by userPrefs.orbStyleFlow.collectAsState(initial = "Mira Neon")
     val errorMessage by MicService.errorMessage.collectAsState()
+    val userTranscript by MicService.userTranscript.collectAsState()
 
     var weatherData by remember { mutableStateOf(WeatherData("24°C", "60%", "Clear")) }
 
@@ -95,6 +99,7 @@ fun HomeScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(palette.background)
+            .statusBarsPadding()
     ) {
         // Scrollable main content
         Column(
@@ -105,6 +110,25 @@ fun HomeScreen(
                 .padding(horizontal = 18.dp, vertical = 8.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            // In-app remote banner
+            if (!cachedConfig?.bannerText.isNullOrBlank()) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = palette.surfaceVariant.copy(alpha = 0.8f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 10.dp)
+                ) {
+                    Text(
+                        text = cachedConfig?.bannerText ?: "",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = palette.primary,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                    )
+                }
+            }
+
             // Greeting & Status line
             Column(
                 modifier = Modifier
@@ -152,6 +176,16 @@ fun HomeScreen(
                         fontSize = 13.sp,
                         color = palette.textSecondary
                     )
+                    if (userTranscript.isNotBlank() && liveState != LiveState.IDLE && liveState != LiveState.ERROR) {
+                        Spacer(modifier = Modifier.height(3.dp))
+                        Text(
+                            text = "Heard: $userTranscript",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = palette.primary,
+                            maxLines = 2
+                        )
+                    }
                 }
             }
 

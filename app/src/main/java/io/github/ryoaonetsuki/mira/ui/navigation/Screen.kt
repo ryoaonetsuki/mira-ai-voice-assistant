@@ -2,7 +2,9 @@ package io.github.ryoaonetsuki.mira.ui.navigation
 
 sealed class Screen(val route: String) {
     object Splash : Screen("splash")
-    object Setup : Screen("setup")
+    object Setup : Screen("setup?startStep={startStep}") {
+        fun createRoute(startStep: Int = 1) = "setup?startStep=$startStep"
+    }
     object Home : Screen("home")
     object Chat : Screen("chat")
     object Scan : Screen("scan")

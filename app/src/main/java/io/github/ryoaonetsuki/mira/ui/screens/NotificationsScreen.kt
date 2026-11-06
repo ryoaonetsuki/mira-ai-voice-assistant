@@ -1,12 +1,11 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
+import io.github.ryoaonetsuki.mira.ui.icons.Lucide
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -46,13 +45,13 @@ fun NotificationsScreen(
                 title = { Text("Notifications", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(Lucide.arrowLeft, contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 actions = {
                     if (notifications.isNotEmpty()) {
                         IconButton(onClick = { scope.launch { db.notificationDao().clearAllNotifications() } }) {
-                            Icon(Icons.Rounded.DeleteSweep, contentDescription = "Clear All", tint = palette.textSecondary)
+                            Icon(Lucide.broom, contentDescription = "Clear All", tint = palette.textSecondary)
                         }
                     }
                 },
@@ -74,7 +73,7 @@ fun NotificationsScreen(
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Icon(
-                            imageVector = Icons.Rounded.NotificationsNone,
+                            imageVector = Lucide.bell,
                             contentDescription = null,
                             tint = palette.surfaceVariant,
                             modifier = Modifier.size(54.dp)
@@ -90,10 +89,10 @@ fun NotificationsScreen(
                 ) {
                     items(notifications) { notif ->
                         val icon = when (notif.type) {
-                            "voice" -> Icons.Rounded.Mic
-                            "security" -> Icons.Rounded.Security
-                            "update" -> Icons.Rounded.SystemUpdate
-                            else -> Icons.Rounded.Info
+                            "voice" -> Lucide.mic
+                            "security" -> Lucide.shieldCheck
+                            "update" -> Lucide.arrowDownToLine
+                            else -> Lucide.info
                         }
 
                         val timeStr = remember(notif.timestamp) {

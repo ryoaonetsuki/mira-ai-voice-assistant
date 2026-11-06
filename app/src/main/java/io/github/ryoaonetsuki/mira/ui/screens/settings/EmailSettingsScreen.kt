@@ -105,7 +105,7 @@ fun EmailSettingsScreen(
 
             item {
                 Spacer(modifier = Modifier.height(4.dp))
-                Text("Compose Email via Gemini", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.primary)
+                Text("Compose Email", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.primary)
             }
 
             item {
@@ -139,12 +139,15 @@ fun EmailSettingsScreen(
                         text = "AI Draft Email",
                         isLoading = isComposing,
                         onClick = {
+                            val resolver = io.github.ryoaonetsuki.mira.backend.ApiKeyResolver(context)
                             val apiKey = securePrefs.getGeminiApiKey() ?: ""
                             if (draftPromptInput.isNotBlank()) {
                                 isComposing = true
                                 scope.launch {
+                                    val keySource = resolver.resolveKey()
+                                    val useServer = keySource is io.github.ryoaonetsuki.mira.backend.KeySource.ServerKey
                                     val prompt = "Draft a professional, clear, concise email. Subject: '$emailSubjectInput'. Instructions: '$draftPromptInput'. Output only the email body text."
-                                    val res = restClient.generateMarketingContent(apiKey, prompt)
+                                    val res = restClient.generateMarketingContent(apiKey, prompt, useServerProxy = useServer)
                                     isComposing = false
                                     if (res.isSuccess) {
                                         composedBody = res.getOrThrow()

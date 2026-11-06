@@ -143,10 +143,10 @@ fun HomeScreen(
                 )
                 Spacer(modifier = Modifier.height(4.dp))
 
-                // Error message display — shows real error when in ERROR state
-                if (liveState == LiveState.ERROR && errorMessage != null) {
+                // Error message display — shows real error and Retry button whenever in ERROR state
+                if (liveState == LiveState.ERROR) {
                     Text(
-                        text = errorMessage ?: "Voice session error",
+                        text = errorMessage ?: "Voice session error — check key",
                         fontSize = 13.sp,
                         color = Color(0xFFEF4444)
                     )

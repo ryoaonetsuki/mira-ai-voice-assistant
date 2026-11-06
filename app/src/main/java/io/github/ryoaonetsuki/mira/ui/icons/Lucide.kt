@@ -25,8 +25,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(15.0f, 4.0f)
                 arcTo(1.0f, 1.0f, 0.0f, isMoreThanHalf = false, isPositiveArc = true, 17.0f, 4.0f)
@@ -58,8 +58,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(4.0f, 13.0f)
                 arcTo(8.0f, 8.0f, 0.0f, isMoreThanHalf = false, isPositiveArc = true, 20.0f, 13.0f)
@@ -91,8 +91,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(12.0f, 17.0f)
                 verticalLineTo(3.0f)
@@ -116,8 +116,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(12.0f, 19.0f)
                 lineToRelative(-7.0f, -7.0f)
@@ -139,8 +139,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(5.0f, 12.0f)
                 horizontalLineToRelative(14.0f)
@@ -162,8 +162,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(7.0f, 7.0f)
                 horizontalLineToRelative(10.0f)
@@ -185,8 +185,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(2.0f, 10.0f)
                 verticalLineToRelative(3.0f)
@@ -215,8 +215,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(11.0f, 7.0f)
                 lineToRelative(-3.0f, 5.0f)
@@ -251,8 +251,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(10.268f, 21.0f)
                 arcToRelative(2.0f, 2.0f, 0.0f, isMoreThanHalf = false, isPositiveArc = false, 3.464f, 0.0f)
@@ -278,8 +278,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(4.0f, 19.5f)
                 verticalLineToRelative(-15.0f)
@@ -306,8 +306,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(13.5f, 10.5f)
                 lineTo(22.0f, 2.0f)
@@ -339,8 +339,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(11.0f, 10.0f)
                 lineToRelative(3.0f, 3.0f)
@@ -368,8 +368,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(8.0f, 2.0f)
                 verticalLineToRelative(3.0f)
@@ -402,8 +402,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(13.997f, 4.0f)
                 arcToRelative(2.0f, 2.0f, 0.0f, isMoreThanHalf = false, isPositiveArc = true, 1.76f, 1.05f)
@@ -441,8 +441,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(20.0f, 6.0f)
                 lineTo(9.0f, 17.0f)
@@ -462,8 +462,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(15.0f, 18.0f)
                 lineToRelative(-6.0f, -6.0f)
@@ -483,8 +483,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(9.0f, 18.0f)
                 lineToRelative(6.0f, -6.0f)
@@ -504,8 +504,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(2.0f, 12.0f)
                 arcTo(10.0f, 10.0f, 0.0f, isMoreThanHalf = false, isPositiveArc = true, 22.0f, 12.0f)
@@ -529,8 +529,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(9.0f, 9.003f)
                 arcToRelative(1.0f, 1.0f, 0.0f, isMoreThanHalf = false, isPositiveArc = true, 1.517f, -0.859f)
@@ -558,8 +558,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(17.5f, 19.0f)
                 horizontalLineTo(9.0f)
@@ -582,8 +582,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(12.0f, 13.0f)
                 verticalLineToRelative(8.0f)
@@ -609,8 +609,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(16.0f, 18.0f)
                 lineToRelative(6.0f, -6.0f)
@@ -633,8 +633,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(10.0f, 2.0f)
                 verticalLineToRelative(2.0f)
@@ -668,8 +668,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(10.0f, 8.0f)
                 lineTo(20.0f, 8.0f)
@@ -702,8 +702,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(12.0f, 15.0f)
                 verticalLineTo(3.0f)
@@ -731,8 +731,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(17.596f, 12.768f)
                 arcToRelative(2.0f, 2.0f, 0.0f, isMoreThanHalf = true, isPositiveArc = false, 2.829f, -2.829f)
@@ -773,8 +773,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(19.0f, 6.0f)
                 lineToRelative(-5.2f, -3.9f)
@@ -799,8 +799,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(15.0f, 3.0f)
                 horizontalLineToRelative(6.0f)
@@ -830,8 +830,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(2.062f, 12.348f)
                 arcToRelative(1.0f, 1.0f, 0.0f, isMoreThanHalf = false, isPositiveArc = true, 0.0f, -0.696f)
@@ -857,8 +857,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(10.733f, 5.076f)
                 arcToRelative(10.744f, 10.744f, 0.0f, isMoreThanHalf = false, isPositiveArc = true, 11.205f, 6.575f)
@@ -887,8 +887,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(15.0f, 10.0f)
                 verticalLineTo(9.0f)
@@ -915,8 +915,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(6.0f, 22.0f)
                 arcToRelative(2.0f, 2.0f, 0.0f, isMoreThanHalf = false, isPositiveArc = true, -2.0f, -2.0f)
@@ -954,8 +954,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(6.0f, 22.0f)
                 arcToRelative(2.0f, 2.0f, 0.0f, isMoreThanHalf = false, isPositiveArc = true, -2.0f, -2.0f)
@@ -993,8 +993,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(9.0f, 12.0f)
                 arcTo(3.0f, 3.0f, 0.0f, isMoreThanHalf = false, isPositiveArc = true, 15.0f, 12.0f)
@@ -1031,8 +1031,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(20.0f, 20.0f)
                 arcToRelative(2.0f, 2.0f, 0.0f, isMoreThanHalf = false, isPositiveArc = false, 2.0f, -2.0f)
@@ -1062,8 +1062,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(6.0f, 14.0f)
                 lineToRelative(1.5f, -2.9f)
@@ -1098,8 +1098,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(2.0f, 12.0f)
                 arcTo(10.0f, 10.0f, 0.0f, isMoreThanHalf = false, isPositiveArc = true, 22.0f, 12.0f)
@@ -1125,8 +1125,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(21.42f, 10.922f)
                 arcToRelative(1.0f, 1.0f, 0.0f, isMoreThanHalf = false, isPositiveArc = false, -0.019f, -1.838f)
@@ -1158,8 +1158,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(3.0f, 14.0f)
                 horizontalLineToRelative(3.0f)
@@ -1192,8 +1192,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(2.0f, 9.5f)
                 arcToRelative(5.5f, 5.5f, 0.0f, isMoreThanHalf = false, isPositiveArc = true, 9.591f, -3.676f)
@@ -1219,8 +1219,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(15.0f, 21.0f)
                 verticalLineToRelative(-8.0f)
@@ -1254,8 +1254,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(5.0f, 3.0f)
                 lineTo(19.0f, 3.0f)
@@ -1290,8 +1290,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(22.0f, 11.0f)
                 lineToRelative(-1.296f, -1.296f)
@@ -1332,8 +1332,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(2.0f, 12.0f)
                 arcTo(10.0f, 10.0f, 0.0f, isMoreThanHalf = false, isPositiveArc = true, 22.0f, 12.0f)
@@ -1358,8 +1358,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(2.0f, 21.0f)
                 lineToRelative(9.6f, -9.6f)
@@ -1388,8 +1388,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(18.0f, 5.0f)
                 arcToRelative(2.0f, 2.0f, 0.0f, isMoreThanHalf = false, isPositiveArc = true, 2.0f, 2.0f)
@@ -1421,8 +1421,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(12.83f, 2.18f)
                 arcToRelative(2.0f, 2.0f, 0.0f, isMoreThanHalf = false, isPositiveArc = false, -1.66f, 0.0f)
@@ -1460,8 +1460,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(4.0f, 3.0f)
                 lineTo(9.0f, 3.0f)
@@ -1518,8 +1518,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(10.0f, 13.0f)
                 arcToRelative(5.0f, 5.0f, 0.0f, isMoreThanHalf = false, isPositiveArc = false, 7.54f, 0.54f)
@@ -1546,8 +1546,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(5.0f, 11.0f)
                 lineTo(19.0f, 11.0f)
@@ -1578,8 +1578,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(22.0f, 7.0f)
                 lineToRelative(-8.991f, 5.727f)
@@ -1610,8 +1610,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(14.106f, 5.553f)
                 arcToRelative(2.0f, 2.0f, 0.0f, isMoreThanHalf = false, isPositiveArc = false, 1.788f, 0.0f)
@@ -1649,8 +1649,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(11.0f, 6.0f)
                 arcToRelative(13.0f, 13.0f, 0.0f, isMoreThanHalf = false, isPositiveArc = false, 8.4f, -2.8f)
@@ -1684,8 +1684,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(4.0f, 5.0f)
                 horizontalLineToRelative(16.0f)
@@ -1708,8 +1708,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(2.992f, 16.342f)
                 arcToRelative(2.0f, 2.0f, 0.0f, isMoreThanHalf = false, isPositiveArc = true, 0.094f, 1.167f)
@@ -1733,8 +1733,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(22.0f, 17.0f)
                 arcToRelative(2.0f, 2.0f, 0.0f, isMoreThanHalf = false, isPositiveArc = true, -2.0f, 2.0f)
@@ -1762,8 +1762,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(12.7f, 3.0f)
                 horizontalLineTo(4.0f)
@@ -1794,8 +1794,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(22.0f, 17.0f)
                 arcToRelative(2.0f, 2.0f, 0.0f, isMoreThanHalf = false, isPositiveArc = true, -2.0f, 2.0f)
@@ -1827,8 +1827,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(22.0f, 17.0f)
                 arcToRelative(2.0f, 2.0f, 0.0f, isMoreThanHalf = false, isPositiveArc = true, -2.0f, 2.0f)
@@ -1862,8 +1862,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(12.0f, 19.0f)
                 verticalLineToRelative(3.0f)
@@ -1896,8 +1896,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(18.0f, 5.0f)
                 horizontalLineToRelative(4.0f)
@@ -1923,8 +1923,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(15.0f, 18.0f)
                 horizontalLineToRelative(-5.0f)
@@ -1967,8 +1967,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(5.8f, 11.3f)
                 lineTo(2.0f, 22.0f)
@@ -2019,8 +2019,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(13.0f, 21.0f)
                 horizontalLineToRelative(8.0f)
@@ -2048,8 +2048,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(13.0f, 2.0f)
                 arcToRelative(9.0f, 9.0f, 0.0f, isMoreThanHalf = false, isPositiveArc = true, 9.0f, 9.0f)
@@ -2087,8 +2087,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(5.0f, 5.0f)
                 arcToRelative(2.0f, 2.0f, 0.0f, isMoreThanHalf = false, isPositiveArc = true, 3.008f, -1.728f)
@@ -2112,8 +2112,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(5.0f, 12.0f)
                 horizontalLineToRelative(14.0f)
@@ -2134,8 +2134,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(15.39f, 4.39f)
                 arcToRelative(1.0f, 1.0f, 0.0f, isMoreThanHalf = false, isPositiveArc = false, 1.68f, -0.474f)
@@ -2177,8 +2177,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(3.0f, 12.0f)
                 arcToRelative(9.0f, 9.0f, 0.0f, isMoreThanHalf = false, isPositiveArc = true, 9.0f, -9.0f)
@@ -2209,8 +2209,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(15.2f, 3.0f)
                 arcToRelative(2.0f, 2.0f, 0.0f, isMoreThanHalf = false, isPositiveArc = true, 1.4f, 0.6f)
@@ -2248,8 +2248,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(12.0f, 3.0f)
                 verticalLineToRelative(18.0f)
@@ -2285,8 +2285,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(17.0f, 12.0f)
                 verticalLineToRelative(4.0f)
@@ -2337,8 +2337,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(21.0f, 21.0f)
                 lineToRelative(-4.34f, -4.34f)
@@ -2361,8 +2361,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(14.536f, 21.686f)
                 arcToRelative(0.5f, 0.5f, 0.0f, isMoreThanHalf = false, isPositiveArc = false, 0.937f, -0.024f)
@@ -2390,8 +2390,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(9.671f, 4.136f)
                 arcToRelative(2.34f, 2.34f, 0.0f, isMoreThanHalf = false, isPositiveArc = true, 4.659f, 0.0f)
@@ -2425,8 +2425,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(15.0f, 5.0f)
                 arcTo(3.0f, 3.0f, 0.0f, isMoreThanHalf = false, isPositiveArc = true, 21.0f, 5.0f)
@@ -2459,8 +2459,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(20.0f, 13.0f)
                 curveToRelative(0.0f, 5.0f, -3.5f, 7.5f, -7.66f, 8.95f)
@@ -2491,8 +2491,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(10.0f, 5.0f)
                 horizontalLineTo(3.0f)
@@ -2527,8 +2527,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(7.0f, 2.0f)
                 lineTo(17.0f, 2.0f)
@@ -2557,8 +2557,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(11.017f, 2.814f)
                 arcToRelative(1.0f, 1.0f, 0.0f, isMoreThanHalf = false, isPositiveArc = true, 1.966f, 0.0f)
@@ -2600,8 +2600,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(8.8f, 20.0f)
                 verticalLineToRelative(-4.1f)
@@ -2631,8 +2631,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(5.0f, 3.0f)
                 lineTo(19.0f, 3.0f)
@@ -2659,8 +2659,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(8.0f, 12.0f)
                 arcTo(4.0f, 4.0f, 0.0f, isMoreThanHalf = false, isPositiveArc = true, 16.0f, 12.0f)
@@ -2697,8 +2697,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(10.0f, 11.0f)
                 verticalLineToRelative(6.0f)
@@ -2733,8 +2733,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(16.0f, 7.0f)
                 horizontalLineToRelative(6.0f)
@@ -2758,8 +2758,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(3.0f, 7.0f)
                 verticalLineToRelative(6.0f)
@@ -2783,8 +2783,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(12.0f, 3.0f)
                 verticalLineToRelative(12.0f)
@@ -2812,8 +2812,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(19.0f, 21.0f)
                 verticalLineToRelative(-2.0f)
@@ -2840,8 +2840,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(16.0f, 11.0f)
                 lineToRelative(2.0f, 2.0f)
@@ -2871,8 +2871,8 @@ object Lucide {
             path(
                 stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
-                strokeCap = StrokeCap.Round,
-                strokeJoin = StrokeJoin.Round
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
             ) {
                 moveTo(18.0f, 6.0f)
                 lineTo(6.0f, 18.0f)

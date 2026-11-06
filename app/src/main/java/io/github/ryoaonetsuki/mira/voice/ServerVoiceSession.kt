@@ -339,7 +339,7 @@ class ServerVoiceSession(
         audioRecorder = null
         try {
             webSocket?.close(1000, "Session ended")
-        } catch (_) {}
+        } catch (_: Exception) {}
         webSocket = null
     }
 
@@ -352,7 +352,7 @@ class ServerVoiceSession(
         try {
             val stopMsg = JSONObject().apply { put("type", "stop") }
             webSocket?.send(stopMsg.toString())
-        } catch (_) {}
+        } catch (_: Exception) {}
 
         stopInternal()
         scope.cancel()

@@ -1,6 +1,9 @@
 package io.github.ryoaonetsuki.mira.ui.screens.settings
 
-import io.github.ryoaonetsuki.mira.ui.icons.Lucide
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Close
 import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
@@ -98,7 +101,7 @@ fun AdvancedSettingsScreen(
                 title = { Text("Advanced & Security", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Lucide.arrowLeft, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -339,7 +342,7 @@ fun AdvancedSettingsScreen(
                             Text("Quick contacts notified during emergencies", fontSize = 12.sp, color = palette.textSecondary)
                         }
                         IconButton(onClick = { showSosDialog = true }) {
-                            Icon(Lucide.plus, contentDescription = "Add SOS", tint = palette.primary)
+                            Icon(Icons.Rounded.Add, contentDescription = "Add SOS", tint = palette.primary)
                         }
                     }
 
@@ -352,7 +355,7 @@ fun AdvancedSettingsScreen(
                         ) {
                             Text("${c.name} (${c.phone})", fontSize = 13.sp, color = palette.textPrimary, modifier = Modifier.weight(1f))
                             IconButton(onClick = { scope.launch { db.sosContactDao().deleteContact(c) } }) {
-                                Icon(Lucide.x, contentDescription = "Delete", tint = palette.textSecondary, modifier = Modifier.size(16.dp))
+                                Icon(Icons.Rounded.Close, contentDescription = "Delete", tint = palette.textSecondary, modifier = Modifier.size(16.dp))
                             }
                         }
                     }

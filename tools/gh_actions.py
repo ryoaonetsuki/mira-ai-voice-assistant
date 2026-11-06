@@ -54,11 +54,23 @@ def download(run_id=None):
     if not art:
         print("No app-debug artifact on this run")
         return 1
-    # Download artifact zip (302 redirect to blob storage; urllib follows it)
+    # Download artifact zip (302 redirect to blob storage; fetch the redirect
+    # target WITHOUT the GitHub auth header, which blob storage rejects).
+    class _NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return None
+    _opener = urllib.request.build_opener(_NoRedirect)
     headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
     req = urllib.request.Request(BASE + f"/repos/{REPO}/actions/artifacts/{art['id']}/zip", headers=headers, method="GET")
     add_surrogate_to_request(req, CREDENTIAL, allowed_hosts=["api.github.com"])
-    with urllib.request.urlopen(req, timeout=300) as resp:
+    try:
+        _opener.open(req, timeout=120)
+        raise RuntimeError("Artifact download did not redirect as expected")
+    except urllib.error.HTTPError as exc:
+        loc = exc.headers.get("Location")
+        if not loc:
+            raise
+    with urllib.request.urlopen(loc, timeout=300) as resp:
         blob = resp.read()
     print(f"Downloaded {len(blob)} bytes")
     z = zipfile.ZipFile(io.BytesIO(blob))

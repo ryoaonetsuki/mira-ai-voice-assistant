@@ -59,6 +59,9 @@ fun VoiceEngineScreen(
 
     var groqKeyInput by remember { mutableStateOf(securePrefs.getGroqApiKey() ?: "") }
     var isGroqKeyVisible by remember { mutableStateOf(false) }
+    var deepgramKeyInput by remember { mutableStateOf(securePrefs.getDeepgramApiKey() ?: "") }
+    var isDeepgramKeyVisible by remember { mutableStateOf(false) }
+    var isDeepgramSaved by remember { mutableStateOf(securePrefs.getDeepgramApiKey() != null) }
     var showVoicePickerDialog by remember { mutableStateOf(false) }
     var showGuardianDialog by remember { mutableStateOf(false) }
     var voiceprintLabel by remember { mutableStateOf(securePrefs.getEnrolledFaceName() ?: "Owner (Alex)") }
@@ -294,6 +297,95 @@ fun VoiceEngineScreen(
                         shape = RoundedCornerShape(14.dp),
                         modifier = Modifier.fillMaxWidth()
                     )
+                }
+            }
+
+            // Deepgram Voice (Optional)
+            item {
+                MiraCard(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "Deepgram Voice (Optional)",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = palette.textPrimary,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (isDeepgramSaved) Color(0xFF10B981).copy(alpha = 0.2f) else palette.surfaceVariant)
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Text(
+                                text = if (isDeepgramSaved) "Saved" else "Not Saved",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isDeepgramSaved) Color(0xFF10B981) else palette.textSecondary
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Free $200 credit at console.deepgram.com — optional key addable for speech-to-text",
+                        fontSize = 12.sp,
+                        color = palette.textSecondary
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = deepgramKeyInput,
+                        onValueChange = { deepgramKeyInput = it },
+                        placeholder = { Text("Deepgram API Key (optional)") },
+                        visualTransformation = if (isDeepgramKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { isDeepgramKeyVisible = !isDeepgramKeyVisible }) {
+                                Icon(
+                                    imageVector = if (isDeepgramKeyVisible) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+                                    contentDescription = "Toggle Visibility",
+                                    tint = palette.textSecondary
+                                )
+                            }
+                        },
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                securePrefs.clearDeepgramApiKey()
+                                deepgramKeyInput = ""
+                                isDeepgramSaved = false
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            enabled = isDeepgramSaved || deepgramKeyInput.isNotBlank(),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Clear")
+                        }
+                        MiraButton(
+                            text = "Save Key",
+                            onClick = {
+                                val trimmed = deepgramKeyInput.trim()
+                                if (trimmed.isNotBlank()) {
+                                    securePrefs.setDeepgramApiKey(trimmed)
+                                    isDeepgramSaved = true
+                                } else {
+                                    securePrefs.clearDeepgramApiKey()
+                                    isDeepgramSaved = false
+                                }
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
                 }
             }
 

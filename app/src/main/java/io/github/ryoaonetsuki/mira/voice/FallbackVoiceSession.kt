@@ -22,13 +22,17 @@ class FallbackVoiceSession(
     private val onFinalText: (String) -> Unit,
     private val onPartialText: (String) -> Unit,
     private val onListeningChanged: (Boolean) -> Unit,
-    private val onError: (String) -> Unit
+    private val onError: (String) -> Unit,
+    private val onAmplitude: (Float) -> Unit = {},
+    private val onSpeechStart: () -> Unit = {}
 ) {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var recognizer: SpeechRecognizer? = null
     private val isActive = AtomicBoolean(false)
     private val isPaused = AtomicBoolean(false)
     private var recreatedAfterBusy = false
+    private var lastErrorCode: Int? = null
+    private var consecutiveErrorCount: Int = 0
 
     private val restartRunnable = Runnable {
         if (isActive.get() && !isPaused.get()) {
@@ -52,6 +56,8 @@ class FallbackVoiceSession(
             isActive.set(true)
             isPaused.set(false)
             recreatedAfterBusy = false
+            lastErrorCode = null
+            consecutiveErrorCount = 0
             initRecognizer()
             startListeningInternal()
         }
@@ -98,6 +104,7 @@ class FallbackVoiceSession(
                 recognizer?.stopListening()
             } catch (_: Exception) {}
             onListeningChanged(false)
+            onAmplitude(0f)
         }
     }
 
@@ -113,9 +120,12 @@ class FallbackVoiceSession(
         mainHandler.post {
             isActive.set(false)
             isPaused.set(false)
+            lastErrorCode = null
+            consecutiveErrorCount = 0
             mainHandler.removeCallbacks(restartRunnable)
             destroyRecognizer()
             onListeningChanged(false)
+            onAmplitude(0f)
             Log.i(TAG, "FallbackVoiceSession stopped and released")
         }
     }
@@ -144,21 +154,29 @@ class FallbackVoiceSession(
             override fun onReadyForSpeech(params: Bundle?) {
                 Log.d(TAG, "SpeechRecognizer onReadyForSpeech")
                 recreatedAfterBusy = false
+                lastErrorCode = null
+                consecutiveErrorCount = 0
                 onListeningChanged(true)
             }
 
             override fun onBeginningOfSpeech() {
                 Log.d(TAG, "SpeechRecognizer onBeginningOfSpeech")
                 recreatedAfterBusy = false
+                onSpeechStart()
             }
 
-            override fun onRmsChanged(rmsdB: Float) {}
+            override fun onRmsChanged(rmsdB: Float) {
+                // rmsdB range is roughly -2..10; clamp to 0..1
+                val normalized = ((rmsdB - (-2f)) / (10f - (-2f))).coerceIn(0f, 1f)
+                onAmplitude(normalized)
+            }
 
             override fun onBufferReceived(buffer: ByteArray?) {}
 
             override fun onEndOfSpeech() {
                 Log.d(TAG, "SpeechRecognizer onEndOfSpeech")
                 onListeningChanged(false)
+                onAmplitude(0f)
                 // If no results arrive within 300ms, auto re-listen
                 if (isActive.get() && !isPaused.get()) {
                     scheduleRestart(300L)
@@ -181,6 +199,14 @@ class FallbackVoiceSession(
                 Log.w(TAG, "SpeechRecognizer onError: $errorName ($error)")
 
                 onListeningChanged(false)
+                onAmplitude(0f)
+
+                if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
+                    isActive.set(false)
+                    destroyRecognizer()
+                    onError("Microphone permission required for voice recognition")
+                    return
+                }
 
                 if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY && !recreatedAfterBusy) {
                     recreatedAfterBusy = true
@@ -191,18 +217,32 @@ class FallbackVoiceSession(
                     return
                 }
 
-                if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
-                    onError("Microphone permission required for voice recognition")
+                // Count consecutive SpeechRecognizer errors of the same kind
+                if (lastErrorCode == error) {
+                    consecutiveErrorCount++
+                } else {
+                    lastErrorCode = error
+                    consecutiveErrorCount = 1
+                }
+
+                if (consecutiveErrorCount >= 3) {
+                    Log.e(TAG, "SpeechRecognizer hit 3 consecutive errors of $errorName — stopping restart loop")
+                    isActive.set(false)
+                    destroyRecognizer()
+                    onError("Speech recognition stopped: $errorName repeated 3 times")
                     return
                 }
 
-                // Auto re-listen loop after error NO_MATCH or speech timeout
+                // Auto re-listen loop after error NO_MATCH or speech timeout if under 3 consecutive errors
                 if (isActive.get() && !isPaused.get()) {
                     scheduleRestart(300L)
                 }
             }
 
             override fun onResults(results: Bundle?) {
+                lastErrorCode = null
+                consecutiveErrorCount = 0
+                onAmplitude(0f)
                 val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 val text = matches?.firstOrNull()?.trim()
                 if (!text.isNullOrBlank()) {

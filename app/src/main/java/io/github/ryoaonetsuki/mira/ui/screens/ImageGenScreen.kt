@@ -1,6 +1,9 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
-import io.github.ryoaonetsuki.mira.ui.icons.Lucide
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Image
 import android.content.ContentValues
 import android.graphics.Bitmap
 import android.graphics.drawable.BitmapDrawable
@@ -100,7 +103,7 @@ fun ImageGenScreen(
                 title = { Text("Image Generation", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Lucide.arrowLeft, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -159,7 +162,7 @@ fun ImageGenScreen(
                 if (currentImageUrl == null) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Icon(
-                            imageVector = Lucide.image,
+                            imageVector = Icons.Rounded.Image,
                             contentDescription = null,
                             tint = palette.surfaceVariant,
                             modifier = Modifier.size(54.dp)
@@ -186,7 +189,7 @@ fun ImageGenScreen(
                     colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Icon(Lucide.download, contentDescription = null, tint = androidx.compose.ui.graphics.Color.Black)
+                    Icon(Icons.Rounded.Download, contentDescription = null, tint = androidx.compose.ui.graphics.Color.Black)
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(if (isSaving) "Saving..." else "Save to Gallery", color = androidx.compose.ui.graphics.Color.Black)
                 }

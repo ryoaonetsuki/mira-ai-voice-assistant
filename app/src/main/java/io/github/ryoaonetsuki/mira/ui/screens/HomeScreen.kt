@@ -277,42 +277,43 @@ fun HomeScreen(
                 )
             }
 
-            Spacer(modifier = Modifier.height(28.dp))
+            Spacer(modifier = Modifier.height(16.dp))
+        }
 
-            // Quick action chips row — directly above the bottom nav bar
-            LazyRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(quickChips) { chip ->
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(palette.surface)
-                            .clickable {
-                                onNavigate(Screen.Chat.route)
-                            }
-                            .padding(horizontal = 12.dp, vertical = 8.dp)
-                    ) {
-                        Icon(
-                            imageVector = chip.icon,
-                            contentDescription = chip.label,
-                            tint = palette.primary,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = chip.label,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = palette.textPrimary
-                        )
-                    }
+        // Fixed chips row footer pinned directly above HomeBottomNavBar (never floats mid-screen)
+        LazyRow(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 18.dp)
+                .padding(top = 8.dp, bottom = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            items(quickChips) { chip ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(palette.surface)
+                        .clickable {
+                            onNavigate(Screen.Chat.route)
+                        }
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    Icon(
+                        imageVector = chip.icon,
+                        contentDescription = chip.label,
+                        tint = palette.primary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = chip.label,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = palette.textPrimary
+                    )
                 }
             }
-
-            Spacer(modifier = Modifier.height(12.dp))
         }
 
         // Bottom Navigation Bar (Home | Scan | BIG centre Voice | Extensions | Chat)

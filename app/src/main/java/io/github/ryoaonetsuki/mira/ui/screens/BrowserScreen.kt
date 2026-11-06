@@ -1,5 +1,6 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
+import io.github.ryoaonetsuki.mira.ui.icons.Lucide
 import android.graphics.Bitmap
 import android.webkit.WebChromeClient
 import android.webkit.WebView
@@ -7,8 +8,6 @@ import android.webkit.WebViewClient
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -52,7 +51,7 @@ fun BrowserScreen(
                         .padding(horizontal = 8.dp, vertical = 6.dp)
                 ) {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(Lucide.arrowLeft, contentDescription = "Back", tint = palette.textPrimary)
                     }
 
                     // Address bar
@@ -70,7 +69,7 @@ fun BrowserScreen(
                                 }
                                 webViewInstance?.loadUrl(url)
                             }) {
-                                Icon(Icons.Rounded.ArrowForward, contentDescription = "Go", tint = palette.primary)
+                                Icon(Lucide.arrowRight, contentDescription = "Go", tint = palette.primary)
                             }
                         },
                         colors = OutlinedTextFieldDefaults.colors(
@@ -97,7 +96,7 @@ fun BrowserScreen(
                         webViewInstance?.reload()
                     }) {
                         Icon(
-                            imageVector = if (isDesktopMode) Icons.Rounded.Laptop else Icons.Rounded.PhoneAndroid,
+                            imageVector = if (isDesktopMode) Lucide.laptop else Lucide.smartphone,
                             contentDescription = "Desktop Toggle",
                             tint = if (isDesktopMode) palette.primary else palette.textSecondary
                         )
@@ -105,7 +104,7 @@ fun BrowserScreen(
 
                     // Reload
                     IconButton(onClick = { webViewInstance?.reload() }) {
-                        Icon(Icons.Rounded.Refresh, contentDescription = "Reload", tint = palette.textPrimary)
+                        Icon(Lucide.refreshCw, contentDescription = "Reload", tint = palette.textPrimary)
                     }
                 }
 
@@ -132,13 +131,13 @@ fun BrowserScreen(
                     enabled = canGoBack,
                     onClick = { webViewInstance?.goBack() }
                 ) {
-                    Icon(Icons.Rounded.ArrowBackIosNew, contentDescription = "Back", tint = if (canGoBack) palette.textPrimary else palette.textSecondary.copy(alpha = 0.4f))
+                    Icon(Lucide.chevronLeft, contentDescription = "Back", tint = if (canGoBack) palette.textPrimary else palette.textSecondary.copy(alpha = 0.4f))
                 }
                 IconButton(
                     enabled = canGoForward,
                     onClick = { webViewInstance?.goForward() }
                 ) {
-                    Icon(Icons.Rounded.ArrowForwardIos, contentDescription = "Forward", tint = if (canGoForward) palette.textPrimary else palette.textSecondary.copy(alpha = 0.4f))
+                    Icon(Lucide.chevronRight, contentDescription = "Forward", tint = if (canGoForward) palette.textPrimary else palette.textSecondary.copy(alpha = 0.4f))
                 }
                 Box(
                     contentAlignment = Alignment.Center,
@@ -152,7 +151,7 @@ fun BrowserScreen(
                 IconButton(onClick = {
                     webViewInstance?.loadUrl("https://duckduckgo.com")
                 }) {
-                    Icon(Icons.Rounded.Home, contentDescription = "Home", tint = palette.textPrimary)
+                    Icon(Lucide.house, contentDescription = "Home", tint = palette.textPrimary)
                 }
             }
         },

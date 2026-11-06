@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
 import io.github.ryoaonetsuki.mira.network.GeminiRestClient
+import io.github.ryoaonetsuki.mira.network.normalizeApiKey
 import io.github.ryoaonetsuki.mira.ui.components.MiraButton
 import io.github.ryoaonetsuki.mira.ui.components.MiraCard
 import io.github.ryoaonetsuki.mira.ui.navigation.Screen
@@ -156,7 +157,7 @@ fun SetupScreen(
                     keyValidationMessage = null
                 },
                 label = { Text("Gemini API Key") },
-                placeholder = { Text("AIzaSy... or AQ...") },
+                placeholder = { Text("Paste your Gemini key — new keys start with AQ.") },
                 visualTransformation = if (isKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
                 trailingIcon = {
                     IconButton(onClick = { isKeyVisible = !isKeyVisible }) {
@@ -178,6 +179,15 @@ fun SetupScreen(
                     unfocusedContainerColor = palette.surface
                 ),
                 modifier = Modifier.fillMaxWidth()
+            )
+
+            // Hint line under the field
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "New keys from Google AI Studio start with AQ. — that is correct, paste the whole key.",
+                fontSize = 12.sp,
+                color = palette.textSecondary,
+                lineHeight = 17.sp
             )
 
             if (keyValidationMessage != null) {
@@ -212,23 +222,26 @@ fun SetupScreen(
                 MiraButton(
                     text = "Test & Save",
                     onClick = {
-                        if (apiKeyInput.isBlank()) {
+                        val normalized = normalizeApiKey(apiKeyInput)
+                        if (normalized.isBlank()) {
                             keyValidationMessage = "Please enter an API key"
                             return@MiraButton
                         }
                         isCheckingKey = true
                         keyValidationMessage = "Validating key with Google..."
                         scope.launch {
-                            val result = restClient.validateApiKey(apiKeyInput.trim())
+                            val result = restClient.validateApiKeyAndChat(normalized)
                             isCheckingKey = false
                             if (result.isSuccess) {
                                 isKeyValid = true
                                 keyValidationMessage = "Valid API Key! Stored encrypted on device."
-                                securePrefs.setGeminiApiKey(apiKeyInput.trim())
+                                securePrefs.setGeminiApiKey(normalized)
                                 currentStep = 2
                             } else {
                                 isKeyValid = false
-                                keyValidationMessage = "Key refused: ${result.exceptionOrNull()?.message}"
+                                // Show exact validation error
+                                keyValidationMessage = result.exceptionOrNull()?.message
+                                    ?: "Key validation failed"
                             }
                         }
                     },

@@ -23,6 +23,7 @@ import io.github.ryoaonetsuki.mira.ui.components.MiraButton
 import io.github.ryoaonetsuki.mira.ui.components.MiraCard
 import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 private enum class PersonalKeyValidationState {
     IDLE,
@@ -204,9 +205,13 @@ fun PersonalSettingsScreen(
                                 }
                                 isTestingKey = true
                                 validationState = PersonalKeyValidationState.CHECKING
-                                testResultMsg = "Validating key with Google... (retrying if Google is busy)"
+                                testResultMsg = "Validating key with Google..."
                                 scope.launch {
-                                    val outcome = restClient.validateApiKeyAndChat(normalized)
+                                    // ROUND 6 safety net: same 25s cap as Setup — a plausible
+                                    // key is saved on timeout instead of spinning forever.
+                                    val outcome = withTimeoutOrNull(25_000L) {
+                                        restClient.validateApiKeyAndChat(normalized)
+                                    } ?: KeyValidationOutcome.TransientServerBusy()
                                     isTestingKey = false
                                     when (outcome) {
                                         is KeyValidationOutcome.Valid -> {

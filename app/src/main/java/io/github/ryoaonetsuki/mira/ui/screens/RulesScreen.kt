@@ -9,6 +9,7 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material3.*
+import io.github.ryoaonetsuki.mira.ui.components.MiraSwitch
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -101,14 +102,13 @@ fun RulesScreen(
                                     )
                                 }
 
-                                Switch(
+                                MiraSwitch(
                                     checked = item.isEnabled,
                                     onCheckedChange = { checked ->
                                         scope.launch {
                                             db.ruleDao().updateRule(item.copy(isEnabled = checked))
                                         }
-                                    },
-                                    colors = SwitchDefaults.colors(checkedThumbColor = palette.primary)
+                                    }
                                 )
 
                                 Spacer(modifier = Modifier.width(6.dp))

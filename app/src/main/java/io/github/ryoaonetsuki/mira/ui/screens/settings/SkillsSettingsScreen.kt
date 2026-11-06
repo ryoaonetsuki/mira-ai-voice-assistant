@@ -15,6 +15,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.ryoaonetsuki.mira.ui.components.MiraCard
+import io.github.ryoaonetsuki.mira.ui.components.MiraSwitch
 import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
 
 data class MiraSkill(
@@ -98,15 +99,14 @@ fun SkillsSettingsScreen(
                                     color = palette.textSecondary
                                 )
                             }
-                            Switch(
+                            MiraSwitch(
                                 checked = skill.isEnabled,
                                 onCheckedChange = { checked ->
                                     val idx = skills.indexOfFirst { it.id == skill.id }
                                     if (idx != -1) {
                                         skills[idx] = skills[idx].copy(isEnabled = checked)
                                     }
-                                },
-                                colors = SwitchDefaults.colors(checkedThumbColor = palette.primary)
+                                }
                             )
                         }
                     }

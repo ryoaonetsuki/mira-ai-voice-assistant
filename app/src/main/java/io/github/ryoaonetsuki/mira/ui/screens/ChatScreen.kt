@@ -841,6 +841,9 @@ fun ChatScreen(
                                         var sysPrompt = ""
                                         var allMsgs: List<ChatMessageEntity> = emptyList()
                                         var currentAttachments: List<ChatAttachment> = emptyList()
+                                        var webSearchOn = true
+                                        var deepThinkingOn = false
+                                        var shouldGround = if (webSearchOn) MiraChatSearchHeuristic.isChatSearchWorthy(text) else false
                                         try {
                                             val keySource = resolver.resolveKey()
                                             if (keySource is KeySource.NoKey) {
@@ -905,8 +908,8 @@ fun ChatScreen(
                                                 }
                                             }
 
-                                            val webSearchOn = userPrefs.webSearchEnabledFlow.first()
-                                            val deepThinkingOn = userPrefs.deepThinkingEnabledFlow.first()
+                                            webSearchOn = userPrefs.webSearchEnabledFlow.first()
+                                            deepThinkingOn = userPrefs.deepThinkingEnabledFlow.first()
 
                                             val personaName = userPrefs.personaFlow.first()
                                             val secretMode = userPrefs.secretModeFlow.first()
@@ -960,7 +963,7 @@ fun ChatScreen(
                                             }
 
                                             allMsgs = messages + userMsg
-                                            val shouldGround = if (webSearchOn) MiraChatSearchHeuristic.isChatSearchWorthy(text) else false
+                                            shouldGround = if (webSearchOn) MiraChatSearchHeuristic.isChatSearchWorthy(text) else false
                                             var capturedSources: List<GroundingSource> = emptyList()
                                             val accumulated = StringBuilder()
                                             var anyChunkReceived = false

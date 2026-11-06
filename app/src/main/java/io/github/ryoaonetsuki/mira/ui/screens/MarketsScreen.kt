@@ -1,11 +1,10 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
+import io.github.ryoaonetsuki.mira.ui.icons.Lucide
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -71,15 +70,15 @@ fun MarketsScreen(
                 title = { Text("Markets & Watchlist", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(Lucide.arrowLeft, contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 actions = {
                     IconButton(onClick = { refreshAllQuotes() }) {
-                        Icon(Icons.Rounded.Refresh, contentDescription = "Refresh", tint = palette.primary)
+                        Icon(Lucide.refreshCw, contentDescription = "Refresh", tint = palette.primary)
                     }
                     IconButton(onClick = { showAddDialog = true }) {
-                        Icon(Icons.Rounded.Add, contentDescription = "Add Symbol", tint = palette.primary)
+                        Icon(Lucide.plus, contentDescription = "Add Symbol", tint = palette.primary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -167,7 +166,7 @@ fun MarketsScreen(
                                     }
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Rounded.Close,
+                                        imageVector = Lucide.x,
                                         contentDescription = "Remove",
                                         tint = palette.textSecondary,
                                         modifier = Modifier.size(18.dp)

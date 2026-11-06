@@ -39,7 +39,12 @@ fun BrowserScreen(
 
     Scaffold(
         topBar = {
-            Column(modifier = Modifier.fillMaxWidth().background(palette.background)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(palette.background)
+                    .statusBarsPadding()
+            ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
@@ -120,6 +125,7 @@ fun BrowserScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(palette.surface)
+                    .navigationBarsPadding()
                     .padding(vertical = 4.dp)
             ) {
                 IconButton(

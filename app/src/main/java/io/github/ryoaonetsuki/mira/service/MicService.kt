@@ -137,6 +137,7 @@ class MicService : Service() {
             }
 
             _liveState.value = LiveState.CONNECTING
+            _errorMessage.value = null // Clear any previous error on new session start
 
             // Initialize Audio Player (24kHz)
             audioPlayer = AudioPlayer { isSpeaking ->
@@ -174,6 +175,7 @@ class MicService : Service() {
 
                     override fun onSetupComplete() {
                         _liveState.value = LiveState.LISTENING
+                        _errorMessage.value = null // Clear error on successful setup
                         audioRecorder?.startRecording()
 
                         // Record notice

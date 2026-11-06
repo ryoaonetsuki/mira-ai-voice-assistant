@@ -1,6 +1,9 @@
 package io.github.ryoaonetsuki.mira.ui.screens.settings
 
-import io.github.ryoaonetsuki.mira.ui.icons.Lucide
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Upload
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -134,7 +137,7 @@ fun BackupSettingsScreen(
                 title = { Text("Backup & Restore", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Lucide.arrowLeft, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -171,7 +174,7 @@ fun BackupSettingsScreen(
                         colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Icon(Lucide.download, contentDescription = null, tint = Color.Black)
+                        Icon(Icons.Rounded.Download, contentDescription = null, tint = Color.Black)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Export to File (JSON)", color = Color.Black)
                     }
@@ -195,7 +198,7 @@ fun BackupSettingsScreen(
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Icon(Lucide.upload, contentDescription = null)
+                        Icon(Icons.Rounded.Upload, contentDescription = null)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Choose Backup File")
                     }

@@ -1,6 +1,9 @@
 package io.github.ryoaonetsuki.mira.ui.screens.settings
 
-import io.github.ryoaonetsuki.mira.ui.icons.Lucide
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.SentimentSatisfied
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -52,7 +55,7 @@ fun SecretSettingsScreen(
                 title = { Text("Secret Settings", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Lucide.arrowLeft, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -82,7 +85,7 @@ fun SecretSettingsScreen(
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
-                            imageVector = Lucide.faceSlightlySmiling,
+                            imageVector = Icons.Rounded.SentimentSatisfied,
                             contentDescription = null,
                             tint = if (isFriendly) palette.primary else palette.textSecondary,
                             modifier = Modifier.size(28.dp)
@@ -125,7 +128,7 @@ fun SecretSettingsScreen(
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
-                            imageVector = Lucide.heart,
+                            imageVector = Icons.Rounded.Favorite,
                             contentDescription = null,
                             tint = if (isRomantic) Color(0xFFF43F5E) else palette.textSecondary,
                             modifier = Modifier.size(28.dp)

@@ -39,12 +39,12 @@ fun SettingsHubScreen(
 
     val rows = listOf(
         SettingsHubRow("Mira & Persona", "Persona, assistant name, language, driving mode", Icons.Rounded.Face, Screen.SettingsMaya.route, "Assistant"),
-        SettingsHubRow("Personal Profile", "Your name, Gemini API key, music app & song", Icons.Rounded.Person, Screen.SettingsPersonal.route, "Assistant"),
+        SettingsHubRow("Personal Profile", "Your name, API key, music app & song", Icons.Rounded.Person, Screen.SettingsPersonal.route, "Assistant"),
         SettingsHubRow("Secret Settings", "Friendly vs Romantic tone with age confirmation", Icons.Rounded.Favorite, Screen.SettingsSecret.route, "Assistant"),
         SettingsHubRow("Voice Engine", "Mind/Soul/Swift models, 30 voices, Deepgram key", Icons.Rounded.GraphicEq, Screen.SettingsVoice.route, "Voice"),
         SettingsHubRow("Advanced & Security", "Themes, orb styles, Face Lock, SOS, Touch Guard", Icons.Rounded.Security, Screen.SettingsAdvanced.route, "System"),
         SettingsHubRow("Connectors", "GitHub, Telegram, Notion, Spotify, Linear, Todoist", Icons.Rounded.Link, Screen.SettingsConnectors.route, "Integrations"),
-        SettingsHubRow("Email", "Send-as address, signature, Gemini email composer", Icons.Rounded.Email, Screen.SettingsEmail.route, "Integrations"),
+        SettingsHubRow("Email", "Send-as address, signature, AI email composer", Icons.Rounded.Email, Screen.SettingsEmail.route, "Integrations"),
         SettingsHubRow("Messages & WhatsApp", "Auto-reply template, Notification listener", Icons.Rounded.Chat, Screen.SettingsMessages.route, "Integrations"),
         SettingsHubRow("Social Media", "Handle, caption voice, story ideas", Icons.Rounded.Share, Screen.SettingsSocial.route, "Integrations"),
         SettingsHubRow("Optional Integrations", "Image provider, Maps key, Web search engines", Icons.Rounded.Tune, Screen.SettingsOptional.route, "Integrations"),

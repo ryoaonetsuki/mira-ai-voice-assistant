@@ -1,5 +1,6 @@
 package io.github.ryoaonetsuki.mira.ui.screens.settings
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -23,9 +24,14 @@ import io.github.ryoaonetsuki.mira.data.model.LiveVoiceModel
 import io.github.ryoaonetsuki.mira.data.model.VoiceCatalog
 import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
 import io.github.ryoaonetsuki.mira.data.preferences.UserPreferences
+import io.github.ryoaonetsuki.mira.network.GeminiTtsClient
 import io.github.ryoaonetsuki.mira.ui.components.MiraButton
 import io.github.ryoaonetsuki.mira.ui.components.MiraCard
 import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
+import io.github.ryoaonetsuki.mira.voice.AudioPlayer
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -48,6 +54,69 @@ fun VoiceEngineScreen(
     var showVoicePickerDialog by remember { mutableStateOf(false) }
     var showGuardianDialog by remember { mutableStateOf(false) }
     var voiceprintLabel by remember { mutableStateOf(securePrefs.getEnrolledFaceName() ?: "Owner (Alex)") }
+
+    val ttsClient = remember { GeminiTtsClient(context) }
+    var activeAudioPlayer by remember { mutableStateOf<AudioPlayer?>(null) }
+    var playingVoice by remember { mutableStateOf<String?>(null) }
+    var loadingVoice by remember { mutableStateOf<String?>(null) }
+    var previewError by remember { mutableStateOf<String?>(null) }
+    var playbackJob by remember { mutableStateOf<Job?>(null) }
+
+    fun stopPreview() {
+        playbackJob?.cancel()
+        playbackJob = null
+        activeAudioPlayer?.stopImmediatelyAndFlush()
+        activeAudioPlayer?.release()
+        activeAudioPlayer = null
+        playingVoice = null
+        loadingVoice = null
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            stopPreview()
+        }
+    }
+
+    fun startPreview(voiceName: String) {
+        stopPreview()
+        val resolver = io.github.ryoaonetsuki.mira.backend.ApiKeyResolver(context)
+        loadingVoice = voiceName
+        previewError = null
+        playbackJob = scope.launch {
+            val keySource = resolver.resolveKey()
+            if (keySource is io.github.ryoaonetsuki.mira.backend.KeySource.NoKey) {
+                loadingVoice = null
+                previewError = "Add your API key first to hear voice previews"
+                return@launch
+            }
+            val rawApiKey = (keySource as? io.github.ryoaonetsuki.mira.backend.KeySource.UserKey)?.key ?: (securePrefs.getGeminiApiKey() ?: "")
+            val useServer = keySource is io.github.ryoaonetsuki.mira.backend.KeySource.ServerKey
+            val result = ttsClient.generatePreview(rawApiKey, voiceName, useServerProxy = useServer)
+            if (result.isSuccess) {
+                val pcmBytes = result.getOrThrow()
+                loadingVoice = null
+                playingVoice = voiceName
+                val player = AudioPlayer { isSpeaking ->
+                    if (!isSpeaking && playingVoice == voiceName) {
+                        playingVoice = null
+                    }
+                }
+                activeAudioPlayer = player
+                val chunkSize = 4096
+                var offset = 0
+                while (offset < pcmBytes.size && isActive) {
+                    val length = minOf(chunkSize, pcmBytes.size - offset)
+                    player.playAudioChunk(pcmBytes.copyOfRange(offset, offset + length))
+                    offset += length
+                    delay(10)
+                }
+            } else {
+                loadingVoice = null
+                previewError = result.exceptionOrNull()?.message ?: "Voice preview failed"
+            }
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -109,7 +178,7 @@ fun VoiceEngineScreen(
 
             item {
                 Spacer(modifier = Modifier.height(4.dp))
-                Text("Voice Personality (30 Gemini Voices)", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.primary)
+                Text("Voice Personality (30 Voices)", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.primary)
             }
 
             // Voice Picker
@@ -239,55 +308,171 @@ fun VoiceEngineScreen(
         // Voice Picker Dialog (All 30 Voices)
         if (showVoicePickerDialog) {
             AlertDialog(
-                onDismissRequest = { showVoicePickerDialog = false },
-                title = { Text("Select Voice (30 Gemini Voices)") },
+                onDismissRequest = {
+                    stopPreview()
+                    showVoicePickerDialog = false
+                },
+                title = { Text("Select Voice (30 Voices)") },
                 text = {
-                    LazyColumn(modifier = Modifier.height(340.dp)) {
-                        item {
-                            Text("Female Voices (13)", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = palette.primary, modifier = Modifier.padding(vertical = 4.dp))
+                    Column {
+                        if (previewError != null) {
+                            Text(
+                                text = previewError!!,
+                                fontSize = 12.sp,
+                                color = Color(0xFFEF4444),
+                                modifier = Modifier.padding(bottom = 6.dp)
+                            )
                         }
-                        items(VoiceCatalog.femaleVoices) { v ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        scope.launch { userPrefs.setVoiceName(v.name) }
-                                        showVoicePickerDialog = false
-                                    }
-                                    .padding(vertical = 8.dp)
-                            ) {
-                                Text(
-                                    text = "${v.name} • ${v.style}",
-                                    fontSize = 14.sp,
-                                    color = if (selectedVoice == v.name) palette.primary else palette.textPrimary
-                                )
+
+                        LazyColumn(modifier = Modifier.height(340.dp)) {
+                            item {
+                                Text("Female Voices (13)", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = palette.primary, modifier = Modifier.padding(vertical = 4.dp))
                             }
-                        }
-                        item {
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text("Male Voices (17)", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = palette.secondary, modifier = Modifier.padding(vertical = 4.dp))
-                        }
-                        items(VoiceCatalog.maleVoices) { v ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        scope.launch { userPrefs.setVoiceName(v.name) }
-                                        showVoicePickerDialog = false
+                            items(VoiceCatalog.femaleVoices) { v ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            scope.launch { userPrefs.setVoiceName(v.name) }
+                                            stopPreview()
+                                            showVoicePickerDialog = false
+                                        }
+                                        .padding(vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "${v.name} • ${v.style}",
+                                            fontSize = 14.sp,
+                                            fontWeight = if (selectedVoice == v.name) FontWeight.Bold else FontWeight.Normal,
+                                            color = if (selectedVoice == v.name) palette.primary else palette.textPrimary
+                                        )
+                                        if (playingVoice == v.name) {
+                                            Text(
+                                                text = "Playing preview...",
+                                                fontSize = 11.sp,
+                                                color = palette.primary
+                                            )
+                                        }
                                     }
-                                    .padding(vertical = 8.dp)
-                            ) {
-                                Text(
-                                    text = "${v.name} • ${v.style}",
-                                    fontSize = 14.sp,
-                                    color = if (selectedVoice == v.name) palette.primary else palette.textPrimary
-                                )
+
+                                    IconButton(
+                                        onClick = {
+                                            if (playingVoice == v.name || loadingVoice == v.name) {
+                                                stopPreview()
+                                            } else {
+                                                startPreview(v.name)
+                                            }
+                                        },
+                                        modifier = Modifier.size(36.dp)
+                                    ) {
+                                        when {
+                                            loadingVoice == v.name -> {
+                                                CircularProgressIndicator(
+                                                    modifier = Modifier.size(16.dp),
+                                                    strokeWidth = 2.dp,
+                                                    color = palette.primary
+                                                )
+                                            }
+                                            playingVoice == v.name -> {
+                                                Canvas(modifier = Modifier.size(14.dp)) {
+                                                    drawRect(color = palette.primary)
+                                                }
+                                            }
+                                            else -> {
+                                                Canvas(modifier = Modifier.size(14.dp)) {
+                                                    val path = androidx.compose.ui.graphics.Path().apply {
+                                                        moveTo(2f, 1f)
+                                                        lineTo(size.width - 1f, size.height / 2f)
+                                                        lineTo(2f, size.height - 1f)
+                                                        close()
+                                                    }
+                                                    drawPath(path, color = if (selectedVoice == v.name) palette.primary else palette.textSecondary)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            item {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text("Male Voices (17)", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = palette.secondary, modifier = Modifier.padding(vertical = 4.dp))
+                            }
+                            items(VoiceCatalog.maleVoices) { v ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            scope.launch { userPrefs.setVoiceName(v.name) }
+                                            stopPreview()
+                                            showVoicePickerDialog = false
+                                        }
+                                        .padding(vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "${v.name} • ${v.style}",
+                                            fontSize = 14.sp,
+                                            fontWeight = if (selectedVoice == v.name) FontWeight.Bold else FontWeight.Normal,
+                                            color = if (selectedVoice == v.name) palette.primary else palette.textPrimary
+                                        )
+                                        if (playingVoice == v.name) {
+                                            Text(
+                                                text = "Playing preview...",
+                                                fontSize = 11.sp,
+                                                color = palette.primary
+                                            )
+                                        }
+                                    }
+
+                                    IconButton(
+                                        onClick = {
+                                            if (playingVoice == v.name || loadingVoice == v.name) {
+                                                stopPreview()
+                                            } else {
+                                                startPreview(v.name)
+                                            }
+                                        },
+                                        modifier = Modifier.size(36.dp)
+                                    ) {
+                                        when {
+                                            loadingVoice == v.name -> {
+                                                CircularProgressIndicator(
+                                                    modifier = Modifier.size(16.dp),
+                                                    strokeWidth = 2.dp,
+                                                    color = palette.primary
+                                                )
+                                            }
+                                            playingVoice == v.name -> {
+                                                Canvas(modifier = Modifier.size(14.dp)) {
+                                                    drawRect(color = palette.primary)
+                                                }
+                                            }
+                                            else -> {
+                                                Canvas(modifier = Modifier.size(14.dp)) {
+                                                    val path = androidx.compose.ui.graphics.Path().apply {
+                                                        moveTo(2f, 1f)
+                                                        lineTo(size.width - 1f, size.height / 2f)
+                                                        lineTo(2f, size.height - 1f)
+                                                        close()
+                                                    }
+                                                    drawPath(path, color = if (selectedVoice == v.name) palette.primary else palette.textSecondary)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
                 },
                 confirmButton = {
-                    TextButton(onClick = { showVoicePickerDialog = false }) { Text("Close") }
+                    TextButton(onClick = {
+                        stopPreview()
+                        showVoicePickerDialog = false
+                    }) { Text("Close") }
                 },
                 containerColor = palette.surface,
                 titleContentColor = palette.textPrimary,

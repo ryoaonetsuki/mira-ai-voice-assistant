@@ -6,6 +6,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material3.*
+import io.github.ryoaonetsuki.mira.ui.components.MiraSwitch
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -84,10 +85,9 @@ fun SocialSettingsScreen(
                             Text("Daily Story Ideas", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
                             Text("Prepares a fresh quote and story caption every morning", fontSize = 12.sp, color = palette.textSecondary)
                         }
-                        Switch(
+                        MiraSwitch(
                             checked = dailyStoryEnabled,
-                            onCheckedChange = { dailyStoryEnabled = it },
-                            colors = SwitchDefaults.colors(checkedThumbColor = palette.primary)
+                            onCheckedChange = { dailyStoryEnabled = it }
                         )
                     }
                 }

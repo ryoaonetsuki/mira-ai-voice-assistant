@@ -15,6 +15,7 @@ import android.util.Log
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import io.github.ryoaonetsuki.mira.BuildConfig
 import io.github.ryoaonetsuki.mira.MainActivity
 import io.github.ryoaonetsuki.mira.R
 import io.github.ryoaonetsuki.mira.automation.MacroRunner
@@ -33,6 +34,7 @@ import io.github.ryoaonetsuki.mira.voice.AudioPlayer
 import io.github.ryoaonetsuki.mira.voice.AudioRecorder
 import io.github.ryoaonetsuki.mira.voice.FallbackVoiceSession
 import io.github.ryoaonetsuki.mira.voice.GeminiLiveClient
+import io.github.ryoaonetsuki.mira.voice.LiveAuthMode
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -200,14 +202,38 @@ class MicService : Service() {
             }
             Log.i(TAG, "Key source: $keySourceLabel")
 
-            val (apiKey, ephemeralToken) = when (keySource) {
-                is io.github.ryoaonetsuki.mira.backend.KeySource.UserKey -> Pair(keySource.key, null)
+            val relayBase = try { BuildConfig.SUPABASE_URL } catch (_: Throwable) { "https://zvnfwlqxdbommtozugzt.supabase.co" }
+            val relayUrl = "$relayBase/functions/v1/gemini-live-relay"
+            val anonKey = resolver.anonKey
+
+            val authModes: List<LiveAuthMode> = when (keySource) {
+                is io.github.ryoaonetsuki.mira.backend.KeySource.UserKey -> {
+                    val userKey = keySource.key
+                    Log.i(TAG, "Attempting to mint ephemeral token for UserKey...")
+                    val mintResult = resolver.mintLiveTokenForUserKey(userKey)
+                    if (mintResult.isSuccess) {
+                        val token = mintResult.getOrThrow()
+                        Log.i(TAG, "UserKey ephemeral token mint SUCCEEDED")
+                        listOf(
+                            LiveAuthMode.Ephemeral(token),
+                            LiveAuthMode.DirectKey(userKey),
+                            LiveAuthMode.Relay(userKey, relayUrl)
+                        )
+                    } else {
+                        val err = mintResult.exceptionOrNull()?.message ?: "unknown"
+                        Log.w(TAG, "UserKey ephemeral token mint FAILED: $err — continuing with direct and relay modes")
+                        listOf(
+                            LiveAuthMode.DirectKey(userKey),
+                            LiveAuthMode.Relay(userKey, relayUrl)
+                        )
+                    }
+                }
                 is io.github.ryoaonetsuki.mira.backend.KeySource.ServerKey -> {
                     Log.i(TAG, "Attempting to mint ephemeral token via server...")
                     val tokenResult = resolver.mintLiveToken()
                     if (tokenResult.isSuccess) {
                         Log.i(TAG, "Server live token mint SUCCEEDED (token acquired)")
-                        Pair("", tokenResult.getOrThrow())
+                        listOf(LiveAuthMode.Ephemeral(tokenResult.getOrThrow()))
                     } else {
                         val err = tokenResult.exceptionOrNull()?.message ?: "Failed to mint token"
                         Log.e(TAG, "Server live token mint FAILED: $err")
@@ -225,6 +251,12 @@ class MicService : Service() {
                     return@launch
                 }
             }
+
+            val startingMode = authModes.firstOrNull()?.label ?: "none"
+            Log.i(TAG, "Live session starting with auth mode: $startingMode")
+
+            val apiKey = if (keySource is io.github.ryoaonetsuki.mira.backend.KeySource.UserKey) keySource.key else ""
+            val ephemeralToken = (authModes.firstOrNull() as? LiveAuthMode.Ephemeral)?.token
 
             val voiceName = userPrefs.voiceNameFlow.first()
             val personaName = userPrefs.personaFlow.first()
@@ -311,6 +343,9 @@ class MicService : Service() {
                 initialModel = liveModel,
                 language = language,
                 ephemeralToken = ephemeralToken,
+                relayUrl = relayUrl,
+                anonKey = anonKey,
+                authModes = authModes,
                 listener = object : GeminiLiveClient.LiveEventsListener {
                     override fun onConnecting(model: String) {
                         _liveState.value = LiveState.CONNECTING
@@ -484,6 +519,12 @@ class MicService : Service() {
                         } else {
                             _modelTranscript.value = text
                         }
+                    }
+
+                    override fun onStalled() {
+                        Log.w(TAG, "Gemini Live session stalled (no server reply for >30s after audio) — keeping LISTENING state")
+                        _liveState.value = LiveState.LISTENING
+                        _voiceStage.value = VoiceStage.LISTENING
                     }
 
                     override fun onError(message: String) {

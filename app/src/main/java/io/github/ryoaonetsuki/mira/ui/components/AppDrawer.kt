@@ -51,7 +51,6 @@ fun AppDrawer(
         DrawerItem("Vibes", Screen.Vibes.route, Icons.Rounded.GraphicEq, "Lifestyle"),
         DrawerItem("Markets", Screen.Markets.route, Icons.Rounded.TrendingUp, "Lifestyle"),
         DrawerItem("Marketing", Screen.Marketing.route, Icons.Rounded.Campaign, "Creation"),
-        DrawerItem("PC ⇄ Phone", Screen.PcPhone.route, Icons.Rounded.Devices, "System"),
         DrawerItem("Extensions", Screen.Extensions.route, Icons.Rounded.Extension, "System"),
         DrawerItem("Image Gen", Screen.ImageGen.route, Icons.Rounded.Image, "Tools"),
         DrawerItem("Web Search", Screen.WebSearch.route, Icons.Rounded.Search, "Tools"),
@@ -166,7 +165,7 @@ fun AppDrawer(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "BYOK Free Mode • Unlimited",
+                    text = "Private Companion Mode • Unlimited",
                     fontSize = 11.sp,
                     color = palette.textSecondary
                 )

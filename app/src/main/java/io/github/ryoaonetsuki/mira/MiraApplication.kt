@@ -5,13 +5,18 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
 import io.github.ryoaonetsuki.mira.data.local.MiraDatabase
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class MiraApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        // Initialize Database
-        MiraDatabase.getInstance(this)
+        // Defer database initialization off main thread to background IO
+        CoroutineScope(Dispatchers.IO).launch {
+            MiraDatabase.getInstance(this@MiraApplication)
+        }
 
         // Initialize Notification Channels
         createNotificationChannels()

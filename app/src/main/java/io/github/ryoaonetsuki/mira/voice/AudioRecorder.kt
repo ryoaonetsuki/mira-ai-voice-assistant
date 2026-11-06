@@ -4,10 +4,18 @@ import android.annotation.SuppressLint
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.NoiseSuppressor
 import android.util.Log
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.sqrt
 
+/**
+ * Audio recorder for Gemini Live native voice pipeline (ROUND 12 spec §3.2).
+ * Captures 16 kHz mono 16-bit PCM in 20–40 ms chunks (640 bytes = 20 ms).
+ * Operates on a dedicated background thread with guarded AEC and noise suppression.
+ * Frames are streamed continuously including silence.
+ */
 class AudioRecorder(
     private val onAudioChunk: (ByteArray) -> Unit,
     private val onAmplitude: (Float) -> Unit
@@ -15,24 +23,31 @@ class AudioRecorder(
     private var audioRecord: AudioRecord? = null
     private var recordingThread: Thread? = null
     private val isRecording = AtomicBoolean(false)
-    private val isLiveForwarding = AtomicBoolean(false)
+    private val isLiveForwarding = AtomicBoolean(true)
     private val preRollRing = PreRollRingBuffer()
+
+    private var echoCanceler: AcousticEchoCanceler? = null
+    private var noiseSuppressor: NoiseSuppressor? = null
+
     private var chunksRecorded: Long = 0L
     private var totalRecordedBytes: Long = 0L
 
     @SuppressLint("MissingPermission")
     fun startRecording(): Boolean {
-        if (isRecording.get()) return true
+        if (!isRecording.compareAndSet(false, true)) {
+            Log.d(TAG, "MIRA_LIVE_VOICE: AudioRecorder already recording")
+            return true
+        }
 
         val sampleRate = SAMPLE_RATE
         val channelConfig = AudioFormat.CHANNEL_IN_MONO
         val audioFormat = AudioFormat.ENCODING_PCM_16BIT
         val minBufferSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
-        val bufferSize = maxOf(minBufferSize, CHUNK_SIZE_BYTES * 2)
+        val bufferSize = maxOf(minBufferSize, CHUNK_SIZE_BYTES * 4)
 
         try {
             val record = AudioRecord(
-                MediaRecorder.AudioSource.MIC,
+                MediaRecorder.AudioSource.VOICE_COMMUNICATION,
                 sampleRate,
                 channelConfig,
                 audioFormat,
@@ -40,37 +55,73 @@ class AudioRecorder(
             )
 
             if (record.state != AudioRecord.STATE_INITIALIZED) {
-                Log.e(TAG, "AudioRecord initialization failed (state != STATE_INITIALIZED, state=${record.state})")
+                // Try fallback to MIC source if VOICE_COMMUNICATION is not supported on device
+                Log.w(TAG, "MIRA_LIVE_VOICE: AudioRecord VOICE_COMMUNICATION init failed, trying MediaRecorder.AudioSource.MIC")
                 try { record.release() } catch (_: Exception) {}
-                audioRecord = null
+                val fallbackRecord = AudioRecord(
+                    MediaRecorder.AudioSource.MIC,
+                    sampleRate,
+                    channelConfig,
+                    audioFormat,
+                    bufferSize
+                )
+                if (fallbackRecord.state != AudioRecord.STATE_INITIALIZED) {
+                    Log.e(TAG, "MIRA_LIVE_VOICE: AudioRecord initialization failed on both sources (state=${fallbackRecord.state})")
+                    try { fallbackRecord.release() } catch (_: Exception) {}
+                    isRecording.set(false)
+                    return false
+                }
+                audioRecord = fallbackRecord
+            } else {
+                audioRecord = record
+            }
+
+            val currentRecord = audioRecord!!
+
+            // Hardware Acoustic Echo Canceler (AEC) if available
+            if (AcousticEchoCanceler.isAvailable()) {
+                try {
+                    echoCanceler = AcousticEchoCanceler.create(currentRecord.audioSessionId)?.apply {
+                        enabled = true
+                    }
+                    Log.i(TAG, "MIRA_LIVE_VOICE: AcousticEchoCanceler enabled on session ${currentRecord.audioSessionId}")
+                } catch (e: Exception) {
+                    Log.w(TAG, "MIRA_LIVE_VOICE: Could not create AcousticEchoCanceler: ${e.message}")
+                }
+            }
+
+            // Hardware Noise Suppressor if available
+            if (NoiseSuppressor.isAvailable()) {
+                try {
+                    noiseSuppressor = NoiseSuppressor.create(currentRecord.audioSessionId)?.apply {
+                        enabled = true
+                    }
+                    Log.i(TAG, "MIRA_LIVE_VOICE: NoiseSuppressor enabled on session ${currentRecord.audioSessionId}")
+                } catch (e: Exception) {
+                    Log.w(TAG, "MIRA_LIVE_VOICE: Could not create NoiseSuppressor: ${e.message}")
+                }
+            }
+
+            currentRecord.startRecording()
+            if (currentRecord.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+                Log.e(TAG, "MIRA_LIVE_VOICE: AudioRecord failed to enter RECORDSTATE_RECORDING (state=${currentRecord.recordingState})")
+                stopRecording()
                 return false
             }
 
-            record.startRecording()
-            if (record.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
-                Log.e(TAG, "AudioRecord failed to enter RECORDING state (recordingState=${record.recordingState})")
-                try { record.stop() } catch (_: Exception) {}
-                try { record.release() } catch (_: Exception) {}
-                audioRecord = null
-                return false
-            }
-
-            audioRecord = record
-            isRecording.set(true)
             chunksRecorded = 0L
             totalRecordedBytes = 0L
 
             recordingThread = Thread({
                 val buffer = ByteArray(CHUNK_SIZE_BYTES)
                 while (isRecording.get()) {
-                    val read = audioRecord?.read(buffer, 0, buffer.size) ?: -1
+                    val recordRef = audioRecord ?: break
+                    val read = recordRef.read(buffer, 0, buffer.size)
                     if (read > 0) {
                         chunksRecorded++
                         totalRecordedBytes += read
-                        if (chunksRecorded == 1L || chunksRecorded % 50L == 0L) {
-                            Log.d(TAG, "Recorded audio chunk #$chunksRecorded ($read bytes, total: $totalRecordedBytes bytes)")
-                        }
-                        // Calculate RMS amplitude
+
+                        // Calculate real RMS amplitude for orb animation
                         var sum = 0.0
                         var i = 0
                         while (i < read - 1) {
@@ -83,11 +134,9 @@ class AudioRecorder(
                         val normalized = (rms / 32768.0).toFloat().coerceIn(0f, 1f)
                         onAmplitude(normalized)
 
-                        // Deliver audio chunk: always write to pre-roll ring buffer
                         val chunkCopy = buffer.copyOf(read)
                         preRollRing.write(chunkCopy)
 
-                        // Forward to live session if forwarding is enabled
                         if (isLiveForwarding.get()) {
                             onAudioChunk(chunkCopy)
                         }
@@ -97,33 +146,29 @@ class AudioRecorder(
                             AudioRecord.ERROR_BAD_VALUE -> "ERROR_BAD_VALUE"
                             AudioRecord.ERROR_DEAD_OBJECT -> "ERROR_DEAD_OBJECT"
                             AudioRecord.ERROR -> "ERROR"
-                            else -> "UNKNOWN_ERROR ($read)"
+                            else -> "UNKNOWN ($read)"
                         }
                         if (isRecording.get()) {
-                            Log.e(TAG, "AudioRecord.read() returned error code $read ($errorDetail)")
+                            Log.e(TAG, "MIRA_LIVE_VOICE: AudioRecord.read error: $errorDetail ($read)")
                         }
                     }
                 }
             }, "MiraAudioRecordThread")
 
             recordingThread?.start()
-            Log.i(TAG, "Audio recording started successfully at 16kHz mono (recordingState=RECORDSTATE_RECORDING)")
+            Log.i(TAG, "MIRA_LIVE_VOICE: Audio recording started at 16kHz mono (20ms chunks, 640B)")
             return true
         } catch (e: SecurityException) {
-            Log.e(TAG, "SecurityException starting AudioRecord (permission revoked or missing): ${e.message}", e)
+            Log.e(TAG, "MIRA_LIVE_VOICE: SecurityException starting AudioRecord: ${e.message}", e)
             stopRecording()
             return false
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to start AudioRecord: ${e.message}", e)
+            Log.e(TAG, "MIRA_LIVE_VOICE: Failed to start AudioRecord: ${e.message}", e)
             stopRecording()
             return false
         }
     }
 
-    /**
-     * Drains the pre-roll ring buffer and atomically enables real-time chunk forwarding.
-     * Must be called upon setupComplete.
-     */
     fun flushPreRoll(): List<ByteArray> {
         val flushed = preRollRing.flush(PreRollRingBuffer.PRE_ROLL_MAX_AGE_MS)
         isLiveForwarding.set(true)
@@ -134,19 +179,28 @@ class AudioRecorder(
         isLiveForwarding.set(enabled)
     }
 
-    fun resetPreRoll() {
-        preRollRing.clear()
-        isLiveForwarding.set(false)
-    }
-
     fun stopRecording() {
-        isRecording.set(false)
+        if (!isRecording.compareAndSet(true, false)) return
+
         isLiveForwarding.set(false)
         preRollRing.clear()
+
         try {
             recordingThread?.interrupt()
             recordingThread = null
         } catch (_: Exception) {}
+
+        try {
+            echoCanceler?.enabled = false
+            echoCanceler?.release()
+        } catch (_: Exception) {}
+        echoCanceler = null
+
+        try {
+            noiseSuppressor?.enabled = false
+            noiseSuppressor?.release()
+        } catch (_: Exception) {}
+        noiseSuppressor = null
 
         val record = audioRecord
         audioRecord = null
@@ -157,25 +211,27 @@ class AudioRecorder(
                     record.stop()
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "Error stopping AudioRecord: ${e.message}")
+                Log.w(TAG, "MIRA_LIVE_VOICE: Error stopping AudioRecord: ${e.message}")
             } finally {
                 try {
                     record.release()
                 } catch (e: Exception) {
-                    Log.w(TAG, "Error releasing AudioRecord: ${e.message}")
+                    Log.w(TAG, "MIRA_LIVE_VOICE: Error releasing AudioRecord: ${e.message}")
                 }
             }
         }
+
         try {
             onAmplitude(0f)
         } catch (_: Exception) {}
-        Log.i(TAG, "Audio recording stopped (recorded $chunksRecorded chunks, $totalRecordedBytes bytes)")
+
+        Log.i(TAG, "MIRA_LIVE_VOICE: Audio recording stopped ($chunksRecorded chunks, $totalRecordedBytes bytes)")
     }
 
     companion object {
-        private const val TAG = "MiraAudioRecorder"
+        private const val TAG = "MIRA_LIVE_VOICE"
         const val SAMPLE_RATE = 16000
-        // 1600 samples @ 16kHz 16-bit mono = 3200 bytes = 100ms chunk
-        const val CHUNK_SIZE_BYTES = 3200
+        // 320 samples @ 16kHz 16-bit mono = 640 bytes = 20ms chunk (spec §0.9, 20–40ms)
+        const val CHUNK_SIZE_BYTES = 640
     }
 }

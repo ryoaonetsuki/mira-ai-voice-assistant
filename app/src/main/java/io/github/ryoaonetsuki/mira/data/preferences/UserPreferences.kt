@@ -128,6 +128,14 @@ class UserPreferences(private val context: Context) {
         it[KEY_DAILY_STORY] ?: true
     }
 
+    val webSearchEnabledFlow: Flow<Boolean> = context.dataStore.data.catch { emitDefaults(it) }.map {
+        it[KEY_WEB_SEARCH_ENABLED] ?: true
+    }
+
+    val deepThinkingEnabledFlow: Flow<Boolean> = context.dataStore.data.catch { emitDefaults(it) }.map {
+        it[KEY_DEEP_THINKING_ENABLED] ?: false
+    }
+
     private suspend fun emitDefaults(throwable: Throwable) {
         if (throwable !is IOException) throw throwable
     }
@@ -161,6 +169,8 @@ class UserPreferences(private val context: Context) {
     suspend fun setUserHandle(handle: String) = context.dataStore.edit { it[KEY_USER_HANDLE] = handle }
     suspend fun setCaptionVoice(voice: String) = context.dataStore.edit { it[KEY_CAPTION_VOICE] = voice }
     suspend fun setDailyStory(enabled: Boolean) = context.dataStore.edit { it[KEY_DAILY_STORY] = enabled }
+    suspend fun setWebSearchEnabled(enabled: Boolean) = context.dataStore.edit { it[KEY_WEB_SEARCH_ENABLED] = enabled }
+    suspend fun setDeepThinkingEnabled(enabled: Boolean) = context.dataStore.edit { it[KEY_DEEP_THINKING_ENABLED] = enabled }
 
     companion object {
         private val KEY_USER_NAME = stringPreferencesKey("user_name")
@@ -192,5 +202,7 @@ class UserPreferences(private val context: Context) {
         private val KEY_USER_HANDLE = stringPreferencesKey("user_handle")
         private val KEY_CAPTION_VOICE = stringPreferencesKey("caption_voice")
         private val KEY_DAILY_STORY = booleanPreferencesKey("daily_story")
+        private val KEY_WEB_SEARCH_ENABLED = booleanPreferencesKey("web_search_enabled")
+        private val KEY_DEEP_THINKING_ENABLED = booleanPreferencesKey("deep_thinking_enabled")
     }
 }

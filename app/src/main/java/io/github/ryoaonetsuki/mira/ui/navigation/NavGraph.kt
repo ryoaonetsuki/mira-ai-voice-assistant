@@ -40,6 +40,8 @@ fun MiraNavGraph(
     val isHomeRoute = currentRoute == Screen.Home.route
 
     if (isHomeRoute) {
+        // Home gets its own Scaffold with top bar + drawer.
+        // HomeScreen renders its own bottom navigation bar internally.
         ModalNavigationDrawer(
             drawerState = drawerState,
             drawerContent = {
@@ -73,6 +75,8 @@ fun MiraNavGraph(
                 },
                 containerColor = palette.background
             ) { padding ->
+                // HomeScreen fills the full scaffold area including padding.
+                // Its internal Column adds the bottom nav bar at the bottom.
                 HomeScreen(
                     onNavigate = { route ->
                         navController.navigate(route)
@@ -117,6 +121,10 @@ fun MiraNavGraph(
 
             composable(Screen.Chat.route) {
                 ChatScreen(onBack = { navController.popBackStack() })
+            }
+
+            composable(Screen.Scan.route) {
+                ScanScreen(onBack = { navController.popBackStack() })
             }
 
             composable(Screen.Memories.route) {

@@ -267,12 +267,12 @@ fun HomeScreen(
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            // SMALL status line UNDER the orb only ('Connecting...' / 'Listening...' / 'Speaking...' / idle 'Tap the mic to talk')
+            // SMALL status line UNDER the orb only ('Connecting...' / 'Listening...' / 'Speaking...' / idle 'Tap the voice button to start')
             val statusText = when (liveState) {
                 LiveState.CONNECTING -> "Connecting..."
                 LiveState.LISTENING -> "Listening..."
                 LiveState.SPEAKING -> "Speaking..."
-                LiveState.IDLE, LiveState.ERROR -> "Tap the mic to talk"
+                LiveState.IDLE, LiveState.ERROR -> "Tap the voice button to start"
             }
             Text(
                 text = statusText,

@@ -1,14 +1,12 @@
 package io.github.ryoaonetsuki.mira.ui.screens.settings
 
+import io.github.ryoaonetsuki.mira.ui.icons.Lucide
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material3.*
 import io.github.ryoaonetsuki.mira.ui.components.MiraSwitch
 import androidx.compose.runtime.*
@@ -55,7 +53,7 @@ fun MayaSettingsScreen(
                 title = { Text("Mira & Persona", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(Lucide.arrowLeft, contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -166,7 +164,7 @@ fun MayaSettingsScreen(
                             Text("Assistant Name", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
                             Text("What you call her: \"$assistantName\"", fontSize = 12.sp, color = palette.textSecondary)
                         }
-                        Icon(Icons.Rounded.ChevronRight, contentDescription = null, tint = palette.textSecondary)
+                        Icon(Lucide.chevronRight, contentDescription = null, tint = palette.textSecondary)
                     }
                 }
             }
@@ -185,7 +183,7 @@ fun MayaSettingsScreen(
                             Text("Spoken Language", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
                             Text(language, fontSize = 12.sp, color = palette.textSecondary)
                         }
-                        Icon(Icons.Rounded.ChevronRight, contentDescription = null, tint = palette.textSecondary)
+                        Icon(Lucide.chevronRight, contentDescription = null, tint = palette.textSecondary)
                     }
                 }
             }
@@ -223,7 +221,7 @@ fun MayaSettingsScreen(
                             Text("Secret Settings", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = palette.primary)
                             Text("Friendly vs Romantic companion mode with age gate", fontSize = 12.sp, color = palette.textSecondary)
                         }
-                        Icon(Icons.Rounded.ChevronRight, contentDescription = null, tint = palette.primary)
+                        Icon(Lucide.chevronRight, contentDescription = null, tint = palette.primary)
                     }
                 }
             }

@@ -56,6 +56,35 @@ fun VoiceEngineScreen(
     val selectedVoice by userPrefs.voiceNameFlow.collectAsState(initial = "Aoede")
     val fastListening by userPrefs.fastListeningFlow.collectAsState(initial = true)
     val echoGuard by userPrefs.echoGuardFlow.collectAsState(initial = true)
+    val alternativeVoiceEnabled by userPrefs.alternativeVoiceEnabledFlow.collectAsState(initial = false)
+
+    val diagnosticsData by io.github.ryoaonetsuki.mira.voice.LiveVoiceDiagnostics.data.collectAsState()
+    val restClient = remember { GeminiRestClient() }
+
+    var isCheckingCapability by remember { mutableStateOf(false) }
+    var capabilityMessage by remember { mutableStateOf<String?>(null) }
+    var isLiveCapable by remember { mutableStateOf(false) }
+
+    fun runCapabilityCheck() {
+        val key = securePrefs.getGeminiApiKey() ?: ""
+        if (key.isBlank()) {
+            capabilityMessage = "No Gemini API key saved — add one in Setup or Personal Profile"
+            isLiveCapable = false
+            return
+        }
+        isCheckingCapability = true
+        scope.launch {
+            val outcome = restClient.checkLiveCapability(key)
+            isCheckingCapability = false
+            isLiveCapable = outcome.isCapable
+            capabilityMessage = outcome.message
+            io.github.ryoaonetsuki.mira.voice.LiveVoiceDiagnostics.updateLiveCapability(outcome.message)
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        runCapabilityCheck()
+    }
 
     var groqKeyInput by remember { mutableStateOf(securePrefs.getGroqApiKey() ?: "") }
     var isGroqKeyVisible by remember { mutableStateOf(false) }
@@ -150,6 +179,60 @@ fun VoiceEngineScreen(
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
+            // Live-Capability Check Card (spec §3.7)
+            item {
+                MiraCard(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "Live Voice Capability",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = palette.textPrimary,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(
+                                    if (isCheckingCapability) palette.surfaceVariant
+                                    else if (isLiveCapable) Color(0xFF10B981).copy(alpha = 0.2f)
+                                    else Color(0xFFF59E0B).copy(alpha = 0.2f)
+                                )
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Text(
+                                text = if (isCheckingCapability) "Checking..." else if (isLiveCapable) "Available" else "Not Supported",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isCheckingCapability) palette.textSecondary else if (isLiveCapable) Color(0xFF10B981) else Color(0xFFF59E0B)
+                            )
+                        }
+                    }
+                    if (capabilityMessage != null) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = capabilityMessage!!,
+                            fontSize = 12.sp,
+                            color = if (isLiveCapable) Color(0xFF10B981) else Color(0xFFF59E0B),
+                            lineHeight = 17.sp
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(10.dp))
+                    OutlinedButton(
+                        onClick = { runCapabilityCheck() },
+                        enabled = !isCheckingCapability,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(if (isCheckingCapability) "Checking with Google..." else "Check Key Capability")
+                    }
+                }
+            }
+
             item {
                 Text("Normal Mode — The Three Minds", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.primary)
             }
@@ -265,38 +348,70 @@ fun VoiceEngineScreen(
                 }
             }
 
-            // Server Voice (Groq)
+            // Alternative Voice Toggle (Server Voice) — Gated default OFF (spec §3.6)
+            item {
+                MiraCard(modifier = Modifier.fillMaxWidth()) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("Alternative voice (Server Voice)", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(palette.surfaceVariant)
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Text("Experimental", fontSize = 10.sp, color = palette.textSecondary, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text("Legacy streaming voice via Cloudflare Worker. Keep OFF for Native Gemini Live.", fontSize = 12.sp, color = palette.textSecondary)
+                        }
+                        MiraSwitch(
+                            checked = alternativeVoiceEnabled,
+                            onCheckedChange = { scope.launch { userPrefs.setAlternativeVoiceEnabled(it) } }
+                        )
+                    }
+                }
+            }
+
+            // Server Voice (Groq) — Gated behind alternativeVoiceEnabled
             item {
                 MiraCard(modifier = Modifier.fillMaxWidth()) {
                     Text("Server Voice (Groq)", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
                     Spacer(modifier = Modifier.height(4.dp))
-                    Text("Free at console.groq.com — no card, your own quota", fontSize = 12.sp, color = palette.textSecondary)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = groqKeyInput,
-                        onValueChange = {
-                            groqKeyInput = it
-                            if (it.isBlank()) {
-                                securePrefs.clearGroqApiKey()
-                            } else {
-                                securePrefs.setGroqApiKey(it.trim())
-                            }
-                        },
-                        placeholder = { Text("Groq API Key (starts with gsk_)") },
-                        visualTransformation = if (isGroqKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                        trailingIcon = {
-                            IconButton(onClick = { isGroqKeyVisible = !isGroqKeyVisible }) {
-                                Icon(
-                                    imageVector = if (isGroqKeyVisible) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
-                                    contentDescription = "Toggle Visibility",
-                                    tint = palette.textSecondary
-                                )
-                            }
-                        },
-                        singleLine = true,
-                        shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    if (!alternativeVoiceEnabled) {
+                        Text("Alternative voice is currently disabled. Mira uses Native Gemini Live directly as the primary voice engine without needing a Groq key.", fontSize = 12.sp, color = palette.textSecondary)
+                    } else {
+                        Text("Free at console.groq.com — no card, your own quota", fontSize = 12.sp, color = palette.textSecondary)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = groqKeyInput,
+                            onValueChange = {
+                                groqKeyInput = it
+                                if (it.isBlank()) {
+                                    securePrefs.clearGroqApiKey()
+                                } else {
+                                    securePrefs.setGroqApiKey(it.trim())
+                                }
+                            },
+                            placeholder = { Text("Groq API Key (starts with gsk_)") },
+                            visualTransformation = if (isGroqKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                            trailingIcon = {
+                                IconButton(onClick = { isGroqKeyVisible = !isGroqKeyVisible }) {
+                                    Icon(
+                                        imageVector = if (isGroqKeyVisible) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+                                        contentDescription = "Toggle Visibility",
+                                        tint = palette.textSecondary
+                                    )
+                                }
+                            },
+                            singleLine = true,
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
                 }
             }
 
@@ -407,15 +522,21 @@ fun VoiceEngineScreen(
                 }
             }
 
-            // Diagnostics & App Info
+            // Voice Diagnostics Card (spec §3.4)
             item {
                 MiraCard(modifier = Modifier.fillMaxWidth()) {
-                    Text("Session Diagnostics", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text("• Microphone Capture: 16,000 Hz Mono PCM16", fontSize = 12.sp, color = palette.textSecondary)
-                    Text("• Model Audio Playback: 24,000 Hz Mono PCM16", fontSize = 12.sp, color = palette.textSecondary)
-                    Text("• Protocol: Bidirectional WebSocket BidiGenerateContent", fontSize = 12.sp, color = palette.textSecondary)
-                    Text("• Active Model Ladder: 3.8-live → 2.5-flash → 3.1-flash", fontSize = 12.sp, color = palette.textSecondary)
+                    Text("Voice Diagnostics", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.primary)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("• Last Session Stage: ${diagnosticsData.lastStage}", fontSize = 12.sp, color = palette.textSecondary)
+                    Text("• WebSocket Status: ${diagnosticsData.lastWsCode?.let { "HTTP $it" } ?: "Not connected"}", fontSize = 12.sp, color = palette.textSecondary)
+                    Text("• Setup Duration: ${diagnosticsData.setupDurationMs?.let { "${it}ms" } ?: "N/A"}", fontSize = 12.sp, color = palette.textSecondary)
+                    Text("• Chunks Sent: ${diagnosticsData.chunksSent} (16kHz PCM16)", fontSize = 12.sp, color = palette.textSecondary)
+                    Text("• Chunks Received: ${diagnosticsData.chunksReceived} (24kHz PCM16)", fontSize = 12.sp, color = palette.textSecondary)
+                    Text("• Last Error: ${diagnosticsData.lastError ?: "None"}", fontSize = 12.sp, color = if (diagnosticsData.lastError != null) Color(0xFFEF4444) else palette.textSecondary)
+                    Text("• Key Live Capability: ${diagnosticsData.liveCapabilityResult}", fontSize = 12.sp, color = palette.textSecondary)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text("• Model: models/gemini-3.8-live (Direct Native WebSocket)", fontSize = 12.sp, color = palette.textSecondary)
+                    Text("• Audio: Full-duplex 16kHz capture, 24kHz playback", fontSize = 12.sp, color = palette.textSecondary)
                 }
             }
         }

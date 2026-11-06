@@ -15,6 +15,8 @@ class AudioRecorder(
     private var audioRecord: AudioRecord? = null
     private var recordingThread: Thread? = null
     private val isRecording = AtomicBoolean(false)
+    private val isLiveForwarding = AtomicBoolean(false)
+    private val preRollRing = PreRollRingBuffer()
     private var chunksRecorded: Long = 0L
     private var totalRecordedBytes: Long = 0L
 
@@ -81,9 +83,14 @@ class AudioRecorder(
                         val normalized = (rms / 32768.0).toFloat().coerceIn(0f, 1f)
                         onAmplitude(normalized)
 
-                        // Deliver audio chunk
+                        // Deliver audio chunk: always write to pre-roll ring buffer
                         val chunkCopy = buffer.copyOf(read)
-                        onAudioChunk(chunkCopy)
+                        preRollRing.write(chunkCopy)
+
+                        // Forward to live session if forwarding is enabled
+                        if (isLiveForwarding.get()) {
+                            onAudioChunk(chunkCopy)
+                        }
                     } else if (read < 0) {
                         val errorDetail = when (read) {
                             AudioRecord.ERROR_INVALID_OPERATION -> "ERROR_INVALID_OPERATION"
@@ -113,8 +120,29 @@ class AudioRecorder(
         }
     }
 
+    /**
+     * Drains the pre-roll ring buffer and atomically enables real-time chunk forwarding.
+     * Must be called upon setupComplete.
+     */
+    fun flushPreRoll(): List<ByteArray> {
+        val flushed = preRollRing.flush(PreRollRingBuffer.PRE_ROLL_MAX_AGE_MS)
+        isLiveForwarding.set(true)
+        return flushed
+    }
+
+    fun enableLiveForwarding(enabled: Boolean) {
+        isLiveForwarding.set(enabled)
+    }
+
+    fun resetPreRoll() {
+        preRollRing.clear()
+        isLiveForwarding.set(false)
+    }
+
     fun stopRecording() {
         isRecording.set(false)
+        isLiveForwarding.set(false)
+        preRollRing.clear()
         try {
             recordingThread?.interrupt()
             recordingThread = null

@@ -1,6 +1,21 @@
 package io.github.ryoaonetsuki.mira.ui.screens.settings
 
-import io.github.ryoaonetsuki.mira.ui.icons.Lucide
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Backup
+import androidx.compose.material.icons.rounded.Chat
+import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.rounded.Email
+import androidx.compose.material.icons.rounded.Face
+import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.GraphicEq
+import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Link
+import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.Security
+import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -37,19 +52,19 @@ fun SettingsHubScreen(
     val palette = LocalMiraPalette.current
 
     val rows = listOf(
-        SettingsHubRow("Mira & Persona", "Persona, assistant name, language, driving mode", Lucide.faceSlightlySmiling, Screen.SettingsMaya.route, "Assistant"),
-        SettingsHubRow("Personal Profile", "Your name, API key, music app & song", Lucide.user, Screen.SettingsPersonal.route, "Assistant"),
-        SettingsHubRow("Secret Settings", "Friendly vs Romantic tone with age confirmation", Lucide.heart, Screen.SettingsSecret.route, "Assistant"),
-        SettingsHubRow("Voice Engine", "Mind/Soul/Swift models, 30 voices, Deepgram key", Lucide.audioLines, Screen.SettingsVoice.route, "Voice"),
-        SettingsHubRow("Advanced & Security", "Themes, orb styles, Face Lock, SOS, Touch Guard", Lucide.shieldCheck, Screen.SettingsAdvanced.route, "System"),
-        SettingsHubRow("Connectors", "GitHub, Telegram, Notion, Spotify, Linear, Todoist", Lucide.link, Screen.SettingsConnectors.route, "Integrations"),
-        SettingsHubRow("Email", "Send-as address, signature, AI email composer", Lucide.mail, Screen.SettingsEmail.route, "Integrations"),
-        SettingsHubRow("Messages & WhatsApp", "Auto-reply template, Notification listener", Lucide.messageCircle, Screen.SettingsMessages.route, "Integrations"),
-        SettingsHubRow("Social Media", "Handle, caption voice, story ideas", Lucide.share2, Screen.SettingsSocial.route, "Integrations"),
-        SettingsHubRow("Optional Integrations", "Image provider, Maps key, Web search engines", Lucide.slidersHorizontal, Screen.SettingsOptional.route, "Integrations"),
-        SettingsHubRow("Skills", "Installed playbooks & tool capabilities", Lucide.sparkles, Screen.SettingsSkills.route, "System"),
-        SettingsHubRow("Backup & Restore", "Export & restore memories and chats via SAF", Lucide.cloudUpload, Screen.SettingsBackup.route, "System"),
-        SettingsHubRow("About Mira AI", "Version, developer info, open-source licenses", Lucide.info, Screen.About.route, "System")
+        SettingsHubRow("Mira & Persona", "Persona, assistant name, language, driving mode", Icons.Rounded.Face, Screen.SettingsMaya.route, "Assistant"),
+        SettingsHubRow("Personal Profile", "Your name, API key, music app & song", Icons.Rounded.Person, Screen.SettingsPersonal.route, "Assistant"),
+        SettingsHubRow("Secret Settings", "Friendly vs Romantic tone with age confirmation", Icons.Rounded.Favorite, Screen.SettingsSecret.route, "Assistant"),
+        SettingsHubRow("Voice Engine", "Mind/Soul/Swift models, 30 voices, Deepgram key", Icons.Rounded.GraphicEq, Screen.SettingsVoice.route, "Voice"),
+        SettingsHubRow("Advanced & Security", "Themes, orb styles, Face Lock, SOS, Touch Guard", Icons.Rounded.Security, Screen.SettingsAdvanced.route, "System"),
+        SettingsHubRow("Connectors", "GitHub, Telegram, Notion, Spotify, Linear, Todoist", Icons.Rounded.Link, Screen.SettingsConnectors.route, "Integrations"),
+        SettingsHubRow("Email", "Send-as address, signature, AI email composer", Icons.Rounded.Email, Screen.SettingsEmail.route, "Integrations"),
+        SettingsHubRow("Messages & WhatsApp", "Auto-reply template, Notification listener", Icons.Rounded.Chat, Screen.SettingsMessages.route, "Integrations"),
+        SettingsHubRow("Social Media", "Handle, caption voice, story ideas", Icons.Rounded.Share, Screen.SettingsSocial.route, "Integrations"),
+        SettingsHubRow("Optional Integrations", "Image provider, Maps key, Web search engines", Icons.Rounded.Tune, Screen.SettingsOptional.route, "Integrations"),
+        SettingsHubRow("Skills", "Installed playbooks & tool capabilities", Icons.Rounded.AutoAwesome, Screen.SettingsSkills.route, "System"),
+        SettingsHubRow("Backup & Restore", "Export & restore memories and chats via SAF", Icons.Rounded.Backup, Screen.SettingsBackup.route, "System"),
+        SettingsHubRow("About Mira AI", "Version, developer info, open-source licenses", Icons.Rounded.Info, Screen.About.route, "System")
     )
 
     Scaffold(
@@ -58,7 +73,7 @@ fun SettingsHubScreen(
                 title = { Text("Settings", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Lucide.arrowLeft, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -124,7 +139,7 @@ fun SettingsHubScreen(
                     }
 
                     Icon(
-                        imageVector = Lucide.chevronRight,
+                        imageVector = Icons.Rounded.ChevronRight,
                         contentDescription = null,
                         tint = palette.textSecondary
                     )

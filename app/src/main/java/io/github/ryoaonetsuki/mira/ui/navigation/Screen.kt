@@ -15,7 +15,7 @@ sealed class Screen(val route: String) {
     object Vibes : Screen("vibes")
     object Markets : Screen("markets")
     object Marketing : Screen("marketing")
-    object PcPhone : Screen("pc_phone")
+    object Licence : Screen("licence")
     object Extensions : Screen("extensions")
     object ImageGen : Screen("image_gen")
     object WebSearch : Screen("web_search")

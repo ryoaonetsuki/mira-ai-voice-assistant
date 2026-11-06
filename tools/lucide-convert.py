@@ -250,8 +250,8 @@ def convert_svg_to_vector_builder(svg_path: str, icon_name: str, prop_name: str)
     lines.append("            path(")
     lines.append("                stroke = SolidColor(Color.Black),")
     lines.append("                strokeLineWidth = 2f,")
-    lines.append("                strokeCap = StrokeCap.Round,")
-    lines.append("                strokeJoin = StrokeJoin.Round")
+    lines.append("                strokeLineCap = StrokeCap.Round,")
+    lines.append("                strokeLineJoin = StrokeJoin.Round")
     lines.append("            ) {")
 
     for elem in root:

@@ -23,6 +23,7 @@ import io.github.ryoaonetsuki.mira.data.local.entities.NotificationEntity
 import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
 import io.github.ryoaonetsuki.mira.data.preferences.UserPreferences
 import io.github.ryoaonetsuki.mira.network.ConnectorIntentHandler
+import io.github.ryoaonetsuki.mira.network.FreeWebSearch
 import io.github.ryoaonetsuki.mira.network.GeminiRestClient
 import io.github.ryoaonetsuki.mira.network.GeminiTtsClient
 import io.github.ryoaonetsuki.mira.network.MiraChatSearchHeuristic

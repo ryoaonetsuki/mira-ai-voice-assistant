@@ -47,15 +47,26 @@ class SecurePreferences(context: Context) {
         return true
     }
 
-    fun getDeepgramKey(): String? {
+    fun getGroqApiKey(): String? {
         val sp = sharedPreferences ?: return null
-        val key = sp.getString(KEY_DEEPGRAM_KEY, null)
+        val key = sp.getString(KEY_GROQ_API_KEY, null)
         return if (!key.isNullOrBlank()) key.trim() else null
     }
 
-    fun setDeepgramKey(key: String): Boolean {
+    fun setGroqApiKey(key: String): Boolean {
         val sp = sharedPreferences ?: return false
-        sp.edit().putString(KEY_DEEPGRAM_KEY, key.trim()).apply()
+        val trimmed = key.trim()
+        if (trimmed.isBlank()) {
+            return clearGroqApiKey()
+        }
+        sp.edit().putString(KEY_GROQ_API_KEY, trimmed).apply()
+        Log.d(TAG, "Groq API key saved (length=${trimmed.length})")
+        return true
+    }
+
+    fun clearGroqApiKey(): Boolean {
+        val sp = sharedPreferences ?: return false
+        sp.edit().remove(KEY_GROQ_API_KEY).apply()
         return true
     }
 
@@ -185,12 +196,21 @@ class SecurePreferences(context: Context) {
         private const val TAG = "SecurePreferences"
         private const val PREFS_FILENAME = "mira_encrypted_prefs"
         private const val KEY_GEMINI_API_KEY = "gemini_api_key"
-        private const val KEY_DEEPGRAM_KEY = "deepgram_key"
+        private const val KEY_GROQ_API_KEY = "groq_api_key"
         private const val KEY_PIN_CODE = "pin_code"
         private const val KEY_TELEGRAM_CHAT_ID = "telegram_chat_id"
         private const val KEY_FACE_LOCK = "face_lock_enabled"
         private const val KEY_FACE_NAME = "enrolled_face_name"
         private const val KEY_LICENCE_KEY = "licence_key"
         private const val KEY_CACHED_REMOTE_CONFIG = "cached_remote_config"
+
+        /**
+         * Checks whether a raw Groq API key looks plausible.
+         * Valid Groq keys start with 'gsk_' and have length >= 20.
+         */
+        fun isPlausibleGroqKey(raw: String): Boolean {
+            val trimmed = raw.trim()
+            return trimmed.startsWith("gsk_") && trimmed.length >= 20
+        }
     }
 }

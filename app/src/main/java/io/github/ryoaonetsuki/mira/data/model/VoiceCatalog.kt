@@ -46,8 +46,8 @@ object VoiceCatalog {
     val allVoices: List<VoiceInfo> = femaleVoices + maleVoices
 
     val supportedLanguages = listOf(
-        "English (US / Global)",
         "Bangla (Bengali)",
+        "English (US / Global)",
         "Hindi",
         "Urdu",
         "Arabic",

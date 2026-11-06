@@ -13,6 +13,7 @@ sealed class LiveAuthMode(val label: String) {
     data class Ephemeral(val token: String) : LiveAuthMode("ephemeral")
     data class DirectKey(val key: String) : LiveAuthMode("direct")
     data class Relay(val key: String, val relayUrl: String) : LiveAuthMode("relay")
+    data class CloudflareRelay(val key: String, val workerUrl: String) : LiveAuthMode("cf-relay")
 }
 
 class GeminiLiveClient(
@@ -24,6 +25,8 @@ class GeminiLiveClient(
     private val ephemeralToken: String? = null,
     val relayUrl: String? = null,
     val anonKey: String? = null,
+    val cfRelayUrl: String? = null,
+    val storedResumptionHandle: String? = null,
     val authModes: List<LiveAuthMode> = if (!ephemeralToken.isNullOrBlank()) {
         listOf(LiveAuthMode.Ephemeral(ephemeralToken))
     } else if (apiKey.isNotBlank()) {
@@ -44,9 +47,15 @@ class GeminiLiveClient(
         fun onStalled()
         fun onError(message: String)
         fun onClosed(reason: String)
+        fun onSessionResumptionUpdate(newHandle: String) {}
     }
 
-    // OkHttp client: 60s connect & write, 0 read, 20s ping (exact match with Maya Z50)
+    private sealed class HeldFrame(val timestampMs: Long, val byteSize: Int) {
+        class Audio(val bytes: ByteArray, timestampMs: Long) : HeldFrame(timestampMs, bytes.size)
+        class Text(val text: String, timestampMs: Long) : HeldFrame(timestampMs, text.toByteArray(Charsets.UTF_8).size)
+    }
+
+    // OkHttp client: 60s connect & write, 0 read, 20s ping
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(60, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
@@ -58,6 +67,11 @@ class GeminiLiveClient(
     private var webSocket: WebSocket? = null
     private val isSetupComplete = AtomicBoolean(false)
     private val isRunning = AtomicBoolean(false)
+
+    // Pre-setup held queue (capped at 128,000 bytes)
+    private val heldQueueLock = Any()
+    private val heldQueue = ArrayDeque<HeldFrame>()
+    private var heldQueueBytes = 0
 
     // Handshake fallback model ladder.
     private val sanitizedInitialModel = if (
@@ -160,6 +174,7 @@ class GeminiLiveClient(
             }
             isRunning.set(true)
             isSetupComplete.set(false)
+            clearHeldQueueLocked()
             sessionStartTimestampMs = System.currentTimeMillis()
             currentModeIndex = 0
             currentVariant = 0
@@ -234,13 +249,25 @@ class GeminiLiveClient(
             }
             is LiveAuthMode.Relay -> {
                 val targetUrl = currentMode.relayUrl.ifBlank { relayUrl ?: "" }
-                Log.i(TAG, "Connecting to Gemini Live WS [mode: ${currentMode.label}, variant V$currentVariant/$maxVariantsForMode] via relay ($targetUrl), model: $model")
-                val reqBuilder = Request.Builder().url(targetUrl)
+                Log.i(TAG, "Connecting to Gemini Live WS [mode: ${currentMode.label}, variant V$currentVariant/$maxVariantsForMode] via Supabase relay ($targetUrl), model: $model")
+                val wsUrl = toWebSocketUrl(targetUrl)
+                val reqBuilder = Request.Builder().url(wsUrl)
                 if (!anonKey.isNullOrBlank()) {
                     reqBuilder.header("apikey", anonKey)
                     reqBuilder.header("Authorization", "Bearer $anonKey")
                 }
                 val key = currentMode.key.ifBlank { apiKey }
+                reqBuilder.header("x-mira-key", key)
+                reqBuilder.build()
+            }
+            is LiveAuthMode.CloudflareRelay -> {
+                val targetUrl = currentMode.workerUrl.ifBlank {
+                    cfRelayUrl ?: try { io.github.ryoaonetsuki.mira.BuildConfig.CLOUDFLARE_RELAY_URL } catch (_: Throwable) { "" }
+                }
+                Log.i(TAG, "Connecting to Gemini Live WS [mode: ${currentMode.label}, variant V$currentVariant/$maxVariantsForMode] via Cloudflare relay ($targetUrl), model: $model")
+                val wsUrl = toWebSocketUrl(targetUrl)
+                val key = currentMode.key.ifBlank { apiKey }
+                val reqBuilder = Request.Builder().url(wsUrl)
                 reqBuilder.header("x-mira-key", key)
                 reqBuilder.build()
             }
@@ -312,6 +339,14 @@ class GeminiLiveClient(
         })
     }
 
+    private fun toWebSocketUrl(rawUrl: String): String {
+        return when {
+            rawUrl.startsWith("http://", ignoreCase = true) -> "ws://" + rawUrl.substring(7)
+            rawUrl.startsWith("https://", ignoreCase = true) -> "wss://" + rawUrl.substring(8)
+            else -> rawUrl
+        }
+    }
+
     /**
      * Single decision point for WebSocket termination (onClosed / onFailure).
      * Drives auth-mode ladder and config-varied setup retries.
@@ -331,6 +366,9 @@ class GeminiLiveClient(
             webSocket = null
             cancelSetupTimeout()
             stopStallWatchdog()
+
+            // Clear held queue on mode advance / socket termination to prevent stale replay
+            clearHeldQueueLocked()
 
             // If session was stopped by the user, clean exit with no spurious error
             if (!isRunning.get()) {
@@ -395,8 +433,7 @@ class GeminiLiveClient(
 
     /**
      * Starts a 45-second timeout. If setupComplete does not arrive within this window,
-     * aborts the socket via ws.cancel(). The decision point in handleSocketTermination
-     * will advance to the next setup variant.
+     * aborts the socket via ws.cancel().
      */
     private fun startSetupTimeout(ws: WebSocket) {
         cancelSetupTimeout()
@@ -407,7 +444,6 @@ class GeminiLiveClient(
                     if (ws === webSocket && !isSetupComplete.get() && isRunning.get()) {
                         Log.w(TAG, "Setup timeout after ${SETUP_TIMEOUT_MS / 1000}s in mode '$activeModeLabel' variant V$currentVariant — cancelling socket for retry")
                         lastFailureReason = "no setupComplete in ${SETUP_TIMEOUT_MS / 1000}s"
-                        // Socket cancel aborts socket and triggers onFailure
                         ws.cancel()
                     }
                 }
@@ -423,11 +459,7 @@ class GeminiLiveClient(
     }
 
     /**
-     * Starts the post-setup stall watchdog daemon thread.
-     * Checks every 5s: if the user has sent audio after the last server message
-     * (lastUserAudioSentMs > lastServerMessageMs) and no server message has arrived for >30s,
-     * treats it as a STALL: logs a warning and calls onStalled() exactly once per stall episode.
-     * If silence continues past 8 minutes, sets lastFailureReason and cancels the socket.
+     * Post-setup stall watchdog daemon thread.
      */
     private fun startStallWatchdog(ws: WebSocket) {
         stopStallWatchdog()
@@ -471,10 +503,10 @@ class GeminiLiveClient(
     }
 
     /**
-     * Builds and sends the setup message according to attempt variant:
-     * - Attempt 1 (V1): Maya OP0 EXACT
-     * - Attempt 2 (V2): Maya C2265b60 FULL
-     * - Attempt 3 (V3): V1 + speechConfig.languageCode
+     * Builds and sends setup message:
+     * - V1: minimal
+     * - V2: full with automaticActivityDetection
+     * - V3: V1 + speechConfig.languageCode
      */
     private fun sendSetupMessage(ws: WebSocket, model: String, attemptVariant: Int) {
         try {
@@ -495,7 +527,6 @@ class GeminiLiveClient(
             speechConfig.put("voiceConfig", voiceConfig)
 
             if (attemptVariant == 3) {
-                // V3: V1 + speechConfig.languageCode
                 val bcp47 = mapLanguageToBcp47(language)
                 speechConfig.put("languageCode", bcp47)
             }
@@ -508,10 +539,15 @@ class GeminiLiveClient(
             setupDetails.put("inputAudioTranscription", JSONObject())
 
             // sessionResumption and contextWindowCompression in all setup variants (V1, V2, V3)
-            setupDetails.put("sessionResumption", JSONObject())
+            val resumptionObj = JSONObject()
+            if (!storedResumptionHandle.isNullOrBlank()) {
+                resumptionObj.put("handle", storedResumptionHandle)
+                Log.i(TAG, "Replaying sessionResumption handle in setup (length=${storedResumptionHandle.length})")
+            }
+            setupDetails.put("sessionResumption", resumptionObj)
             setupDetails.put("contextWindowCompression", JSONObject().put("slidingWindow", JSONObject()))
 
-            // System instructions (all variants)
+            // System instructions
             if (systemPrompt.isNotBlank()) {
                 val sysInstruction = JSONObject()
                 val parts = JSONArray()
@@ -589,6 +625,17 @@ class GeminiLiveClient(
                 return
             }
 
+            // Capture session resumption handle update if sent by server
+            val resumptionUpdate = json.optJSONObject("sessionResumptionUpdate")
+                ?: json.optJSONObject("serverContent")?.optJSONObject("sessionResumptionUpdate")
+            if (resumptionUpdate != null && resumptionUpdate.has("newHandle")) {
+                val newHandle = resumptionUpdate.optString("newHandle", "")
+                if (newHandle.isNotBlank()) {
+                    Log.i(TAG, "Captured sessionResumptionUpdate.newHandle (length=${newHandle.length})")
+                    listener.onSessionResumptionUpdate(newHandle)
+                }
+            }
+
             // 1. Setup complete check
             if (json.has("setupComplete")) {
                 val elapsedMs = if (setupSentTimestampMs > 0L) System.currentTimeMillis() - setupSentTimestampMs else -1L
@@ -601,6 +648,10 @@ class GeminiLiveClient(
                 lastServerMessageMs = System.currentTimeMillis()
                 lastFailureReason = null
                 startStallWatchdog(ws)
+
+                // Flush pre-setup held queue in order before new live audio
+                flushHeldQueueLocked()
+
                 listener.onSetupComplete()
                 return
             }
@@ -703,11 +754,28 @@ class GeminiLiveClient(
 
     /**
      * Sends microphone PCM16 audio (16kHz mono) to Gemini Live.
-     * Audio is ONLY sent after setupComplete is received.
+     * If setup is not complete yet, queues up to HELD_QUEUE_CAP_BYTES.
      */
     fun sendAudioChunk(pcmBytes: ByteArray) {
-        if (!isSetupComplete.get() || webSocket == null) return
+        if (!isSetupComplete.get() || webSocket == null) {
+            if (isRunning.get()) {
+                synchronized(heldQueueLock) {
+                    val now = System.currentTimeMillis()
+                    val chunkCopy = pcmBytes.copyOf()
+                    heldQueue.addLast(HeldFrame.Audio(chunkCopy, now))
+                    heldQueueBytes += chunkCopy.size
+                    while (heldQueueBytes > HELD_QUEUE_CAP_BYTES && heldQueue.isNotEmpty()) {
+                        val dropped = heldQueue.removeFirst()
+                        heldQueueBytes -= dropped.byteSize
+                    }
+                }
+            }
+            return
+        }
+        sendAudioChunkDirect(pcmBytes)
+    }
 
+    private fun sendAudioChunkDirect(pcmBytes: ByteArray) {
         try {
             val base64Data = Base64.encodeToString(pcmBytes, Base64.NO_WRAP)
             val root = JSONObject()
@@ -736,9 +804,28 @@ class GeminiLiveClient(
 
     /**
      * Sends a client text turn to Gemini Live using clientContent.
+     * If setup is not complete yet, queues up to HELD_QUEUE_CAP_BYTES.
      */
     fun sendTextMessage(text: String) {
-        if (!isSetupComplete.get() || webSocket == null) return
+        if (!isSetupComplete.get() || webSocket == null) {
+            if (isRunning.get()) {
+                synchronized(heldQueueLock) {
+                    val now = System.currentTimeMillis()
+                    val bytes = text.toByteArray(Charsets.UTF_8)
+                    heldQueue.addLast(HeldFrame.Text(text, now))
+                    heldQueueBytes += bytes.size
+                    while (heldQueueBytes > HELD_QUEUE_CAP_BYTES && heldQueue.isNotEmpty()) {
+                        val dropped = heldQueue.removeFirst()
+                        heldQueueBytes -= dropped.byteSize
+                    }
+                }
+            }
+            return
+        }
+        sendTextMessageDirect(text)
+    }
+
+    private fun sendTextMessageDirect(text: String) {
         try {
             val root = JSONObject()
             val clientContent = JSONObject()
@@ -761,6 +848,44 @@ class GeminiLiveClient(
         }
     }
 
+    private fun flushHeldQueueLocked() {
+        val now = System.currentTimeMillis()
+        val minTimestamp = now - 20_000L
+        val framesToFlush = mutableListOf<HeldFrame>()
+        var flushedBytes = 0
+        var discardedCount = 0
+
+        synchronized(heldQueueLock) {
+            while (heldQueue.isNotEmpty()) {
+                val frame = heldQueue.removeFirst()
+                if (frame.timestampMs >= minTimestamp) {
+                    framesToFlush.add(frame)
+                    flushedBytes += frame.byteSize
+                } else {
+                    discardedCount++
+                }
+            }
+            heldQueueBytes = 0
+        }
+
+        if (framesToFlush.isNotEmpty() || discardedCount > 0) {
+            Log.i(TAG, "Flushing pre-setup held-queue: depth=${framesToFlush.size} frames, bytes=$flushedBytes, discarded=$discardedCount")
+            for (frame in framesToFlush) {
+                when (frame) {
+                    is HeldFrame.Audio -> sendAudioChunkDirect(frame.bytes)
+                    is HeldFrame.Text -> sendTextMessageDirect(frame.text)
+                }
+            }
+        }
+    }
+
+    private fun clearHeldQueueLocked() {
+        synchronized(heldQueueLock) {
+            heldQueue.clear()
+            heldQueueBytes = 0
+        }
+    }
+
     fun isSessionReady(): Boolean = isRunning.get() && isSetupComplete.get() && webSocket != null
 
     fun endSession() {
@@ -777,6 +902,7 @@ class GeminiLiveClient(
         Log.i(TAG, "Live session ended by user stop (sent $sentChunks chunks / $sentBytes bytes, received $recvChunks chunks / $recvBytes bytes)")
         isRunning.set(false)
         isSetupComplete.set(false)
+        clearHeldQueueLocked()
         cancelSetupTimeout()
         stopStallWatchdog()
         lastFailureReason = null
@@ -790,6 +916,7 @@ class GeminiLiveClient(
 
     companion object {
         private const val TAG = "MiraLive"
+        const val HELD_QUEUE_CAP_BYTES = 128_000
 
         fun mapLanguageToBcp47(lang: String): String {
             val l = lang.lowercase()

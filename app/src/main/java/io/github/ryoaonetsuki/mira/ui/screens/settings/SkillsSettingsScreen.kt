@@ -31,16 +31,18 @@ data class MiraSkill(
 fun SkillsSettingsScreen(
     onBack: () -> Unit
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val palette = LocalMiraPalette.current
+    val skillPrefs = remember { context.getSharedPreferences("mira_skills_prefs", android.content.Context.MODE_PRIVATE) }
 
     val skills = remember {
         mutableStateListOf(
-            MiraSkill("web_search", "Web Search Playbook", "Gathers fresh info and web citations from the live internet", Icons.Rounded.Search, true),
-            MiraSkill("coding", "Full-Stack Code Agent", "Builds interactive web apps and scripts in app storage", Icons.Rounded.Code, true),
-            MiraSkill("memory", "Long-Term Memory Keeper", "Extracts durable personal facts and routines from voice dialogues", Icons.Rounded.AutoAwesome, true),
-            MiraSkill("marketing", "Business Post Creator", "Generates high-converting marketing copy and captions", Icons.Rounded.Campaign, true),
-            MiraSkill("finance", "Market Watcher", "Fetches live ticker quotes and crypto data via Yahoo Finance", Icons.Rounded.TrendingUp, true),
-            MiraSkill("macros", "Android Device Macros", "Executes phone calls, WhatsApp messages, and maps navigation", Icons.Rounded.PhoneAndroid, true)
+            MiraSkill("web_search", "Web Search Playbook", "Gathers fresh info and web citations from the live internet", Icons.Rounded.Search, skillPrefs.getBoolean("skill_web_search", true)),
+            MiraSkill("coding", "Full-Stack Code Agent", "Builds interactive web apps and scripts in app storage", Icons.Rounded.Code, skillPrefs.getBoolean("skill_coding", true)),
+            MiraSkill("memory", "Long-Term Memory Keeper", "Extracts durable personal facts and routines from voice dialogues", Icons.Rounded.AutoAwesome, skillPrefs.getBoolean("skill_memory", true)),
+            MiraSkill("marketing", "Business Post Creator", "Generates high-converting marketing copy and captions", Icons.Rounded.Campaign, skillPrefs.getBoolean("skill_marketing", true)),
+            MiraSkill("finance", "Market Watcher", "Fetches live ticker quotes and crypto data via Yahoo Finance", Icons.Rounded.TrendingUp, skillPrefs.getBoolean("skill_finance", true)),
+            MiraSkill("macros", "Android Device Macros", "Executes phone calls, WhatsApp messages, and maps navigation", Icons.Rounded.PhoneAndroid, skillPrefs.getBoolean("skill_macros", true))
         )
     }
 
@@ -65,7 +67,7 @@ fun SkillsSettingsScreen(
                 .padding(horizontal = 16.dp)
         ) {
             Text(
-                text = "Skills extend Mira's reasoning and tool-calling capabilities. Enabled skills are active in conversation context.",
+                text = "Skills extend Mira's analytical and tool-calling capabilities. Enabled skills are active in conversation context.",
                 fontSize = 13.sp,
                 color = palette.textSecondary
             )
@@ -105,6 +107,7 @@ fun SkillsSettingsScreen(
                                     val idx = skills.indexOfFirst { it.id == skill.id }
                                     if (idx != -1) {
                                         skills[idx] = skills[idx].copy(isEnabled = checked)
+                                        skillPrefs.edit().putBoolean("skill_${skill.id}", checked).apply()
                                     }
                                 }
                             )

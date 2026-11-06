@@ -31,6 +31,7 @@ import io.github.ryoaonetsuki.mira.data.model.LiveVoiceModel
 import io.github.ryoaonetsuki.mira.data.model.VoiceCatalog
 import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
 import io.github.ryoaonetsuki.mira.data.preferences.UserPreferences
+import io.github.ryoaonetsuki.mira.network.GeminiRestClient
 import io.github.ryoaonetsuki.mira.network.GeminiTtsClient
 import io.github.ryoaonetsuki.mira.ui.components.MiraButton
 import io.github.ryoaonetsuki.mira.ui.components.MiraCard

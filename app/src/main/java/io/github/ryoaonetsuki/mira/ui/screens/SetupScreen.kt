@@ -1,6 +1,16 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
-import io.github.ryoaonetsuki.mira.ui.icons.Lucide
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Accessibility
+import androidx.compose.material.icons.rounded.Apps
+import androidx.compose.material.icons.rounded.BatteryChargingFull
+import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.Layers
+import androidx.compose.material.icons.rounded.MarkChatUnread
+import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material.icons.rounded.Notifications
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.VisibilityOff
 import android.Manifest
 import android.content.Context
 import android.content.Intent
@@ -211,7 +221,7 @@ fun SetupScreen(
                 trailingIcon = {
                     IconButton(onClick = { isKeyVisible = !isKeyVisible }) {
                         Icon(
-                            imageVector = if (isKeyVisible) Lucide.eyeOff else Lucide.eye,
+                            imageVector = if (isKeyVisible) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
                             contentDescription = "Toggle Visibility",
                             tint = palette.textSecondary
                         )
@@ -413,7 +423,7 @@ fun SetupScreen(
                     PermissionRow(
                         title = "Microphone (Required)",
                         subtitle = "Required to speak to Mira in real-time",
-                        icon = Lucide.mic,
+                        icon = Icons.Rounded.Mic,
                         isGranted = hasMicPermission,
                         isRequired = true,
                         onClick = {
@@ -427,7 +437,7 @@ fun SetupScreen(
                     PermissionRow(
                         title = "Battery: Unrestricted (Required)",
                         subtitle = "Prevents Android from killing Mira's voice in the background",
-                        icon = Lucide.batteryCharging,
+                        icon = Icons.Rounded.BatteryChargingFull,
                         isGranted = isBatteryIgnoringOptimizations,
                         isRequired = true,
                         onClick = {
@@ -449,7 +459,7 @@ fun SetupScreen(
                     PermissionRow(
                         title = "File Management (Required)",
                         subtitle = "Mira needs file access to save websites, code and files you ask her to build",
-                        icon = Lucide.folder,
+                        icon = Icons.Rounded.Folder,
                         isGranted = hasFileAccess,
                         isRequired = true,
                         onClick = {
@@ -471,7 +481,7 @@ fun SetupScreen(
                     PermissionRow(
                         title = "Notifications",
                         subtitle = "Display foreground session and background updates",
-                        icon = Lucide.bell,
+                        icon = Icons.Rounded.Notifications,
                         isGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
                         } else true,
@@ -488,7 +498,7 @@ fun SetupScreen(
                     PermissionRow(
                         title = "Notification Access (WhatsApp)",
                         subtitle = "Allows reading WhatsApp messages for auto-reply",
-                        icon = Lucide.messageSquareDot,
+                        icon = Icons.Rounded.MarkChatUnread,
                         isGranted = false,
                         onClick = {
                             val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
@@ -502,7 +512,7 @@ fun SetupScreen(
                     PermissionRow(
                         title = "Accessibility Service (Macros)",
                         subtitle = "Allows Mira to operate the screen for WhatsApp and YouTube macros",
-                        icon = Lucide.accessibility,
+                        icon = Icons.Rounded.Accessibility,
                         isGranted = isAccessibilityEnabled,
                         onClick = {
                             val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
@@ -516,7 +526,7 @@ fun SetupScreen(
                     PermissionRow(
                         title = "Display Over Other Apps",
                         subtitle = "Allows floating orb over apps and home screen",
-                        icon = Lucide.layers,
+                        icon = Icons.Rounded.Layers,
                         isGranted = Settings.canDrawOverlays(context),
                         onClick = {
                             val intent = Intent(
@@ -533,7 +543,7 @@ fun SetupScreen(
                     PermissionRow(
                         title = "Standard Integrations",
                         subtitle = "Camera, Contacts, Phone calls, SMS, Location",
-                        icon = Lucide.layoutGrid,
+                        icon = Icons.Rounded.Apps,
                         isGranted = false,
                         onClick = {
                             val perms = mutableListOf(

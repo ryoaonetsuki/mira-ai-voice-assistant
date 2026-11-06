@@ -105,10 +105,8 @@ class GeminiLiveClient(
     private var setupTimeoutJob: Job? = null
     private var stallWatchdogJob: Job? = null
 
-    val isSessionReady: Boolean
-        get() = _state.value == LiveClientState.LISTENING || _state.value == LiveClientState.SPEAKING
-
-    fun isSessionReady(): Boolean = isSessionReady
+    fun isSessionReady(): Boolean =
+        _state.value == LiveClientState.LISTENING || _state.value == LiveClientState.SPEAKING
 
     fun startSession() {
         val normalizedKey = normalizeApiKey(apiKey)

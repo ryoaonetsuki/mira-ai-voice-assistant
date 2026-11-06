@@ -83,9 +83,6 @@ class GeminiLiveClient(
     val audioChunksSent: Long get() = audioChunksSentCount.get()
     val audioChunksReceived: Long get() = incomingAudioChunksCount.get()
 
-    fun getAudioChunksSent(): Long = audioChunksSentCount.get()
-    fun getAudioChunksReceived(): Long = incomingAudioChunksCount.get()
-
     // Setup timeout: 25 seconds to receive setupComplete after sending setup
     private val SETUP_TIMEOUT_MS = 25_000L
     private var setupTimeoutThread: Thread? = null

@@ -31,11 +31,12 @@ class GeminiLiveClient(
         fun onClosed(reason: String)
     }
 
-    // OkHttp defaults, no pingInterval (aligned with Maya & official docs)
+    // OkHttp client: 60s connect & write, 0 read, 20s ping (exact match with Maya Z50)
     private val client: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
+        .connectTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(60, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS) // infinite for WS
-        .writeTimeout(15, TimeUnit.SECONDS)
+        .pingInterval(20, TimeUnit.SECONDS)
         .build()
 
     private val lock = Any()
@@ -305,9 +306,9 @@ class GeminiLiveClient(
 
     /**
      * Builds and sends the setup message according to attempt variant:
-     * - Attempt 1 (V1): Full setup WITH googleSearch tool (bn-BD languageCode + transcriptions + tools[googleSearch])
-     * - Attempt 2 (V2): Full setup WITHOUT the tool (bn-BD languageCode + transcriptions, NO tools)
-     * - Attempt 3 (V3): Minimal setup (no languageCode, no transcriptions, no tools)
+     * - Attempt 1 (V1): Maya OP0 EXACT
+     * - Attempt 2 (V2): Maya C2265b60 FULL
+     * - Attempt 3 (V3): V1 + speechConfig.languageCode
      */
     private fun sendSetupMessage(ws: WebSocket, model: String, attemptVariant: Int) {
         try {
@@ -327,17 +328,19 @@ class GeminiLiveClient(
             voiceConfig.put("prebuiltVoiceConfig", prebuiltVoiceConfig)
             speechConfig.put("voiceConfig", voiceConfig)
 
-            if (attemptVariant == 1 || attemptVariant == 2) {
-                // Attempt 1 & 2: Full setup includes languageCode
+            if (attemptVariant == 3) {
+                // V3: V1 + speechConfig.languageCode
                 val bcp47 = mapLanguageToBcp47(language)
                 speechConfig.put("languageCode", bcp47)
             }
-            // Attempt 3: MINIMAL setup — NO languageCode in speechConfig
 
             genConfig.put("speechConfig", speechConfig)
             setupDetails.put("generationConfig", genConfig)
 
-            // System instructions
+            // V1, V2, V3 all have outputAudioTranscription: {}
+            setupDetails.put("outputAudioTranscription", JSONObject())
+
+            // System instructions (all variants)
             if (systemPrompt.isNotBlank()) {
                 val sysInstruction = JSONObject()
                 val parts = JSONArray()
@@ -348,20 +351,21 @@ class GeminiLiveClient(
                 setupDetails.put("systemInstruction", sysInstruction)
             }
 
-            if (attemptVariant == 1 || attemptVariant == 2) {
-                // Attempt 1 & 2: Full setup includes audio transcription requests
+            if (attemptVariant == 2) {
+                // V2 = Maya C2265b60 FULL: V1 + inputAudioTranscription:{},
+                // sessionResumption:{}, contextWindowCompression:{slidingWindow:{}},
+                // realtimeInputConfig{automaticActivityDetection:{endOfSpeechSensitivity:"END_SENSITIVITY_HIGH", silenceDurationMs:800}}
                 setupDetails.put("inputAudioTranscription", JSONObject())
-                setupDetails.put("outputAudioTranscription", JSONObject())
-            }
-            // Attempt 3: MINIMAL setup — NO transcriptions
+                setupDetails.put("sessionResumption", JSONObject())
+                setupDetails.put("contextWindowCompression", JSONObject().put("slidingWindow", JSONObject()))
 
-            if (attemptVariant == 1) {
-                // V1: full setup WITH googleSearch tool
-                val tools = JSONArray().put(JSONObject().put("googleSearch", JSONObject()))
-                setupDetails.put("tools", tools)
+                val realtimeInputConfig = JSONObject()
+                val autoDetect = JSONObject()
+                autoDetect.put("endOfSpeechSensitivity", "END_SENSITIVITY_HIGH")
+                autoDetect.put("silenceDurationMs", 800)
+                realtimeInputConfig.put("automaticActivityDetection", autoDetect)
+                setupDetails.put("realtimeInputConfig", realtimeInputConfig)
             }
-            // V2: full setup WITHOUT the tool
-            // V3: minimal setup (no languageCode, no transcriptions, no tools)
 
             setupObj.put("setup", setupDetails)
             val jsonString = setupObj.toString()
@@ -371,10 +375,27 @@ class GeminiLiveClient(
             setupSendSuccess = ws.send(jsonString)
             setupWasSent = true
 
-            Log.i(TAG, "Sent setup variant $attemptVariant (V$attemptVariant) ($setupBytesSent bytes, sent=$setupSendSuccess)")
+            val variantLabel = when (attemptVariant) {
+                1 -> "V1 Maya-minimal"
+                2 -> "V2 Maya-full"
+                3 -> "V3 +language"
+                else -> "V$attemptVariant"
+            }
+            Log.i(TAG, "Sent setup variant $attemptVariant ($variantLabel) ($setupBytesSent bytes, sent=$setupSendSuccess)")
+            logSetupJsonChunks(jsonString)
         } catch (e: Exception) {
             Log.e(TAG, "Error building setup payload: ${e.message}", e)
             listener.onError("Failed to build setup message: ${e.message}")
+        }
+    }
+
+    private fun logSetupJsonChunks(json: String) {
+        val maxLogLen = 2000
+        var i = 0
+        while (i < json.length) {
+            val end = minOf(i + maxLogLen, json.length)
+            Log.i(TAG, "Setup JSON [${i}..${end}]: ${json.substring(i, end)}")
+            i = end
         }
     }
 
@@ -404,8 +425,8 @@ class GeminiLiveClient(
             if (json.has("setupComplete")) {
                 val elapsedMs = if (setupSentTimestampMs > 0L) System.currentTimeMillis() - setupSentTimestampMs else -1L
                 Log.i(TAG, ">>> SETUP COMPLETE received from Gemini Live on attempt $setupAttempt in ${elapsedMs}ms! Starting audio transmission.")
-                if (setupAttempt == 2 && v1FailureReason != null) {
-                    Log.i(TAG, ">>> Setup succeeded on V2 without tool — googleSearch tool in V1 was the likely rejection cause: $v1FailureReason")
+                if (setupAttempt > 1 && v1FailureReason != null) {
+                    Log.i(TAG, ">>> Setup succeeded on variant $setupAttempt (V1 failed: $v1FailureReason)")
                 }
                 cancelSetupTimeout()
                 isSetupComplete.set(true)
@@ -501,16 +522,9 @@ class GeminiLiveClient(
         val closeStr = "close ${wsCloseOrFailure ?: "-"}"
         val statsStr = "uplink=${audioChunksSentCount.get()} chunks (${audioBytesSentCount.get()}B), downlink=${incomingAudioChunksCount.get()} chunks (${incomingAudioBytesCount.get()}B)"
         val toolDiagnostic = if (v1FailureReason != null) {
-            val toolMentioned = (serverErrorFrame?.contains("tool", ignoreCase = true) == true) ||
-                    (v1FailureReason?.contains("tool", ignoreCase = true) == true) ||
-                    (serverErrorFrame?.contains("googleSearch", ignoreCase = true) == true)
-            if (toolMentioned) {
-                "; V1 googleSearch tool was rejected by server; V2 retried without tool"
-            } else {
-                "; V1 with googleSearch tool failed ($v1FailureReason); V2 retried without tool"
-            }
+            "; V1 failed ($v1FailureReason); retried with subsequent variants"
         } else ""
-        return "Live setup failed: $reason ($wsCodeStr, $setupStr, $errorFrameStr, $closeStr, $statsStr$toolDiagnostic) — tried $attemptsCount setup variants (V1 tool, V2 no-tool, V3 minimal)"
+        return "Live setup failed: $reason ($wsCodeStr, $setupStr, $errorFrameStr, $closeStr, $statsStr$toolDiagnostic) — tried $attemptsCount setup variants (V1 Maya-minimal, V2 Maya-full, V3 +language)"
     }
 
     /**
@@ -571,6 +585,8 @@ class GeminiLiveClient(
             Log.e(TAG, "Error sending text message: ${e.message}")
         }
     }
+
+    fun isSessionReady(): Boolean = isRunning.get() && isSetupComplete.get() && webSocket != null
 
     fun endSession() {
         synchronized(lock) {

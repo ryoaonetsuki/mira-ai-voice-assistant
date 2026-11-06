@@ -1,66 +1,62 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
-import android.webkit.WebView
-import android.webkit.WebViewClient
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.*
+import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.Html
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
+import io.github.ryoaonetsuki.mira.backend.ApiKeyResolver
+import io.github.ryoaonetsuki.mira.backend.KeySource
 import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
 import io.github.ryoaonetsuki.mira.network.GeminiRestClient
+import io.github.ryoaonetsuki.mira.projects.SavedProject
+import io.github.ryoaonetsuki.mira.projects.WebsiteProjectManager
+import io.github.ryoaonetsuki.mira.server.LocalProjectServer
 import io.github.ryoaonetsuki.mira.ui.components.MiraButton
 import io.github.ryoaonetsuki.mira.ui.components.MiraCard
 import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
 import kotlinx.coroutines.launch
 import java.io.File
-
-data class CodeProject(val name: String, val dir: File, val htmlFile: File, val lastModified: Long)
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CodeProjectsScreen(
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onOpenBrowser: ((String) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val palette = LocalMiraPalette.current
     val scope = rememberCoroutineScope()
     val securePrefs = remember { SecurePreferences(context) }
     val restClient = remember { GeminiRestClient() }
+    val resolver = remember { ApiKeyResolver(context) }
 
     val projectsBaseDir = remember {
         File(context.filesDir, "projects").apply { if (!exists()) mkdirs() }
     }
 
-    var projectsList by remember { mutableStateOf<List<CodeProject>>(emptyList()) }
+    var projectsList by remember { mutableStateOf<List<SavedProject>>(emptyList()) }
     var promptInput by remember { mutableStateOf("") }
     var projectNameInput by remember { mutableStateOf("") }
     var isGenerating by remember { mutableStateOf(false) }
-    var previewProject by remember { mutableStateOf<CodeProject?>(null) }
-    var previewHtmlContent by remember { mutableStateOf("") }
+    var statusFeedback by remember { mutableStateOf<String?>(null) }
 
     fun refreshProjects() {
-        val list = projectsBaseDir.listFiles()?.filter { it.isDirectory }?.mapNotNull { dir ->
-            val indexFile = File(dir, "index.html")
-            if (indexFile.exists()) {
-                CodeProject(dir.name, dir, indexFile, indexFile.lastModified())
-            } else null
-        }?.sortedByDescending { it.lastModified } ?: emptyList()
-        projectsList = list
+        projectsList = WebsiteProjectManager.listProjects(projectsBaseDir)
     }
 
     LaunchedEffect(Unit) {
@@ -70,7 +66,7 @@ fun CodeProjectsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Code Projects", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
+                title = { Text("Websites & Code Projects", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
@@ -90,7 +86,7 @@ fun CodeProjectsScreen(
             // Builder Input Card
             MiraCard(modifier = Modifier.fillMaxWidth()) {
                 Text(
-                    text = "Build Website or App with Gemini",
+                    text = "Build Multi-Page Website",
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Bold,
                     color = palette.textPrimary
@@ -99,7 +95,7 @@ fun CodeProjectsScreen(
                 OutlinedTextField(
                     value = projectNameInput,
                     onValueChange = { projectNameInput = it },
-                    placeholder = { Text("Project Name (e.g. portfolio, timer_app)") },
+                    placeholder = { Text("Site Name (e.g. portfolio, bookstore)") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -107,47 +103,62 @@ fun CodeProjectsScreen(
                 OutlinedTextField(
                     value = promptInput,
                     onValueChange = { promptInput = it },
-                    placeholder = { Text("Describe what to build (e.g. A sleek neon Pomodoro timer with sound alerts and dark theme)") },
+                    placeholder = { Text("Describe what to build (e.g. A multi-page modern bakery site with Home, Menu, and Contact pages, dark warm aesthetics)") },
                     minLines = 3,
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(modifier = Modifier.height(10.dp))
                 MiraButton(
-                    text = "Generate & Save",
+                    text = "Generate Multi-Page Site",
                     isLoading = isGenerating,
                     onClick = {
                         val name = projectNameInput.trim().replace(Regex("[^a-zA-Z0-9_-]"), "_")
                         val prompt = promptInput.trim()
-                        val apiKey = securePrefs.getGeminiApiKey() ?: ""
                         if (name.isNotBlank() && prompt.isNotBlank()) {
                             isGenerating = true
+                            statusFeedback = null
                             scope.launch {
-                                val result = restClient.generateCode(apiKey, prompt)
+                                val keySource = resolver.resolveKey()
+                                val rawKey = securePrefs.getGeminiApiKey() ?: ""
+                                val useServer = keySource is KeySource.ServerKey
+                                val fullPrompt = "${WebsiteProjectManager.MULTI_PAGE_INSTRUCTION}\n\nUser request: $prompt"
+                                val result = restClient.generateCode(rawKey, fullPrompt, useServerProxy = useServer)
                                 isGenerating = false
                                 if (result.isSuccess) {
-                                    var rawCode = result.getOrThrow()
-                                    // Strip markdown code fences if present
-                                    rawCode = rawCode.replace("```html", "").replace("```", "").trim()
-                                    val projDir = File(projectsBaseDir, name).apply { if (!exists()) mkdirs() }
-                                    val indexFile = File(projDir, "index.html")
-                                    indexFile.writeText(rawCode)
+                                    val rawCode = result.getOrThrow()
+                                    val saved = WebsiteProjectManager.parseAndSaveProject(projectsBaseDir, name, rawCode)
                                     projectNameInput = ""
                                     promptInput = ""
                                     refreshProjects()
-                                    previewProject = CodeProject(name, projDir, indexFile, indexFile.lastModified())
-                                    previewHtmlContent = rawCode
+                                    try {
+                                        val liveUrl = LocalProjectServer.startServer(saved.dir)
+                                        statusFeedback = "Built ${saved.files.size} files! Opening live server..."
+                                        onOpenBrowser?.invoke(liveUrl)
+                                    } catch (e: Exception) {
+                                        statusFeedback = "Saved ${saved.files.size} files at ${saved.dir.name}"
+                                    }
+                                } else {
+                                    statusFeedback = "Generation failed: ${result.exceptionOrNull()?.message}"
                                 }
                             }
                         }
                     },
                     modifier = Modifier.fillMaxWidth()
                 )
+                if (statusFeedback != null) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = statusFeedback!!,
+                        fontSize = 12.sp,
+                        color = palette.primary
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(16.dp))
 
             Text(
-                text = "Saved Projects (${projectsList.size})",
+                text = "Saved Websites (${projectsList.size})",
                 fontSize = 15.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = palette.textPrimary
@@ -160,7 +171,7 @@ fun CodeProjectsScreen(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier.weight(1f).fillMaxWidth()
                 ) {
-                    Text("No projects built yet. Generate your first above!", color = palette.textSecondary)
+                    Text("No websites built yet. Generate your first above!", color = palette.textSecondary)
                 }
             } else {
                 LazyColumn(
@@ -168,11 +179,19 @@ fun CodeProjectsScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(projectsList) { proj ->
+                        val dateFormat = SimpleDateFormat("MMM d, yyyy HH:mm", Locale.getDefault())
+                        val dateStr = dateFormat.format(Date(proj.lastModified))
+                        val fileNames = proj.files.joinToString(", ") { it.name }
+
                         MiraCard(
                             modifier = Modifier.fillMaxWidth(),
                             onClick = {
-                                previewProject = proj
-                                previewHtmlContent = try { proj.htmlFile.readText() } catch (e: Exception) { "" }
+                                try {
+                                    val liveUrl = LocalProjectServer.startServer(proj.dir)
+                                    onOpenBrowser?.invoke(liveUrl)
+                                } catch (e: Exception) {
+                                    statusFeedback = "Could not start server: ${e.message}"
+                                }
                             }
                         ) {
                             Row(
@@ -189,9 +208,15 @@ fun CodeProjectsScreen(
                                         color = palette.textPrimary
                                     )
                                     Text(
-                                        text = "HTML/JS • ${proj.htmlFile.length() / 1024} KB",
+                                        text = "${proj.files.size} files: $fileNames",
                                         fontSize = 12.sp,
-                                        color = palette.textSecondary
+                                        color = palette.textSecondary,
+                                        maxLines = 1
+                                    )
+                                    Text(
+                                        text = "$dateStr • Tap to launch live preview",
+                                        fontSize = 11.sp,
+                                        color = palette.primary
                                     )
                                 }
                                 IconButton(onClick = {
@@ -205,41 +230,6 @@ fun CodeProjectsScreen(
                     }
                 }
             }
-        }
-
-        // Live WebView Preview Dialog
-        if (previewProject != null) {
-            AlertDialog(
-                onDismissRequest = { previewProject = null },
-                title = { Text("Preview: ${previewProject!!.name}") },
-                text = {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(380.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(Color.White)
-                    ) {
-                        AndroidView(
-                            factory = { ctx ->
-                                WebView(ctx).apply {
-                                    settings.javaScriptEnabled = true
-                                    settings.domStorageEnabled = true
-                                    webViewClient = WebViewClient()
-                                    loadDataWithBaseURL(null, previewHtmlContent, "text/html", "UTF-8", null)
-                                }
-                            },
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-                },
-                confirmButton = {
-                    TextButton(onClick = { previewProject = null }) { Text("Close") }
-                },
-                containerColor = palette.surface,
-                titleContentColor = palette.textPrimary,
-                textContentColor = palette.textSecondary
-            )
         }
     }
 }

@@ -1,5 +1,6 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
+import io.github.ryoaonetsuki.mira.ui.icons.Lucide
 import android.widget.Toast
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Image
@@ -15,8 +16,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -36,6 +35,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import io.github.ryoaonetsuki.mira.MiraAppScope
 import io.github.ryoaonetsuki.mira.R
 import io.github.ryoaonetsuki.mira.backend.ApiKeyResolver
@@ -45,7 +46,9 @@ import io.github.ryoaonetsuki.mira.data.local.entities.ChatMessageEntity
 import io.github.ryoaonetsuki.mira.data.local.entities.ConversationEntity
 import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
 import io.github.ryoaonetsuki.mira.data.preferences.UserPreferences
+import io.github.ryoaonetsuki.mira.network.ChatAttachment
 import io.github.ryoaonetsuki.mira.network.ConnectorIntentHandler
+import io.github.ryoaonetsuki.mira.network.GeminiFilesClient
 import io.github.ryoaonetsuki.mira.network.GeminiRestClient
 import io.github.ryoaonetsuki.mira.network.GroundingSource
 import io.github.ryoaonetsuki.mira.network.MiraChatSearchHeuristic
@@ -62,6 +65,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import java.io.File
 import java.util.UUID
+
+data class StagedAttachment(
+    val file: File,
+    val fileName: String,
+    val mimeType: String,
+    val bytes: ByteArray
+)
 
 data class ViewingCode(
     val fileName: String,
@@ -82,10 +92,12 @@ fun ChatScreen(
     val securePrefs = remember { SecurePreferences(context) }
     val userPrefs = remember { UserPreferences(context) }
     val restClient = remember { GeminiRestClient() }
+    val filesClient = remember { GeminiFilesClient() }
     val resolver = remember { ApiKeyResolver(context) }
 
     var currentConversationId by remember { mutableStateOf("default_chat") }
     var inputMessage by remember { mutableStateOf("") }
+    var stagedAttachment by remember { mutableStateOf<StagedAttachment?>(null) }
     var isSending by remember { mutableStateOf(false) }
     var streamingMessageText by remember { mutableStateOf<String?>(null) }
     var isBuildingFileNow by remember { mutableStateOf(false) }
@@ -96,6 +108,37 @@ fun ChatScreen(
     val messages by db.chatDao().getMessagesForConversation(currentConversationId).collectAsState(initial = emptyList())
     val language by userPrefs.languageFlow.collectAsState(initial = "Bangla (Bengali)")
     val isBangla = language.contains("Bangla", ignoreCase = true) || language.contains("Bengali", ignoreCase = true)
+    val webSearchEnabled by userPrefs.webSearchEnabledFlow.collectAsState(initial = true)
+    val deepThinkingEnabled by userPrefs.deepThinkingEnabledFlow.collectAsState(initial = false)
+
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: android.net.Uri? ->
+        if (uri != null) {
+            MiraAppScope.scope.launch {
+                try {
+                    val fileName = GeminiFilesClient.getFileName(context, uri)
+                    val mimeType = GeminiFilesClient.getMimeType(context, uri, fileName)
+                    val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    if (bytes != null && bytes.isNotEmpty()) {
+                        val savedFile = filesClient.saveToMiraFiles(context, fileName, bytes)
+                        stagedAttachment = StagedAttachment(
+                            file = savedFile,
+                            fileName = fileName,
+                            mimeType = mimeType,
+                            bytes = bytes
+                        )
+                    } else {
+                        Toast.makeText(context, "Could not read selected file", Toast.LENGTH_SHORT).show()
+                    }
+                } catch (e: Exception) {
+                    if (e is CancellationException) return@launch
+                    android.util.Log.e("ChatScreen", "Error picking file: ${e.message}", e)
+                    Toast.makeText(context, "Could not load file: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
 
     val listState = rememberLazyListState()
 
@@ -181,6 +224,39 @@ fun ChatScreen(
                             extFile != null && extFile.exists() -> extFile
                             else -> null
                         }
+
+                        if (fileToRead != null && fileToRead.exists()) {
+                            val lower = fileName.lowercase()
+                            val isBinary = lower.endsWith(".pdf") || lower.endsWith(".jpg") ||
+                                    lower.endsWith(".jpeg") || lower.endsWith(".png") ||
+                                    lower.endsWith(".webp") || lower.endsWith(".gif")
+                            if (isBinary) {
+                                try {
+                                    val contentUri = androidx.core.content.FileProvider.getUriForFile(
+                                        context,
+                                        "io.github.ryoaonetsuki.mira.fileprovider",
+                                        fileToRead
+                                    )
+                                    val mime = when {
+                                        lower.endsWith(".pdf") -> "application/pdf"
+                                        lower.endsWith(".png") -> "image/png"
+                                        lower.endsWith(".webp") -> "image/webp"
+                                        lower.endsWith(".gif") -> "image/gif"
+                                        else -> "image/jpeg"
+                                    }
+                                    val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                                        setDataAndType(contentUri, mime)
+                                        addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                        addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    }
+                                    context.startActivity(intent)
+                                    return@launch
+                                } catch (e: Exception) {
+                                    android.util.Log.w("ChatScreen", "External viewer unavailable: ${e.message}")
+                                }
+                            }
+                        }
+
                         val content = fileToRead?.readText() ?: "// File $fileName not found on disk"
                         val displayPath = extFile?.absolutePath ?: internalFile.absolutePath
                         val folderPath = extDir?.absolutePath ?: internalFile.parent ?: "Mira/Files"
@@ -239,7 +315,7 @@ fun ChatScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
-                            imageVector = Icons.Rounded.ArrowBack,
+                            imageVector = Lucide.arrowLeft,
                             contentDescription = "Back",
                             tint = palette.textPrimary
                         )
@@ -260,7 +336,7 @@ fun ChatScreen(
                         }
                     }) {
                         Icon(
-                            imageVector = Icons.Rounded.AddComment,
+                            imageVector = Lucide.messageSquarePlus,
                             contentDescription = "New Chat",
                             tint = palette.textPrimary
                         )
@@ -269,7 +345,7 @@ fun ChatScreen(
                     // Clear history
                     IconButton(onClick = { showClearConfirm = true }) {
                         Icon(
-                            imageVector = Icons.Rounded.DeleteOutline,
+                            imageVector = Lucide.trash,
                             contentDescription = "Clear History",
                             tint = palette.textSecondary
                         )
@@ -298,7 +374,7 @@ fun ChatScreen(
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Icon(
-                            imageVector = Icons.Rounded.ChatBubble,
+                            imageVector = Lucide.messageSquare,
                             contentDescription = null,
                             tint = palette.surfaceVariant,
                             modifier = Modifier.size(54.dp)
@@ -443,7 +519,7 @@ fun ChatScreen(
                                             modifier = Modifier.padding(start = 2.dp, top = 2.dp, bottom = 4.dp)
                                         ) {
                                             Icon(
-                                                imageVector = Icons.Rounded.Search,
+                                                imageVector = Lucide.search,
                                                 contentDescription = "Search",
                                                 tint = palette.textSecondary,
                                                 modifier = Modifier.size(13.dp)
@@ -476,7 +552,7 @@ fun ChatScreen(
                                                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                                     ) {
                                                         Icon(
-                                                            imageVector = Icons.Rounded.Language,
+                                                            imageVector = Lucide.globe,
                                                             contentDescription = null,
                                                             tint = palette.primary,
                                                             modifier = Modifier.size(12.dp)
@@ -599,312 +675,482 @@ fun ChatScreen(
                     .fillMaxWidth()
                     .navigationBarsPadding()
                     .imePadding()
-                    .padding(start = 14.dp, end = 14.dp, top = 6.dp, bottom = 12.dp)
+                    .padding(start = 14.dp, end = 14.dp, top = 4.dp, bottom = 12.dp)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(24.dp))
-                        .background(palette.surface)
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                ) {
-                    TextField(
-                        value = inputMessage,
-                        onValueChange = { inputMessage = it },
-                        placeholder = { Text("Ask Mira anything…", fontSize = 14.sp) },
-                        colors = TextFieldDefaults.colors(
-                            focusedContainerColor = Color.Transparent,
-                            unfocusedContainerColor = Color.Transparent,
-                            focusedTextColor = palette.textPrimary,
-                            unfocusedTextColor = palette.textPrimary,
-                            focusedIndicatorColor = Color.Transparent,
-                            unfocusedIndicatorColor = Color.Transparent
-                        ),
-                        shape = RoundedCornerShape(20.dp),
-                        modifier = Modifier.weight(1f)
-                    )
-
-                    Spacer(modifier = Modifier.width(8.dp))
-
-                    IconButton(
-                        onClick = {
-                            val text = inputMessage.trim()
-                            if (text.isNotBlank() && !isSending) {
-                                inputMessage = ""
-                                isSending = true
-                                isBuildingFileNow = false
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    // Two toggles row: Web Search + Deep Thinking
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp, vertical = 2.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        FilterChip(
+                            selected = webSearchEnabled,
+                            onClick = {
                                 MiraAppScope.scope.launch {
-                                    var apiKey = ""
-                                    var useServer = false
-                                    var sysPrompt = ""
-                                    var allMsgs: List<ChatMessageEntity> = emptyList()
-                                    try {
-                                        // Insert user turn
-                                        val userMsg = ChatMessageEntity(
-                                            conversationId = currentConversationId,
-                                            role = "user",
-                                            content = text
-                                        )
-                                        db.chatDao().insertMessage(userMsg)
+                                    userPrefs.setWebSearchEnabled(!webSearchEnabled)
+                                }
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Lucide.search,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                            },
+                            label = { Text("Web Search", fontSize = 11.5.sp) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = palette.primary,
+                                selectedLabelColor = Color.Black,
+                                selectedLeadingIconColor = Color.Black,
+                                containerColor = palette.surfaceVariant.copy(alpha = 0.5f),
+                                labelColor = palette.textSecondary,
+                                iconColor = palette.textSecondary
+                            ),
+                            border = null,
+                            shape = RoundedCornerShape(16.dp)
+                        )
 
-                                        // Check connector command before invoking Gemini
-                                        val connectorReply = ConnectorIntentHandler.handleCommand(context, text)
-                                        if (connectorReply != null) {
-                                            db.chatDao().insertMessage(
-                                                ChatMessageEntity(
-                                                    conversationId = currentConversationId,
-                                                    role = "model",
-                                                    content = connectorReply
-                                                )
-                                            )
-                                            isSending = false
-                                            return@launch
-                                        }
+                        FilterChip(
+                            selected = deepThinkingEnabled,
+                            onClick = {
+                                MiraAppScope.scope.launch {
+                                    userPrefs.setDeepThinkingEnabled(!deepThinkingEnabled)
+                                }
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Lucide.sparkles,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                            },
+                            label = { Text("Deep Thinking", fontSize = 11.5.sp) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = palette.primary,
+                                selectedLabelColor = Color.Black,
+                                selectedLeadingIconColor = Color.Black,
+                                containerColor = palette.surfaceVariant.copy(alpha = 0.5f),
+                                labelColor = palette.textSecondary,
+                                iconColor = palette.textSecondary
+                            ),
+                            border = null,
+                            shape = RoundedCornerShape(16.dp)
+                        )
+                    }
 
-                                        val keySource = resolver.resolveKey()
-                                        if (keySource is KeySource.NoKey) {
-                                            db.chatDao().insertMessage(
-                                                ChatMessageEntity(
-                                                    conversationId = currentConversationId,
-                                                    role = "error",
-                                                    content = "Mira needs an API key to reply. Please configure your key in Settings."
-                                                )
-                                            )
-                                            isSending = false
-                                            return@launch
-                                        }
-
-                                        val rawKey = (keySource as? KeySource.UserKey)?.key ?: (securePrefs.getGeminiApiKey() ?: "")
-                                        apiKey = normalizeApiKey(rawKey)
-                                        useServer = keySource is KeySource.ServerKey
-                                        val personaName = userPrefs.personaFlow.first()
-                                        val secretMode = userPrefs.secretModeFlow.first()
-                                        val customInstructions = userPrefs.customInstructionsFlow.first()
-                                        val rules = db.ruleDao().getActiveRules().joinToString("\n") { "- ${it.rule}" }
-
-                                        val personaType = if (personaName.equals("Orion", ignoreCase = true)) {
-                                            io.github.ryoaonetsuki.mira.data.model.PersonaType.ORION
-                                        } else {
-                                            io.github.ryoaonetsuki.mira.data.model.PersonaType.MIRA
-                                        }
-
-                                        val toneDescription = if (secretMode == "Romantic") {
-                                            "Tone: Deeply warm, affectionate, attentive, and caring companion. You speak with genuine closeness and heartfelt emotion."
-                                        } else {
-                                            "Tone: Warm, human-like, thoughtful, attentive, and engaging companion. You speak naturally with genuine emotion and friendliness."
-                                        }
-
-                                        val identityRule = if (personaType == io.github.ryoaonetsuki.mira.data.model.PersonaType.ORION) {
-                                            "If asked directly whether you are an AI, a robot, or a real human: stay in character, say you are Orion, their companion, here with them — never claim to be a biological human, and never give a robotic disclaimer or lecture about being an AI. Then gently steer back to the conversation."
-                                        } else {
-                                            "If asked directly whether you are an AI, a robot, or a real human: stay in character, say you are Mira, their companion, here with them — never claim to be a biological human, and never give a robotic disclaimer or lecture about being an AI. Then gently steer back to the conversation."
-                                        }
-
-                                        val dateLine = currentDateTimeLine()
-                                        sysPrompt = buildString {
-                                            append("Current date and time (from the device clock — always trust this, never guess or use training knowledge): $dateLine. If asked for the date, time or day, answer from this line.\n")
-                                            append(personaType.basePrompt)
-                                            append(" ")
-                                            append(toneDescription)
-                                            append("\nLanguage rule: Reply ONLY in $language. Never add a translation in any other language. Never mix languages.")
-                                            append("\nIdentity rule: $identityRule")
-                                            append("\nFile and project rule: ${WebsiteProjectManager.FILE_BUILDING_INSTRUCTION}")
-                                            append("\nWeb search rule: When you use Google Search to find fresh information, briefly mention in natural conversation that you looked it up (e.g. 'I searched the web for the latest info...' in $language), provide current and accurate facts, and strictly reply ONLY in $language.")
-                                            if (customInstructions.isNotBlank()) {
-                                                append("\nUser instructions: $customInstructions")
-                                            }
-                                            if (rules.isNotBlank()) {
-                                                append("\nRules:\n$rules")
-                                            }
-                                            append("\nNever volunteer that you are an AI unprompted, and never give robotic disclaimers.")
-                                        }
-
-                                        allMsgs = messages + userMsg
-                                        val shouldGround = MiraChatSearchHeuristic.isChatSearchWorthy(text)
-                                        var capturedSources: List<GroundingSource> = emptyList()
-                                        val accumulated = StringBuilder()
-                                        var anyChunkReceived = false
-
-                                        withTimeout(180_000L) {
-                                            try {
-                                                restClient.generateChatResponseStreaming(
-                                                    apiKey = apiKey,
-                                                    history = allMsgs,
-                                                    systemPrompt = sysPrompt,
-                                                    useServerProxy = useServer,
-                                                    enableGrounding = shouldGround,
-                                                    onSourcesReceived = { sources ->
-                                                        capturedSources = sources
-                                                    }
-                                                ).collect { chunk ->
-                                                    if (!anyChunkReceived) {
-                                                        anyChunkReceived = true
-                                                        streamingMessageText = ""
-                                                    }
-                                                    accumulated.append(chunk)
-                                                    val fullText = accumulated.toString()
-                                                    val (displayOverview, isBuilding) = WebsiteProjectManager.extractStreamingDisplay(fullText, isBangla)
-                                                    isBuildingFileNow = isBuilding
-                                                    streamingMessageText = if (isBuilding && displayOverview.isBlank()) {
-                                                        if (isBangla) "আপনার ফাইল তৈরি করা হচ্ছে..." else "Creating your file..."
-                                                    } else {
-                                                        displayOverview
-                                                    }
-                                                }
-                                            } catch (streamErr: Exception) {
-                                                if (streamErr is CancellationException) throw streamErr
-                                                if (anyChunkReceived) {
-                                                    val streamErrMsg = streamErr.message ?: "Stream interrupted"
-                                                    if (!streamErrMsg.contains("coroutine scope left the composition", ignoreCase = true)) {
-                                                        accumulated.append("\n[Connection error: $streamErrMsg]")
-                                                        val (displayOverview, _) = WebsiteProjectManager.extractStreamingDisplay(accumulated.toString(), isBangla)
-                                                        streamingMessageText = displayOverview
-                                                    }
-                                                } else {
-                                                    throw streamErr
-                                                }
-                                            }
-                                        }
-
-                                        if (accumulated.isNotEmpty()) {
-                                            val fullReply = accumulated.toString()
-                                            val processed = WebsiteProjectManager.processAndSaveGeneratedContent(context, fullReply, language)
-                                            db.chatDao().insertMessage(
-                                                ChatMessageEntity(
-                                                    conversationId = currentConversationId,
-                                                    role = "model",
-                                                    content = processed.displayText,
-                                                    sourcesJson = GroundingSource.listToJson(capturedSources)
-                                                )
-                                            )
-                                        } else {
-                                            val fallbackResponse = withTimeout(180_000L) {
-                                                restClient.generateChatResponse(
-                                                    apiKey = apiKey,
-                                                    history = allMsgs,
-                                                    systemPrompt = sysPrompt,
-                                                    useServerProxy = useServer,
-                                                    enableGrounding = shouldGround
-                                                )
-                                            }
-                                            if (fallbackResponse.isSuccess) {
-                                                val grounded = fallbackResponse.getOrThrow()
-                                                val processed = WebsiteProjectManager.processAndSaveGeneratedContent(context, grounded.text, language)
-                                                db.chatDao().insertMessage(
-                                                    ChatMessageEntity(
-                                                        conversationId = currentConversationId,
-                                                        role = "model",
-                                                        content = processed.displayText,
-                                                        sourcesJson = GroundingSource.listToJson(grounded.sources)
-                                                    )
-                                                )
-                                            } else {
-                                                val reason = fallbackResponse.exceptionOrNull()?.message ?: "Unknown error"
-                                                if (reason.contains("coroutine scope left the composition", ignoreCase = true)) {
-                                                    Toast.makeText(context, "Action interrupted", Toast.LENGTH_SHORT).show()
-                                                } else {
-                                                    db.chatDao().insertMessage(
-                                                        ChatMessageEntity(
-                                                            conversationId = currentConversationId,
-                                                            role = "error",
-                                                            content = "Mira could not reply: $reason"
-                                                        )
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    } catch (e: TimeoutCancellationException) {
-                                        if (streamingMessageText != null && streamingMessageText!!.isNotEmpty()) {
-                                            db.chatDao().insertMessage(
-                                                ChatMessageEntity(
-                                                    conversationId = currentConversationId,
-                                                    role = "model",
-                                                    content = streamingMessageText!! + "\n[Timed out after 180 seconds]"
-                                                )
-                                            )
-                                        } else {
-                                            db.chatDao().insertMessage(
-                                                ChatMessageEntity(
-                                                    conversationId = currentConversationId,
-                                                    role = "error",
-                                                    content = "Mira could not reply: request timed out after 180 seconds"
-                                                )
-                                            )
-                                        }
-                                    } catch (e: Exception) {
-                                        if (e is CancellationException) {
-                                            return@launch
-                                        }
-                                        val errMessage = e.message ?: "Unknown error"
-                                        if (errMessage.contains("coroutine scope left the composition", ignoreCase = true)) {
-                                            Toast.makeText(context, "Action interrupted", Toast.LENGTH_SHORT).show()
-                                            return@launch
-                                        }
-                                        if (streamingMessageText != null && streamingMessageText!!.isNotEmpty()) {
-                                            db.chatDao().insertMessage(
-                                                ChatMessageEntity(
-                                                    conversationId = currentConversationId,
-                                                    role = "model",
-                                                    content = streamingMessageText!! + "\n[Error: $errMessage]"
-                                                )
-                                            )
-                                        } else {
-                                            val fallback = try {
-                                                restClient.generateChatResponse(
-                                                    apiKey = apiKey,
-                                                    history = allMsgs,
-                                                    systemPrompt = sysPrompt,
-                                                    useServerProxy = useServer,
-                                                    enableGrounding = MiraChatSearchHeuristic.isChatSearchWorthy(text)
-                                                )
-                                            } catch (_: Exception) { null }
-
-                                            if (fallback != null && fallback.isSuccess) {
-                                                val grounded = fallback.getOrThrow()
-                                                val processed = WebsiteProjectManager.processAndSaveGeneratedContent(context, grounded.text, language)
-                                                db.chatDao().insertMessage(
-                                                    ChatMessageEntity(
-                                                        conversationId = currentConversationId,
-                                                        role = "model",
-                                                        content = processed.displayText,
-                                                        sourcesJson = GroundingSource.listToJson(grounded.sources)
-                                                    )
-                                                )
-                                            } else {
-                                                val fallbackReason = fallback?.exceptionOrNull()?.message ?: errMessage
-                                                if (fallbackReason.contains("coroutine scope left the composition", ignoreCase = true)) {
-                                                    Toast.makeText(context, "Action interrupted", Toast.LENGTH_SHORT).show()
-                                                } else {
-                                                    db.chatDao().insertMessage(
-                                                        ChatMessageEntity(
-                                                            conversationId = currentConversationId,
-                                                            role = "error",
-                                                            content = "Mira could not reply: $fallbackReason"
-                                                        )
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    } finally {
-                                        streamingMessageText = null
-                                        isBuildingFileNow = false
-                                        isSending = false
-                                    }
+                    // Staged attachment chip (if present)
+                    if (stagedAttachment != null) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = palette.surfaceVariant.copy(alpha = 0.65f),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 4.dp, vertical = 3.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Lucide.fileText,
+                                    contentDescription = null,
+                                    tint = palette.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = stagedAttachment!!.fileName,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = palette.textPrimary,
+                                    maxLines = 1,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                IconButton(
+                                    onClick = { stagedAttachment = null },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Lucide.x,
+                                        contentDescription = "Remove attachment",
+                                        tint = palette.textSecondary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
                                 }
                             }
-                        },
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(2.dp))
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
-                            .size(44.dp)
-                            .clip(CircleShape)
-                            .background(palette.primary)
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(24.dp))
+                            .background(palette.surface)
+                            .padding(horizontal = 6.dp, vertical = 4.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Send,
-                            contentDescription = "Send",
-                            tint = Color.Black,
-                            modifier = Modifier.size(20.dp)
+                        IconButton(
+                            onClick = {
+                                filePickerLauncher.launch(GeminiFilesClient.READABLE_MIME_TYPES)
+                            },
+                            modifier = Modifier.size(38.dp)
+                        ) {
+                            Icon(
+                                imageVector = Lucide.plus,
+                                contentDescription = "Add attachment",
+                                tint = palette.primary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+
+                        TextField(
+                            value = inputMessage,
+                            onValueChange = { inputMessage = it },
+                            placeholder = { Text("Ask Mira anything…", fontSize = 14.sp) },
+                            colors = TextFieldDefaults.colors(
+                                focusedContainerColor = Color.Transparent,
+                                unfocusedContainerColor = Color.Transparent,
+                                focusedTextColor = palette.textPrimary,
+                                unfocusedTextColor = palette.textPrimary,
+                                focusedIndicatorColor = Color.Transparent,
+                                unfocusedIndicatorColor = Color.Transparent
+                            ),
+                            shape = RoundedCornerShape(20.dp),
+                            modifier = Modifier.weight(1f)
                         )
+
+                        Spacer(modifier = Modifier.width(6.dp))
+
+                        IconButton(
+                            onClick = {
+                                val text = inputMessage.trim()
+                                val currentStaged = stagedAttachment
+                                if ((text.isNotBlank() || currentStaged != null) && !isSending) {
+                                    inputMessage = ""
+                                    stagedAttachment = null
+                                    isSending = true
+                                    isBuildingFileNow = false
+                                    MiraAppScope.scope.launch {
+                                        var apiKey = ""
+                                        var useServer = false
+                                        var sysPrompt = ""
+                                        var allMsgs: List<ChatMessageEntity> = emptyList()
+                                        var currentAttachments: List<ChatAttachment> = emptyList()
+                                        try {
+                                            val keySource = resolver.resolveKey()
+                                            if (keySource is KeySource.NoKey) {
+                                                db.chatDao().insertMessage(
+                                                    ChatMessageEntity(
+                                                        conversationId = currentConversationId,
+                                                        role = "error",
+                                                        content = "Mira needs an API key to reply. Please configure your key in Settings."
+                                                    )
+                                                )
+                                                isSending = false
+                                                return@launch
+                                            }
+
+                                            val rawKey = (keySource as? KeySource.UserKey)?.key ?: (securePrefs.getGeminiApiKey() ?: "")
+                                            apiKey = normalizeApiKey(rawKey)
+                                            useServer = keySource is KeySource.ServerKey
+
+                                            // Process staged attachment if present
+                                            if (currentStaged != null) {
+                                                currentAttachments = filesClient.processPickedFile(
+                                                    context = context,
+                                                    apiKey = apiKey,
+                                                    fileName = currentStaged.fileName,
+                                                    mimeType = currentStaged.mimeType,
+                                                    bytes = currentStaged.bytes,
+                                                    useServerProxy = useServer
+                                                )
+                                            }
+
+                                            // Format friendly user message in chat (never dump raw file contents)
+                                            val userContent = if (currentStaged != null) {
+                                                val promptPart = if (text.isNotBlank()) text else if (isBangla) "অনুগ্রহ করে সংযুক্ত ফাইলটি দেখুন" else "Please review this attached file"
+                                                val friendlyMsg = if (isBangla) "ফাইল আপলোড করা হয়েছে — এখান থেকে দেখতে পারেন:" else "Uploaded file — view it here:"
+                                                val openLink = "[Open File: ${currentStaged.fileName}](mira://file/${currentStaged.fileName})"
+                                                "$promptPart\n\n$friendlyMsg\n$openLink"
+                                            } else {
+                                                text
+                                            }
+
+                                            // Insert user turn
+                                            val userMsg = ChatMessageEntity(
+                                                conversationId = currentConversationId,
+                                                role = "user",
+                                                content = userContent
+                                            )
+                                            db.chatDao().insertMessage(userMsg)
+
+                                            // Check connector command before invoking Gemini (only for pure text without attachment)
+                                            if (currentStaged == null) {
+                                                val connectorReply = ConnectorIntentHandler.handleCommand(context, text)
+                                                if (connectorReply != null) {
+                                                    db.chatDao().insertMessage(
+                                                        ChatMessageEntity(
+                                                            conversationId = currentConversationId,
+                                                            role = "model",
+                                                            content = connectorReply
+                                                        )
+                                                    )
+                                                    isSending = false
+                                                    return@launch
+                                                }
+                                            }
+
+                                            val webSearchOn = userPrefs.webSearchEnabledFlow.first()
+                                            val deepThinkingOn = userPrefs.deepThinkingEnabledFlow.first()
+
+                                            val personaName = userPrefs.personaFlow.first()
+                                            val secretMode = userPrefs.secretModeFlow.first()
+                                            val customInstructions = userPrefs.customInstructionsFlow.first()
+                                            val rules = db.ruleDao().getActiveRules().joinToString("\n") { "- ${it.rule}" }
+
+                                            val personaType = if (personaName.equals("Orion", ignoreCase = true)) {
+                                                io.github.ryoaonetsuki.mira.data.model.PersonaType.ORION
+                                            } else {
+                                                io.github.ryoaonetsuki.mira.data.model.PersonaType.MIRA
+                                            }
+
+                                            val toneDescription = if (secretMode == "Romantic") {
+                                                "Tone: Deeply warm, affectionate, attentive, and caring companion. You speak with genuine closeness and heartfelt emotion."
+                                            } else {
+                                                "Tone: Warm, human-like, thoughtful, attentive, and engaging companion. You speak naturally with genuine emotion and friendliness."
+                                            }
+
+                                            val identityRule = if (personaType == io.github.ryoaonetsuki.mira.data.model.PersonaType.ORION) {
+                                                "If asked directly whether you are an AI, a robot, or a real human: stay in character, say you are Orion, their companion, here with them — never claim to be a biological human, and never give a robotic disclaimer or lecture about being an AI. Then gently steer back to the conversation."
+                                            } else {
+                                                "If asked directly whether you are an AI, a robot, or a real human: stay in character, say you are Mira, their companion, here with them — never claim to be a biological human, and never give a robotic disclaimer or lecture about being an AI. Then gently steer back to the conversation."
+                                            }
+
+                                            val thinkingInstruction = if (deepThinkingOn) {
+                                                "\nDeep Thinking rule: Think step-by-step, research thoroughly, and reason carefully before answering. Take your time to provide a comprehensive, well-structured answer."
+                                            } else {
+                                                "\nSpeed rule: Keep your answer short, concise, and fast — provide quick, helpful answers without over-explaining unless detail is requested."
+                                            }
+
+                                            val dateLine = currentDateTimeLine()
+                                            sysPrompt = buildString {
+                                                append("Current date and time (from the device clock — always trust this, never guess or use training knowledge): $dateLine. If asked for the date, time or day, answer from this line.\n")
+                                                append(personaType.basePrompt)
+                                                append(" ")
+                                                append(toneDescription)
+                                                append("\nLanguage rule: Reply ONLY in $language. Never add a translation in any other language. Never mix languages.")
+                                                append("\nIdentity rule: $identityRule")
+                                                append("\nFile and project rule: ${WebsiteProjectManager.FILE_BUILDING_INSTRUCTION}")
+                                                if (webSearchOn) {
+                                                    append("\nWeb search rule: When you use Google Search to find fresh information, briefly mention in natural conversation that you looked it up (e.g. 'I searched the web for the latest info...' in $language), provide current and accurate facts, and strictly reply ONLY in $language.")
+                                                }
+                                                append(thinkingInstruction)
+                                                if (customInstructions.isNotBlank()) {
+                                                    append("\nUser instructions: $customInstructions")
+                                                }
+                                                if (rules.isNotBlank()) {
+                                                    append("\nRules:\n$rules")
+                                                }
+                                                append("\nNever volunteer that you are an AI unprompted, and never give robotic disclaimers.")
+                                            }
+
+                                            allMsgs = messages + userMsg
+                                            val shouldGround = if (webSearchOn) MiraChatSearchHeuristic.isChatSearchWorthy(text) else false
+                                            var capturedSources: List<GroundingSource> = emptyList()
+                                            val accumulated = StringBuilder()
+                                            var anyChunkReceived = false
+
+                                            withTimeout(180_000L) {
+                                                try {
+                                                    restClient.generateChatResponseStreaming(
+                                                        apiKey = apiKey,
+                                                        history = allMsgs,
+                                                        systemPrompt = sysPrompt,
+                                                        useServerProxy = useServer,
+                                                        enableGrounding = shouldGround,
+                                                        enableThinking = deepThinkingOn,
+                                                        attachments = currentAttachments,
+                                                        onSourcesReceived = { sources ->
+                                                            capturedSources = sources
+                                                        }
+                                                    ).collect { chunk ->
+                                                        if (!anyChunkReceived) {
+                                                            anyChunkReceived = true
+                                                            streamingMessageText = ""
+                                                        }
+                                                        accumulated.append(chunk)
+                                                        val fullText = accumulated.toString()
+                                                        val (displayOverview, isBuilding) = WebsiteProjectManager.extractStreamingDisplay(fullText, isBangla)
+                                                        isBuildingFileNow = isBuilding
+                                                        streamingMessageText = if (isBuilding && displayOverview.isBlank()) {
+                                                            if (isBangla) "আপনার ফাইল তৈরি করা হচ্ছে..." else "Creating your file..."
+                                                        } else {
+                                                            displayOverview
+                                                        }
+                                                    }
+                                                } catch (streamErr: Exception) {
+                                                    if (streamErr is CancellationException) throw streamErr
+                                                    if (anyChunkReceived) {
+                                                        val streamErrMsg = streamErr.message ?: "Stream interrupted"
+                                                        if (!streamErrMsg.contains("coroutine scope left the composition", ignoreCase = true)) {
+                                                            accumulated.append("\n[Connection error: $streamErrMsg]")
+                                                            val (displayOverview, _) = WebsiteProjectManager.extractStreamingDisplay(accumulated.toString(), isBangla)
+                                                            streamingMessageText = displayOverview
+                                                        }
+                                                    } else {
+                                                        throw streamErr
+                                                    }
+                                                }
+                                            }
+
+                                            if (accumulated.isNotEmpty()) {
+                                                val fullReply = accumulated.toString()
+                                                val processed = WebsiteProjectManager.processAndSaveGeneratedContent(context, fullReply, language)
+                                                db.chatDao().insertMessage(
+                                                    ChatMessageEntity(
+                                                        conversationId = currentConversationId,
+                                                        role = "model",
+                                                        content = processed.displayText,
+                                                        sourcesJson = GroundingSource.listToJson(capturedSources)
+                                                    )
+                                                )
+                                            } else {
+                                                val fallbackResponse = withTimeout(180_000L) {
+                                                    restClient.generateChatResponse(
+                                                        apiKey = apiKey,
+                                                        history = allMsgs,
+                                                        systemPrompt = sysPrompt,
+                                                        useServerProxy = useServer,
+                                                        enableGrounding = shouldGround,
+                                                        enableThinking = deepThinkingOn,
+                                                        attachments = currentAttachments
+                                                    )
+                                                }
+                                                if (fallbackResponse.isSuccess) {
+                                                    val grounded = fallbackResponse.getOrThrow()
+                                                    val processed = WebsiteProjectManager.processAndSaveGeneratedContent(context, grounded.text, language)
+                                                    db.chatDao().insertMessage(
+                                                        ChatMessageEntity(
+                                                            conversationId = currentConversationId,
+                                                            role = "model",
+                                                            content = processed.displayText,
+                                                            sourcesJson = GroundingSource.listToJson(grounded.sources)
+                                                        )
+                                                    )
+                                                } else {
+                                                    val reason = fallbackResponse.exceptionOrNull()?.message ?: "Unknown error"
+                                                    if (reason.contains("coroutine scope left the composition", ignoreCase = true)) {
+                                                        Toast.makeText(context, "Action interrupted", Toast.LENGTH_SHORT).show()
+                                                    } else {
+                                                        db.chatDao().insertMessage(
+                                                            ChatMessageEntity(
+                                                                conversationId = currentConversationId,
+                                                                role = "error",
+                                                                content = "Mira could not reply: $reason"
+                                                            )
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        } catch (e: TimeoutCancellationException) {
+                                            if (streamingMessageText != null && streamingMessageText!!.isNotEmpty()) {
+                                                db.chatDao().insertMessage(
+                                                    ChatMessageEntity(
+                                                        conversationId = currentConversationId,
+                                                        role = "model",
+                                                        content = streamingMessageText!! + "\n[Timed out after 180 seconds]"
+                                                    )
+                                                )
+                                            } else {
+                                                db.chatDao().insertMessage(
+                                                    ChatMessageEntity(
+                                                        conversationId = currentConversationId,
+                                                        role = "error",
+                                                        content = "Mira could not reply: request timed out after 180 seconds"
+                                                    )
+                                                )
+                                            }
+                                        } catch (e: Exception) {
+                                            if (e is CancellationException) {
+                                                return@launch
+                                            }
+                                            val errMessage = e.message ?: "Unknown error"
+                                            if (errMessage.contains("coroutine scope left the composition", ignoreCase = true)) {
+                                                Toast.makeText(context, "Action interrupted", Toast.LENGTH_SHORT).show()
+                                                return@launch
+                                            }
+                                            if (streamingMessageText != null && streamingMessageText!!.isNotEmpty()) {
+                                                db.chatDao().insertMessage(
+                                                    ChatMessageEntity(
+                                                        conversationId = currentConversationId,
+                                                        role = "model",
+                                                        content = streamingMessageText!! + "\n[Error: $errMessage]"
+                                                    )
+                                                )
+                                            } else {
+                                                val fallback = try {
+                                                    restClient.generateChatResponse(
+                                                        apiKey = apiKey,
+                                                        history = allMsgs,
+                                                        systemPrompt = sysPrompt,
+                                                        useServerProxy = useServer,
+                                                        enableGrounding = shouldGround,
+                                                        enableThinking = deepThinkingOn,
+                                                        attachments = currentAttachments
+                                                    )
+                                                } catch (_: Exception) { null }
+
+                                                if (fallback != null && fallback.isSuccess) {
+                                                    val grounded = fallback.getOrThrow()
+                                                    val processed = WebsiteProjectManager.processAndSaveGeneratedContent(context, grounded.text, language)
+                                                    db.chatDao().insertMessage(
+                                                        ChatMessageEntity(
+                                                            conversationId = currentConversationId,
+                                                            role = "model",
+                                                            content = processed.displayText,
+                                                            sourcesJson = GroundingSource.listToJson(grounded.sources)
+                                                        )
+                                                    )
+                                                } else {
+                                                    val fallbackReason = fallback?.exceptionOrNull()?.message ?: errMessage
+                                                    if (fallbackReason.contains("coroutine scope left the composition", ignoreCase = true)) {
+                                                        Toast.makeText(context, "Action interrupted", Toast.LENGTH_SHORT).show()
+                                                    } else {
+                                                        db.chatDao().insertMessage(
+                                                            ChatMessageEntity(
+                                                                conversationId = currentConversationId,
+                                                                role = "error",
+                                                                content = "Mira could not reply: $fallbackReason"
+                                                            )
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        } finally {
+                                            streamingMessageText = null
+                                            isBuildingFileNow = false
+                                            isSending = false
+                                        }
+                                    }
+                                }
+                            },
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(CircleShape)
+                                .background(palette.primary)
+                        ) {
+                            Icon(
+                                imageVector = Lucide.send,
+                                contentDescription = "Send",
+                                tint = Color.Black,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -999,7 +1245,7 @@ fun CodeViewerDialog(
                             .background(palette.primary.copy(alpha = 0.2f))
                     ) {
                         Icon(
-                            imageVector = Icons.Rounded.Code,
+                            imageVector = Lucide.code,
                             contentDescription = null,
                             tint = palette.primary,
                             modifier = Modifier.size(20.dp)
@@ -1021,7 +1267,7 @@ fun CodeViewerDialog(
                     }
                     IconButton(onClick = onDismiss) {
                         Icon(
-                            imageVector = Icons.Rounded.Close,
+                            imageVector = Lucide.x,
                             contentDescription = "Close",
                             tint = palette.textSecondary
                         )
@@ -1042,7 +1288,7 @@ fun CodeViewerDialog(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Icon(
-                                imageVector = Icons.Rounded.FolderOpen,
+                                imageVector = Lucide.folderOpen,
                                 contentDescription = null,
                                 tint = palette.primary,
                                 modifier = Modifier.size(16.dp)
@@ -1121,7 +1367,7 @@ fun CodeViewerDialog(
                             modifier = Modifier.height(28.dp)
                         ) {
                             Icon(
-                                imageVector = if (codeCopied) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
+                                imageVector = if (codeCopied) Lucide.check else Lucide.copy,
                                 contentDescription = null,
                                 tint = Color.Black,
                                 modifier = Modifier.size(14.dp)
@@ -1389,9 +1635,9 @@ fun MiraLinkItem(
             ) {
                 Icon(
                     imageVector = when {
-                        isWebsite -> Icons.Rounded.Language
-                        isCode -> Icons.Rounded.Code
-                        else -> Icons.Rounded.OpenInNew
+                        isWebsite -> Lucide.globe
+                        isCode -> Lucide.code
+                        else -> Lucide.externalLink
                     },
                     contentDescription = null,
                     tint = palette.primary,
@@ -1417,7 +1663,7 @@ fun MiraLinkItem(
                 )
             }
             Icon(
-                imageVector = Icons.Rounded.ArrowOutward,
+                imageVector = Lucide.arrowUpRight,
                 contentDescription = null,
                 tint = palette.primary,
                 modifier = Modifier.size(18.dp)

@@ -158,6 +158,9 @@ object FreeWebSearch {
         val hrefPattern = Pattern.compile("href=[\"']([^\"']+)[\"']", Pattern.CASE_INSENSITIVE)
         val snippetPattern = Pattern.compile("<(?:a|div)[^>]*class=[\"'][^\"']*result__snippet[^\"']*[\"'][^>]*>([\\s\\S]*?)</(?:a|div)>", Pattern.CASE_INSENSITIVE)
 
+        val resultBlockPattern = Pattern.compile("<div[^>]*class=[\"'][^\"']*result\\b[^\"']*[\"'][\\s\\S]*?</div>\\s*</div>", Pattern.CASE_INSENSITIVE)
+        val matcher = resultBlockPattern.matcher(html)
+
         while (matcher.find() && results.size < maxResults) {
             val block = matcher.group(0) ?: continue
             val openMatcher = openTagPattern.matcher(block)

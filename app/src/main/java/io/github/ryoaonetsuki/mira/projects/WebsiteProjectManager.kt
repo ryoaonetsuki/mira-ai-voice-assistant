@@ -24,6 +24,7 @@ object WebsiteProjectManager {
 
     const val FILE_BUILDING_INSTRUCTION = """FILE & PROJECT CREATION SPECIFICATION:
 When the user asks you to build, create, or write a website, web app, code file, or script:
+0. RESEARCH FIRST, THEN THINK, THEN BUILD: Before writing any code, use the live web research supplied with this request to study how the best modern sites of this kind actually look in 2026 (layout, colour palette, typography, sections, real content, interactions). Think step-by-step: plan the pages, the visual system and the content first. Then build a genuinely good, premium, multi-page design — never a weak generic template, never placeholder text, never lorem ipsum. Every page must look designed, not assembled.
 1. OVERVIEW: Start with a clean README-style overview (markdown heading e.g. '### Project Title' or '### Filename', short paragraph description, bullet points of key features or pages created).
 2. FRIENDLY MESSAGE + ONE LINK: Next, write a warm, natural 1-2 line human message introducing the download/open link — NEVER provide a bare link. Vary your wording naturally in the user's language (default Bangla).
    Examples in English:

@@ -8,13 +8,18 @@ Developed by **Salman Biswas**.
 
 ## Key Highlights
 
-- **Real-Time Voice Streaming:** Direct bidirectional WebSocket connection to Gemini Live (`BidiGenerateContent`).
-  - **Uplink:** Microphone capture at 16,000 Hz 16-bit mono PCM streamed continuously in Base64 frames.
+- **Streaming Server Voice & Gemini Live:**
+  - **Server Voice (Round 9 default):** High-speed bidirectional streaming via Cloudflare Worker `mira-server-voice`. Rolling Groq Whisper (`whisper-large-v3-turbo`) partial transcription (~1s), Groq `gpt-oss-120b` streaming LLM with automatic Gemini fallback, sentence-chunked Gemini TTS (`gemini-3.8-flash-tts` → `gemini-3.8-flash-lite-tts`), and instant client-side barge-in.
+  - **Direct Gemini Live:** Direct bidirectional WebSocket connection to Gemini Live (`BidiGenerateContent`) as secondary voice engine.
+  - **Uplink:** Microphone capture at 16,000 Hz 16-bit mono PCM streamed in real-time.
   - **Downlink:** Audio playback at 24,000 Hz 16-bit mono PCM via low-latency `AudioTrack`.
   - **Zero-Latency Barge-In:** Immediate hardware buffer flush on speech interruption.
-  - **Resilient Fallback Ladder:** Automatically transitions between `gemini-3.8-live` (Mind), `gemini-2.5-flash-native-audio-preview` (Soul), and `gemini-3.1-flash-live-preview` (Swift).
+  - **Resilient Fallback Ladder:** Server Voice → Gemini Live → SpeechRecognizer fallback.
   - **Foreground Service:** Dedicated `MicService` with microphone foreground type and ongoing notification to prevent Android background termination.
-- **BYOK (Bring Your Own Key):** Safe and private. Uses your free Gemini API key from Google AI Studio, validated via Google REST endpoints and encrypted on-device via `EncryptedSharedPreferences` backed by Android Keystore (AES256-GCM).
+- **BYOK (Bring Your Own Keys):** Safe and 100% private. Enter your own free API keys with personal quotas:
+  1. **Gemini API Key:** From Google AI Studio (powers conversational intelligence and natural TTS voices).
+  2. **Groq API Key:** Free from console.groq.com (powers ultra-fast speech-to-text and low-latency responses).
+  Keys are stored encrypted on-device via `EncryptedSharedPreferences` backed by Android Keystore (AES256-GCM), passed only in request headers, never logged, and never stored on servers.
 - **Interactive Animated Orb:** Canvas-rendered gradient orb responsive to microphone RMS amplitude, speaking shimmer phase, idle breathing, and connecting rotations.
 - **Dual Personas & 30 Gemini Voices:**
   - Personas: **Mira** (warm, empathetic, lively companion) and **Orion** (crisp, focused machine intelligence).

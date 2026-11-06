@@ -1,13 +1,9 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
+import io.github.ryoaonetsuki.mira.ui.icons.Lucide
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.CheckCircle
-import androidx.compose.material.icons.rounded.Lock
-import androidx.compose.material.icons.rounded.VpnKey
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -75,7 +71,7 @@ fun LicenceScreen(
                 navigationIcon = {
                     if (onBack != null) {
                         IconButton(onClick = onBack) {
-                            Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
+                            Icon(Lucide.arrowLeft, contentDescription = "Back", tint = palette.textPrimary)
                         }
                     }
                 },
@@ -99,7 +95,7 @@ fun LicenceScreen(
                     .background(palette.surface, shape = RoundedCornerShape(16.dp))
             ) {
                 Icon(
-                    imageVector = Icons.Rounded.Lock,
+                    imageVector = Lucide.lock,
                     contentDescription = "Licence Required",
                     tint = palette.primary,
                     modifier = Modifier.size(32.dp)
@@ -136,7 +132,7 @@ fun LicenceScreen(
                     label = { Text("Licence Key") },
                     placeholder = { Text("XXXX-XXXX-XXXX-XXXX") },
                     leadingIcon = {
-                        Icon(Icons.Rounded.VpnKey, contentDescription = null, tint = palette.primary)
+                        Icon(Lucide.key, contentDescription = null, tint = palette.primary)
                     },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
@@ -154,7 +150,7 @@ fun LicenceScreen(
                 if (validationSuccess) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = Color(0xFF10B981), modifier = Modifier.size(16.dp))
+                        Icon(Lucide.circleCheck, contentDescription = null, tint = Color(0xFF10B981), modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
                             text = "Licence verified successfully!",

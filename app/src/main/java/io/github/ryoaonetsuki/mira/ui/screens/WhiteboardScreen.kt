@@ -1,6 +1,11 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
-import io.github.ryoaonetsuki.mira.ui.icons.Lucide
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.LineWeight
+import androidx.compose.material.icons.rounded.Save
+import androidx.compose.material.icons.rounded.Undo
 import android.content.ContentValues
 import android.graphics.Bitmap
 import android.graphics.Paint
@@ -113,21 +118,21 @@ fun WhiteboardScreen(
                 title = { Text("Whiteboard", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Lucide.arrowLeft, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 actions = {
                     // Undo
                     IconButton(onClick = { if (paths.isNotEmpty()) paths.removeAt(paths.size - 1) }) {
-                        Icon(Lucide.undo, contentDescription = "Undo", tint = palette.textPrimary)
+                        Icon(Icons.Rounded.Undo, contentDescription = "Undo", tint = palette.textPrimary)
                     }
                     // Clear
                     IconButton(onClick = { paths.clear() }) {
-                        Icon(Lucide.trash, contentDescription = "Clear", tint = palette.textSecondary)
+                        Icon(Icons.Rounded.DeleteOutline, contentDescription = "Clear", tint = palette.textSecondary)
                     }
                     // Save
                     IconButton(onClick = { saveWhiteboardToGallery() }) {
-                        Icon(Lucide.save, contentDescription = "Save to Gallery", tint = palette.primary)
+                        Icon(Icons.Rounded.Save, contentDescription = "Save to Gallery", tint = palette.primary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -238,7 +243,7 @@ fun WhiteboardScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Icon(
-                        imageVector = Lucide.penLine,
+                        imageVector = Icons.Rounded.LineWeight,
                         contentDescription = null,
                         tint = palette.textSecondary,
                         modifier = Modifier.size(20.dp)

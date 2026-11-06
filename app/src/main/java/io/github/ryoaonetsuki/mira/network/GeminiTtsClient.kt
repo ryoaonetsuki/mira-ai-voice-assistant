@@ -55,11 +55,10 @@ class GeminiTtsClient(private val context: Context) {
         // Verified TTS model ladder (ai.google.dev/gemini-api/docs/speech-generation):
         // 1. gemini-3.8-flash-tts (flagship studio quality)
         // 2. gemini-3.8-flash-lite-tts (high throughput & fast)
-        // 3. gemini-2.5-flash-preview-tts (legacy fallback)
+        // (Legacy preview TTS removed Nov 2026 after Google shut it down on Nov 17, 2026)
         val ttsLadder = listOf(
             "gemini-3.8-flash-tts",
-            "gemini-3.8-flash-lite-tts",
-            "gemini-2.5-flash-preview-tts"
+            "gemini-3.8-flash-lite-tts"
         )
 
         var lastError: Exception = Exception("All TTS models failed")
@@ -137,6 +136,7 @@ class GeminiTtsClient(private val context: Context) {
                 Request.Builder()
                     .url(url)
                     .addHeader("Content-Type", "application/json")
+                    .header("x-goog-api-key", apiKey)
                     .post(bodyJson.toString().toRequestBody("application/json".toMediaType()))
                     .build()
             }

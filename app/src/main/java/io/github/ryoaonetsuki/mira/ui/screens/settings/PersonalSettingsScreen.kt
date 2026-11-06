@@ -35,6 +35,7 @@ fun PersonalSettingsScreen(
     val securePrefs = remember { SecurePreferences(context) }
     val userPrefs = remember { UserPreferences(context) }
     val restClient = remember { GeminiRestClient() }
+    val resolver = remember { io.github.ryoaonetsuki.mira.backend.ApiKeyResolver(context) }
 
     val savedName by userPrefs.userNameFlow.collectAsState(initial = "Alex")
     val savedPhone by userPrefs.userPhoneFlow.collectAsState(initial = "")
@@ -49,6 +50,22 @@ fun PersonalSettingsScreen(
     var isTestingKey by remember { mutableStateOf(false) }
     var testResultMsg by remember { mutableStateOf<String?>(null) }
     var isKeyValid by remember { mutableStateOf(false) }
+    var activeModeText by remember { mutableStateOf("Checking...") }
+
+    fun refreshStatus() {
+        scope.launch {
+            val source = resolver.resolveKey()
+            activeModeText = when (source) {
+                is io.github.ryoaonetsuki.mira.backend.KeySource.UserKey -> "Using your own key"
+                is io.github.ryoaonetsuki.mira.backend.KeySource.ServerKey -> "Using Mira server key"
+                is io.github.ryoaonetsuki.mira.backend.KeySource.NoKey -> "No key set"
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        refreshStatus()
+    }
 
     LaunchedEffect(savedName, savedPhone, savedSong) {
         nameInput = savedName
@@ -113,20 +130,28 @@ fun PersonalSettingsScreen(
 
             item {
                 Spacer(modifier = Modifier.height(4.dp))
-                Text("Gemini API Key (Encrypted BYOK)", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.primary)
+                Text("API Key", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.primary)
             }
 
-            // API Key
+            // API Key Card
             item {
                 MiraCard(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = "Current Status: $activeModeText",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = palette.primary
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+
                     OutlinedTextField(
                         value = apiKeyInput,
                         onValueChange = {
                             apiKeyInput = it
                             testResultMsg = null
                         },
-                        label = { Text("Gemini API Key") },
-                        placeholder = { Text("Paste your Gemini key — new keys start with AQ.") },
+                        label = { Text("API Key") },
+                        placeholder = { Text("Paste your API key — new keys start with AQ.") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -134,7 +159,7 @@ fun PersonalSettingsScreen(
                     // Hint line
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "New keys from Google AI Studio start with AQ. — that is correct, paste the whole key.",
+                        text = "New keys start with AQ. — that is correct, paste the whole key.",
                         fontSize = 12.sp,
                         color = palette.textSecondary,
                         lineHeight = 17.sp
@@ -157,18 +182,28 @@ fun PersonalSettingsScreen(
                         onClick = {
                             val normalized = normalizeApiKey(apiKeyInput)
                             if (normalized.isNotBlank()) {
+                                if (!securePrefs.isSecureStorageAvailable()) {
+                                    isKeyValid = false
+                                    testResultMsg = "Secure storage unavailable on this device — key was not saved"
+                                    return@MiraButton
+                                }
                                 isTestingKey = true
                                 testResultMsg = "Checking key with Google..."
                                 scope.launch {
                                     val res = restClient.validateApiKeyAndChat(normalized)
                                     isTestingKey = false
                                     if (res.isSuccess) {
-                                        isKeyValid = true
-                                        testResultMsg = "Key validated! Stored securely in Keystore."
-                                        securePrefs.setGeminiApiKey(normalized)
+                                        val saved = securePrefs.setGeminiApiKey(normalized)
+                                        if (saved) {
+                                            isKeyValid = true
+                                            testResultMsg = "Key validated! Stored securely in Keystore."
+                                            refreshStatus()
+                                        } else {
+                                            isKeyValid = false
+                                            testResultMsg = "Secure storage unavailable on this device — key was not saved"
+                                        }
                                     } else {
                                         isKeyValid = false
-                                        // Show exact error from validation
                                         testResultMsg = res.exceptionOrNull()?.message
                                             ?: "Key validation failed"
                                     }
@@ -177,6 +212,22 @@ fun PersonalSettingsScreen(
                         },
                         modifier = Modifier.fillMaxWidth()
                     )
+
+                    if (apiKeyInput.isNotBlank() || securePrefs.getGeminiApiKey() != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = {
+                                securePrefs.clearGeminiApiKey()
+                                apiKeyInput = ""
+                                testResultMsg = "Cleared personal key. Falling back to server key."
+                                isKeyValid = false
+                                refreshStatus()
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Use server key instead")
+                        }
+                    }
                 }
             }
 

@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.sp
 import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
 import io.github.ryoaonetsuki.mira.data.preferences.UserPreferences
 import io.github.ryoaonetsuki.mira.network.GeminiRestClient
+import io.github.ryoaonetsuki.mira.network.normalizeApiKey
 import io.github.ryoaonetsuki.mira.ui.components.MiraButton
 import io.github.ryoaonetsuki.mira.ui.components.MiraCard
 import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
@@ -125,9 +126,18 @@ fun PersonalSettingsScreen(
                             testResultMsg = null
                         },
                         label = { Text("Gemini API Key") },
-                        placeholder = { Text("AIzaSy... or AQ...") },
+                        placeholder = { Text("Paste your Gemini key — new keys start with AQ.") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
+                    )
+
+                    // Hint line
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "New keys from Google AI Studio start with AQ. — that is correct, paste the whole key.",
+                        fontSize = 12.sp,
+                        color = palette.textSecondary,
+                        lineHeight = 17.sp
                     )
 
                     if (testResultMsg != null) {
@@ -145,19 +155,22 @@ fun PersonalSettingsScreen(
                         text = "Test & Save Key",
                         isLoading = isTestingKey,
                         onClick = {
-                            if (apiKeyInput.isNotBlank()) {
+                            val normalized = normalizeApiKey(apiKeyInput)
+                            if (normalized.isNotBlank()) {
                                 isTestingKey = true
                                 testResultMsg = "Checking key with Google..."
                                 scope.launch {
-                                    val res = restClient.validateApiKey(apiKeyInput.trim())
+                                    val res = restClient.validateApiKeyAndChat(normalized)
                                     isTestingKey = false
                                     if (res.isSuccess) {
                                         isKeyValid = true
                                         testResultMsg = "Key validated! Stored securely in Keystore."
-                                        securePrefs.setGeminiApiKey(apiKeyInput.trim())
+                                        securePrefs.setGeminiApiKey(normalized)
                                     } else {
                                         isKeyValid = false
-                                        testResultMsg = "Invalid key: ${res.exceptionOrNull()?.message}"
+                                        // Show exact error from validation
+                                        testResultMsg = res.exceptionOrNull()?.message
+                                            ?: "Key validation failed"
                                     }
                                 }
                             }

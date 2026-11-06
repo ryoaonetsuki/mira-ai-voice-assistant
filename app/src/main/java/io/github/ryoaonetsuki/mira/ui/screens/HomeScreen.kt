@@ -75,7 +75,6 @@ fun HomeScreen(
 
     val liveState by MicService.liveState.collectAsState()
     val micAmp by MicService.micAmplitude.collectAsState()
-    val userName by userPrefs.userNameFlow.collectAsState(initial = "Alex")
     val orbStyle by userPrefs.orbStyleFlow.collectAsState(initial = "Mira Neon")
     val errorMessage by MicService.errorMessage.collectAsState()
 
@@ -91,17 +90,6 @@ fun HomeScreen(
         if (liveState == LiveState.ERROR) {
             val msg = errorMessage ?: "Voice session error"
             Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    // Time-of-day greeting
-    val greeting = remember {
-        val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-        when (hour) {
-            in 5..11 -> "Good morning"
-            in 12..16 -> "Good afternoon"
-            in 17..21 -> "Good evening"
-            else -> "Good night"
         }
     }
 
@@ -158,22 +146,6 @@ fun HomeScreen(
                     )
                 }
             }
-
-            // Big greeting text (at least 30sp bold, clean with no error text)
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 12.dp)
-            ) {
-                Text(
-                    text = "$greeting, $userName",
-                    fontSize = 32.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = palette.textPrimary
-                )
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
 
             // Info Cards Row (Weather, Today, Mood) — STAY
             Row(

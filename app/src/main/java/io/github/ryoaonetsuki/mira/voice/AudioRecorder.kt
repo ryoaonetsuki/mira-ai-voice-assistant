@@ -15,6 +15,8 @@ class AudioRecorder(
     private var audioRecord: AudioRecord? = null
     private var recordingThread: Thread? = null
     private val isRecording = AtomicBoolean(false)
+    private var chunksRecorded: Long = 0L
+    private var totalRecordedBytes: Long = 0L
 
     @SuppressLint("MissingPermission")
     fun startRecording(): Boolean {
@@ -36,7 +38,7 @@ class AudioRecorder(
             )
 
             if (record.state != AudioRecord.STATE_INITIALIZED) {
-                Log.e(TAG, "AudioRecord initialization failed (state != STATE_INITIALIZED)")
+                Log.e(TAG, "AudioRecord initialization failed (state != STATE_INITIALIZED, state=${record.state})")
                 try { record.release() } catch (_: Exception) {}
                 audioRecord = null
                 return false
@@ -44,7 +46,7 @@ class AudioRecorder(
 
             record.startRecording()
             if (record.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
-                Log.e(TAG, "AudioRecord failed to enter RECORDING state")
+                Log.e(TAG, "AudioRecord failed to enter RECORDING state (recordingState=${record.recordingState})")
                 try { record.stop() } catch (_: Exception) {}
                 try { record.release() } catch (_: Exception) {}
                 audioRecord = null
@@ -53,12 +55,19 @@ class AudioRecorder(
 
             audioRecord = record
             isRecording.set(true)
+            chunksRecorded = 0L
+            totalRecordedBytes = 0L
 
             recordingThread = Thread({
                 val buffer = ByteArray(CHUNK_SIZE_BYTES)
                 while (isRecording.get()) {
                     val read = audioRecord?.read(buffer, 0, buffer.size) ?: -1
                     if (read > 0) {
+                        chunksRecorded++
+                        totalRecordedBytes += read
+                        if (chunksRecorded == 1L || chunksRecorded % 50L == 0L) {
+                            Log.d(TAG, "Recorded audio chunk #$chunksRecorded ($read bytes, total: $totalRecordedBytes bytes)")
+                        }
                         // Calculate RMS amplitude
                         var sum = 0.0
                         var i = 0
@@ -75,13 +84,28 @@ class AudioRecorder(
                         // Deliver audio chunk
                         val chunkCopy = buffer.copyOf(read)
                         onAudioChunk(chunkCopy)
+                    } else if (read < 0) {
+                        val errorDetail = when (read) {
+                            AudioRecord.ERROR_INVALID_OPERATION -> "ERROR_INVALID_OPERATION"
+                            AudioRecord.ERROR_BAD_VALUE -> "ERROR_BAD_VALUE"
+                            AudioRecord.ERROR_DEAD_OBJECT -> "ERROR_DEAD_OBJECT"
+                            AudioRecord.ERROR -> "ERROR"
+                            else -> "UNKNOWN_ERROR ($read)"
+                        }
+                        if (isRecording.get()) {
+                            Log.e(TAG, "AudioRecord.read() returned error code $read ($errorDetail)")
+                        }
                     }
                 }
             }, "MiraAudioRecordThread")
 
             recordingThread?.start()
-            Log.d(TAG, "Audio recording started successfully at 16kHz mono")
+            Log.i(TAG, "Audio recording started successfully at 16kHz mono (recordingState=RECORDSTATE_RECORDING)")
             return true
+        } catch (e: SecurityException) {
+            Log.e(TAG, "SecurityException starting AudioRecord (permission revoked or missing): ${e.message}", e)
+            stopRecording()
+            return false
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start AudioRecord: ${e.message}", e)
             stopRecording()
@@ -117,7 +141,7 @@ class AudioRecorder(
         try {
             onAmplitude(0f)
         } catch (_: Exception) {}
-        Log.d(TAG, "Audio recording stopped")
+        Log.i(TAG, "Audio recording stopped (recorded $chunksRecorded chunks, $totalRecordedBytes bytes)")
     }
 
     companion object {

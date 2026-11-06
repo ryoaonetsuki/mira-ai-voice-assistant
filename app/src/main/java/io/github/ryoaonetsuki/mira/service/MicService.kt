@@ -8,19 +8,28 @@ import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import android.util.Log
+import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import io.github.ryoaonetsuki.mira.MainActivity
 import io.github.ryoaonetsuki.mira.R
 import io.github.ryoaonetsuki.mira.automation.MacroRunner
 import io.github.ryoaonetsuki.mira.data.local.MiraDatabase
+import io.github.ryoaonetsuki.mira.data.local.entities.ChatMessageEntity
 import io.github.ryoaonetsuki.mira.data.local.entities.NotificationEntity
 import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
 import io.github.ryoaonetsuki.mira.data.preferences.UserPreferences
 import io.github.ryoaonetsuki.mira.network.ConnectorIntentHandler
+import io.github.ryoaonetsuki.mira.network.GeminiRestClient
+import io.github.ryoaonetsuki.mira.network.GeminiTtsClient
+import io.github.ryoaonetsuki.mira.network.MiraChatSearchHeuristic
+import io.github.ryoaonetsuki.mira.network.currentDateTimeLine
 import io.github.ryoaonetsuki.mira.voice.AudioPlayer
 import io.github.ryoaonetsuki.mira.voice.AudioRecorder
+import io.github.ryoaonetsuki.mira.voice.FallbackVoiceSession
 import io.github.ryoaonetsuki.mira.voice.GeminiLiveClient
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -47,6 +56,17 @@ class MicService : Service() {
     private var liveClient: GeminiLiveClient? = null
     private val handledTranscripts = Collections.synchronizedSet(mutableSetOf<String>())
     private var connectorJob: Job? = null
+    private var liveSearchJob: Job? = null
+
+    // Fallback voice mode & session
+    private var fallbackSession: FallbackVoiceSession? = null
+    private var androidTts: TextToSpeech? = null
+    private var isFallbackMode: Boolean = false
+    private var cachedResolvedKey: String = ""
+    private var cachedUseServerProxy: Boolean = false
+    private var cachedVoiceName: String = "Aoede"
+    private var cachedSystemPrompt: String = ""
+    private var cachedLanguage: String = "Bangla (Bengali)"
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -194,7 +214,15 @@ class MicService : Service() {
                 "If asked directly whether you are an AI, a robot, or a real human: stay in character, say you are Mira, their companion, here with them — never claim to be a biological human, and never give a robotic disclaimer or lecture about being an AI. Then gently steer back to the conversation."
             }
 
+            cachedResolvedKey = apiKey
+            cachedUseServerProxy = (keySource is io.github.ryoaonetsuki.mira.backend.KeySource.ServerKey)
+            cachedVoiceName = voiceName
+            cachedLanguage = language
+            isFallbackMode = false
+
+            val dateLine = currentDateTimeLine()
             val fullSystemPrompt = buildString {
+                append("Current date and time (from the device clock — always trust this, never guess or use training knowledge): $dateLine. If asked for the date, time or day, answer from this line.\n")
                 append(personaType.basePrompt)
                 append(" ")
                 append(toneDescription)
@@ -209,16 +237,20 @@ class MicService : Service() {
                 }
                 append("\nKeep answers natural, conversational, and suitable for spoken dialogue. Never volunteer that you are an AI unprompted, and never use robotic disclaimers.")
             }
+            cachedSystemPrompt = fullSystemPrompt
 
             _liveState.value = LiveState.CONNECTING
             _errorMessage.value = null // Clear any previous error on new session start
 
             // Initialize Audio Player (24kHz)
             audioPlayer = AudioPlayer { isSpeaking ->
-                if (isSpeaking && _liveState.value != LiveState.ERROR) {
+                if (isSpeaking && _liveState.value != LiveState.ERROR && _liveState.value != LiveState.IDLE) {
                     _liveState.value = LiveState.SPEAKING
                 } else if (!isSpeaking && _liveState.value == LiveState.SPEAKING) {
                     _liveState.value = LiveState.LISTENING
+                    if (isFallbackMode) {
+                        fallbackSession?.resumeListening()
+                    }
                 }
             }
 
@@ -335,6 +367,33 @@ class MicService : Service() {
                                 }
                             }
 
+                            // Debounced live web search injection for time-sensitive queries in Gemini Live
+                            liveSearchJob?.cancel()
+                            if (words.size >= 2 && MiraChatSearchHeuristic.isTimeSensitive(cleanText)) {
+                                val searchKey = "search:" + cleanText.lowercase(Locale.ROOT)
+                                if (!handledTranscripts.contains(searchKey)) {
+                                    liveSearchJob = serviceScope.launch(Dispatchers.IO) {
+                                        delay(600)
+                                        if (handledTranscripts.add(searchKey) && liveClient?.isSessionReady() == true) {
+                                            try {
+                                                val searchResults = FreeWebSearch.search(cleanText, maxResults = 5)
+                                                if (searchResults.isNotEmpty() && liveClient?.isSessionReady() == true) {
+                                                    val dateLine = currentDateTimeLine()
+                                                    val searchLines = searchResults.mapIndexed { idx, res ->
+                                                        "${idx + 1}. ${res.title} — ${res.snippet} (${res.url})"
+                                                    }.joinToString("\n")
+                                                    val payload = "[Live web search — searched just now, $dateLine:\n$searchLines\nAnswer ONLY from these fresh results, briefly, in $cachedLanguage.]"
+                                                    liveClient?.sendTextMessage(payload)
+                                                    Log.i(TAG, "Injected live search results into active Gemini Live session for query: $cleanText")
+                                                }
+                                            } catch (e: Exception) {
+                                                Log.w(TAG, "Error performing live voice web search: ${e.message}")
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
                             // Emergency macro voice stop: requires matching whole words "stop", "thamo", or "থামো"
                             // so that words like "stopwatch", "nonstop", or "laptop" do not falsely cancel running macros.
                             if (MacroRunner.isRunning.value) {
@@ -366,22 +425,27 @@ class MicService : Service() {
 
                     override fun onError(message: String) {
                         Log.e(TAG, "Voice session error termination: $message")
-                        _liveState.value = LiveState.ERROR
                         _lastVoiceDiagnostic.value = message
-                        _errorMessage.value = message
                         connectorJob?.cancel()
                         audioPlayer?.stopImmediatelyAndFlush()
                         audioRecorder?.stopRecording()
+                        audioRecorder = null
+
+                        // Automatically switch to fallback voice session
+                        serviceScope.launch(Dispatchers.Main) {
+                            startFallbackVoiceSession(message)
+                        }
                     }
 
                     override fun onClosed(reason: String) {
                         Log.i(TAG, "Voice session closed termination: $reason")
-                        if (_liveState.value != LiveState.ERROR) {
+                        if (_liveState.value != LiveState.ERROR && !isFallbackMode) {
                             _liveState.value = LiveState.IDLE
                         }
                         connectorJob?.cancel()
                         audioPlayer?.stopImmediatelyAndFlush()
                         audioRecorder?.stopRecording()
+                        audioRecorder = null
                     }
                 }
             )
@@ -402,11 +466,251 @@ class MicService : Service() {
         handledTranscripts.clear()
         audioRecorder?.stopRecording()
         audioRecorder = null
+        fallbackSession?.stop()
+        fallbackSession = null
+        try {
+            androidTts?.stop()
+            androidTts?.shutdown()
+        } catch (_: Exception) {}
+        androidTts = null
         audioPlayer?.release()
         audioPlayer = null
         liveClient?.endSession()
         liveClient = null
+        isFallbackMode = false
         _micAmplitude.value = 0f
+    }
+
+    private fun startFallbackVoiceSession(errorMessage: String) {
+        if (_liveState.value == LiveState.IDLE) {
+            // User requested stop
+            return
+        }
+        Log.i(TAG, "Switching to fallback voice session (Live error: $errorMessage)")
+        isFallbackMode = true
+        _errorMessage.value = null
+        _liveState.value = LiveState.LISTENING
+
+        // Show ONE short Toast
+        Toast.makeText(
+            applicationContext,
+            "Live voice didn't connect — using tap-to-talk instead",
+            Toast.LENGTH_SHORT
+        ).show()
+
+        val bcp47 = GeminiLiveClient.mapLanguageToBcp47(cachedLanguage)
+        initAndroidTts(bcp47)
+
+        if (audioPlayer == null) {
+            audioPlayer = AudioPlayer { isSpeaking ->
+                if (isSpeaking && _liveState.value != LiveState.ERROR && _liveState.value != LiveState.IDLE) {
+                    _liveState.value = LiveState.SPEAKING
+                } else if (!isSpeaking && _liveState.value == LiveState.SPEAKING) {
+                    _liveState.value = LiveState.LISTENING
+                    if (isFallbackMode) {
+                        fallbackSession?.resumeListening()
+                    }
+                }
+            }
+        }
+
+        fallbackSession?.stop()
+        fallbackSession = FallbackVoiceSession(
+            context = applicationContext,
+            languageCode = bcp47,
+            onFinalText = { text ->
+                handleFallbackFinalText(text)
+            },
+            onPartialText = { partial ->
+                _userTranscript.value = partial
+            },
+            onListeningChanged = { listening ->
+                if (listening && _liveState.value != LiveState.SPEAKING && _liveState.value != LiveState.ERROR && _liveState.value != LiveState.IDLE) {
+                    _liveState.value = LiveState.LISTENING
+                }
+            },
+            onError = { errMsg ->
+                Log.w(TAG, "Fallback voice session error: $errMsg")
+                _errorMessage.value = errMsg
+                _lastVoiceDiagnostic.value = errMsg
+            }
+        ).apply { start() }
+    }
+
+    private fun initAndroidTts(bcp47: String) {
+        if (androidTts != null) return
+        try {
+            androidTts = TextToSpeech(applicationContext) { status ->
+                if (status == TextToSpeech.SUCCESS) {
+                    val locale = Locale.forLanguageTag(bcp47)
+                    androidTts?.language = locale
+                    androidTts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                        override fun onStart(utteranceId: String?) {
+                            if (_liveState.value != LiveState.IDLE) {
+                                _liveState.value = LiveState.SPEAKING
+                            }
+                        }
+
+                        override fun onDone(utteranceId: String?) {
+                            if (_liveState.value != LiveState.IDLE) {
+                                _liveState.value = LiveState.LISTENING
+                                fallbackSession?.resumeListening()
+                            }
+                        }
+
+                        override fun onError(utteranceId: String?) {
+                            if (_liveState.value != LiveState.IDLE) {
+                                _liveState.value = LiveState.LISTENING
+                                fallbackSession?.resumeListening()
+                            }
+                        }
+                    })
+                    Log.i(TAG, "Android TextToSpeech initialized for locale $locale")
+                } else {
+                    Log.w(TAG, "Android TextToSpeech initialization failed with status $status")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error initializing Android TextToSpeech: ${e.message}")
+        }
+    }
+
+    private fun handleFallbackFinalText(text: String) {
+        _userTranscript.value = text
+        val cleanText = text.trim()
+        if (cleanText.isBlank()) {
+            fallbackSession?.resumeListening()
+            return
+        }
+
+        // Emergency macro stop
+        if (MacroRunner.isRunning.value) {
+            val lower = cleanText.lowercase(Locale.ROOT)
+            val stopTokens = lower.split("\\s+".toRegex())
+            val stopWords = setOf("stop", "thamo", "থামো")
+            if (stopTokens.any { it in stopWords }) {
+                MacroRunner.cancel("Stopped by voice: $cleanText")
+                fallbackSession?.resumeListening()
+                return
+            }
+        }
+
+        // Connector check
+        if (ConnectorIntentHandler.isConnectorCommand(cleanText)) {
+            serviceScope.launch(Dispatchers.IO) {
+                try {
+                    val result = ConnectorIntentHandler.handleCommand(applicationContext, cleanText)
+                    if (result != null) {
+                        _modelTranscript.value = result
+                        speakFallbackReply(result)
+                        return@launch
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Connector command error in fallback mode: ${e.message}")
+                }
+                generateAndSpeakRestReply(cleanText)
+            }
+        } else {
+            serviceScope.launch(Dispatchers.IO) {
+                generateAndSpeakRestReply(cleanText)
+            }
+        }
+    }
+
+    private suspend fun generateAndSpeakRestReply(text: String) {
+        val mockMsg = ChatMessageEntity(
+            conversationId = "voice_fallback",
+            role = "user",
+            content = text
+        )
+        val shouldGround = MiraChatSearchHeuristic.isTimeSensitive(text)
+        val restClient = GeminiRestClient()
+        // Voice turns stay FAST: fastest model, no thinking, narrow (time-sensitive
+        // only) search gate — the chat defaults (3.8-flash + thinking + wide gate)
+        // would make spoken replies slow.
+        val voiceSystemPrompt = cachedSystemPrompt +
+            "\nKeep voice answers short and fast — a few sentences at most unless the user asks for detail."
+        val respResult = restClient.generateChatResponse(
+            apiKey = cachedResolvedKey,
+            history = listOf(mockMsg),
+            systemPrompt = voiceSystemPrompt,
+            model = "gemini-3.5-flash-lite",
+            useServerProxy = cachedUseServerProxy,
+            enableGrounding = shouldGround,
+            enableThinking = false,
+            isChatCall = false
+        )
+
+        if (respResult.isFailure) {
+            val err = respResult.exceptionOrNull()?.message ?: "Unknown error"
+            Log.e(TAG, "REST chat response failed in fallback: $err")
+            withContext(Dispatchers.Main) {
+                Toast.makeText(applicationContext, "Chat error: $err", Toast.LENGTH_SHORT).show()
+                _liveState.value = LiveState.LISTENING
+                fallbackSession?.resumeListening()
+            }
+            return
+        }
+
+        val replyText = respResult.getOrThrow().text
+        _modelTranscript.value = replyText
+        speakFallbackReply(replyText)
+    }
+
+    private suspend fun speakFallbackReply(replyText: String) {
+        val ttsClient = GeminiTtsClient(applicationContext)
+        val ttsResult = ttsClient.speakText(
+            apiKey = cachedResolvedKey,
+            text = replyText,
+            voiceName = cachedVoiceName,
+            useServerProxy = cachedUseServerProxy
+        )
+
+        if (ttsResult.isSuccess) {
+            val pcmBytes = ttsResult.getOrThrow()
+            playPcmChunks(pcmBytes)
+        } else {
+            Log.w(TAG, "Gemini TTS failed (${ttsResult.exceptionOrNull()?.message}) — falling back to Android TextToSpeech")
+            withContext(Dispatchers.Main) {
+                speakWithAndroidTts(replyText)
+            }
+        }
+    }
+
+    private fun playPcmChunks(pcmBytes: ByteArray) {
+        val player = audioPlayer ?: AudioPlayer { isSpeaking ->
+            if (isSpeaking && _liveState.value != LiveState.ERROR && _liveState.value != LiveState.IDLE) {
+                _liveState.value = LiveState.SPEAKING
+            } else if (!isSpeaking && _liveState.value == LiveState.SPEAKING) {
+                _liveState.value = LiveState.LISTENING
+                if (isFallbackMode) {
+                    fallbackSession?.resumeListening()
+                }
+            }
+        }.also { audioPlayer = it }
+
+        val chunkSize = 4096
+        var offset = 0
+        while (offset < pcmBytes.size && (isFallbackMode || _liveState.value != LiveState.IDLE)) {
+            val end = minOf(offset + chunkSize, pcmBytes.size)
+            val chunk = pcmBytes.copyOfRange(offset, end)
+            player.playAudioChunk(chunk)
+            offset = end
+        }
+    }
+
+    private fun speakWithAndroidTts(replyText: String) {
+        val tts = androidTts
+        if (tts == null) {
+            _liveState.value = LiveState.LISTENING
+            fallbackSession?.resumeListening()
+            return
+        }
+        val cleanText = GeminiTtsClient(applicationContext).cleanMarkdownForSpeech(replyText)
+        _liveState.value = LiveState.SPEAKING
+        val params = android.os.Bundle()
+        params.putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "mira_fallback_utterance")
+        tts.speak(cleanText, TextToSpeech.QUEUE_FLUSH, params, "mira_fallback_utterance")
     }
 
     private fun createNotificationChannel() {

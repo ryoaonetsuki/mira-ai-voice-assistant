@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
 import io.github.ryoaonetsuki.mira.network.GeminiRestClient
+import io.github.ryoaonetsuki.mira.network.KeyValidationOutcome
 import io.github.ryoaonetsuki.mira.network.normalizeApiKey
 import io.github.ryoaonetsuki.mira.service.MiraAccessibilityService
 import io.github.ryoaonetsuki.mira.ui.components.MiraButton
@@ -41,6 +42,14 @@ import io.github.ryoaonetsuki.mira.ui.components.MiraCard
 import io.github.ryoaonetsuki.mira.ui.navigation.Screen
 import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
 import kotlinx.coroutines.launch
+
+private enum class SetupKeyStatus {
+    IDLE,
+    CHECKING,
+    VALID,
+    TRANSIENT,
+    INVALID
+}
 
 @Composable
 fun SetupScreen(
@@ -59,7 +68,7 @@ fun SetupScreen(
     var isKeyVisible by remember { mutableStateOf(false) }
     var isCheckingKey by remember { mutableStateOf(false) }
     var keyValidationMessage by remember { mutableStateOf<String?>(null) }
-    var isKeyValid by remember { mutableStateOf(false) }
+    var keyStatus by remember { mutableStateOf(SetupKeyStatus.IDLE) }
     var isServerKeyAvailable by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
@@ -193,6 +202,7 @@ fun SetupScreen(
                 onValueChange = {
                     apiKeyInput = it
                     keyValidationMessage = null
+                    keyStatus = SetupKeyStatus.IDLE
                 },
                 label = { Text("API Key") },
                 placeholder = { Text("Paste your API key — new keys start with AQ.") },
@@ -230,10 +240,16 @@ fun SetupScreen(
 
             if (keyValidationMessage != null) {
                 Spacer(modifier = Modifier.height(8.dp))
+                val msgColor = when (keyStatus) {
+                    SetupKeyStatus.VALID -> Color(0xFF10B981)
+                    SetupKeyStatus.TRANSIENT -> Color(0xFFF59E0B)
+                    SetupKeyStatus.INVALID -> Color(0xFFEF4444)
+                    SetupKeyStatus.CHECKING, SetupKeyStatus.IDLE -> palette.textSecondary
+                }
                 Text(
                     text = keyValidationMessage!!,
                     fontSize = 13.sp,
-                    color = if (isKeyValid) Color(0xFF10B981) else Color(0xFFEF4444)
+                    color = msgColor
                 )
             }
 
@@ -262,34 +278,53 @@ fun SetupScreen(
                     onClick = {
                         val normalized = normalizeApiKey(apiKeyInput)
                         if (normalized.isBlank()) {
+                            keyStatus = SetupKeyStatus.INVALID
                             keyValidationMessage = "Please enter an API key"
                             return@MiraButton
                         }
                         if (!securePrefs.isSecureStorageAvailable()) {
-                            isKeyValid = false
+                            keyStatus = SetupKeyStatus.INVALID
                             keyValidationMessage = "Secure storage unavailable on this device — key was not saved"
                             return@MiraButton
                         }
                         isCheckingKey = true
-                        keyValidationMessage = "Validating key with Google..."
+                        keyStatus = SetupKeyStatus.CHECKING
+                        keyValidationMessage = "Validating key with Google... (retrying if Google is busy)"
                         scope.launch {
-                            val result = restClient.validateApiKeyAndChat(normalized)
+                            val outcome = restClient.validateApiKeyAndChat(normalized)
                             isCheckingKey = false
-                            if (result.isSuccess) {
-                                val saved = securePrefs.setGeminiApiKey(normalized)
-                                if (saved) {
-                                    isKeyValid = true
-                                    keyValidationMessage = "Valid API Key! Stored encrypted on device."
-                                    currentStep = 2
-                                } else {
-                                    isKeyValid = false
-                                    keyValidationMessage = "Secure storage unavailable on this device — key was not saved"
+                            when (outcome) {
+                                is KeyValidationOutcome.Valid -> {
+                                    val saved = securePrefs.setGeminiApiKey(normalized)
+                                    if (saved) {
+                                        keyStatus = SetupKeyStatus.VALID
+                                        keyValidationMessage = "Valid API Key! Stored encrypted on device."
+                                        currentStep = 2
+                                    } else {
+                                        keyStatus = SetupKeyStatus.INVALID
+                                        keyValidationMessage = "Secure storage unavailable on this device — key was not saved"
+                                    }
                                 }
-                            } else {
-                                isKeyValid = false
-                                // Show exact validation error
-                                keyValidationMessage = result.exceptionOrNull()?.message
-                                    ?: "Key validation failed"
+                                is KeyValidationOutcome.TransientServerBusy -> {
+                                    val saved = securePrefs.setGeminiApiKey(normalized)
+                                    if (saved) {
+                                        keyStatus = SetupKeyStatus.TRANSIENT
+                                        keyValidationMessage = "Google's servers are busy right now — key saved, try again in a bit"
+                                        android.widget.Toast.makeText(
+                                            context,
+                                            "Google's servers are busy right now — key saved, try again in a bit",
+                                            android.widget.Toast.LENGTH_LONG
+                                        ).show()
+                                        currentStep = 2
+                                    } else {
+                                        keyStatus = SetupKeyStatus.INVALID
+                                        keyValidationMessage = "Google's servers are busy right now (HTTP 503 — high demand). Your key was NOT rejected — please try again in a bit."
+                                    }
+                                }
+                                is KeyValidationOutcome.InvalidKey -> {
+                                    keyStatus = SetupKeyStatus.INVALID
+                                    keyValidationMessage = outcome.userFacingMessage
+                                }
                             }
                         }
                     },
@@ -319,6 +354,33 @@ fun SetupScreen(
             }
         } else {
             // STEP 2: Permissions Wizard
+            if (keyValidationMessage != null && (keyStatus == SetupKeyStatus.VALID || keyStatus == SetupKeyStatus.TRANSIENT)) {
+                val bannerBg = if (keyStatus == SetupKeyStatus.TRANSIENT) {
+                    Color(0xFFF59E0B).copy(alpha = 0.15f)
+                } else {
+                    Color(0xFF10B981).copy(alpha = 0.15f)
+                }
+                val bannerTextColor = if (keyStatus == SetupKeyStatus.TRANSIENT) {
+                    Color(0xFFF59E0B)
+                } else {
+                    Color(0xFF10B981)
+                }
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = bannerBg,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = keyValidationMessage!!,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = bannerTextColor,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.height(14.dp))
+            }
+
             Text(
                 text = "Keep Mira Alive",
                 fontSize = 24.sp,

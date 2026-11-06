@@ -72,6 +72,7 @@ fun SetupScreen(
     val scope = rememberCoroutineScope()
     val securePrefs = remember { SecurePreferences(context) }
     val restClient = remember { GeminiRestClient() }
+    val serverVoiceClient = remember { io.github.ryoaonetsuki.mira.network.ServerVoiceClient() }
     val resolver = remember { io.github.ryoaonetsuki.mira.backend.ApiKeyResolver(context) }
 
     var currentStep by remember { mutableIntStateOf(startStep) }
@@ -81,6 +82,12 @@ fun SetupScreen(
     var keyValidationMessage by remember { mutableStateOf<String?>(null) }
     var keyStatus by remember { mutableStateOf(SetupKeyStatus.IDLE) }
     var isServerKeyAvailable by remember { mutableStateOf(false) }
+
+    var groqKeyInput by remember { mutableStateOf(securePrefs.getGroqApiKey() ?: "") }
+    var isGroqKeyVisible by remember { mutableStateOf(false) }
+    var isCheckingGroqKey by remember { mutableStateOf(false) }
+    var groqValidationMessage by remember { mutableStateOf<String?>(null) }
+    var groqKeyStatus by remember { mutableStateOf(SetupKeyStatus.IDLE) }
 
     LaunchedEffect(Unit) {
         isServerKeyAvailable = resolver.isServerKeyConfigured()
@@ -313,6 +320,9 @@ fun SetupScreen(
                                 is KeyValidationOutcome.Valid -> {
                                     val saved = securePrefs.setGeminiApiKey(normalized)
                                     if (saved) {
+                                        if (groqKeyInput.isNotBlank()) {
+                                            securePrefs.setGroqApiKey(groqKeyInput.trim())
+                                        }
                                         keyStatus = SetupKeyStatus.VALID
                                         keyValidationMessage = "Valid API Key! Stored encrypted on device."
                                         currentStep = 2
@@ -324,6 +334,9 @@ fun SetupScreen(
                                 is KeyValidationOutcome.TransientServerBusy -> {
                                     val saved = securePrefs.setGeminiApiKey(normalized)
                                     if (saved) {
+                                        if (groqKeyInput.isNotBlank()) {
+                                            securePrefs.setGroqApiKey(groqKeyInput.trim())
+                                        }
                                         keyStatus = SetupKeyStatus.TRANSIENT
                                         keyValidationMessage = "Google's servers are busy right now — key saved, try again in a bit"
                                         android.widget.Toast.makeText(
@@ -345,6 +358,138 @@ fun SetupScreen(
                         }
                     },
                     isLoading = isCheckingKey,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            // FIELD 2: Groq API Key (for voice)
+            OutlinedTextField(
+                value = groqKeyInput,
+                onValueChange = {
+                    groqKeyInput = it
+                    groqValidationMessage = null
+                    groqKeyStatus = SetupKeyStatus.IDLE
+                },
+                label = { Text("Groq API Key (for voice)") },
+                placeholder = { Text("Paste your Groq key — starts with gsk_") },
+                visualTransformation = if (isGroqKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                trailingIcon = {
+                    IconButton(onClick = { isGroqKeyVisible = !isGroqKeyVisible }) {
+                        Icon(
+                            imageVector = if (isGroqKeyVisible) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+                            contentDescription = "Toggle Visibility",
+                            tint = palette.textSecondary
+                        )
+                    }
+                },
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = palette.primary,
+                    unfocusedBorderColor = palette.surfaceVariant,
+                    focusedTextColor = palette.textPrimary,
+                    unfocusedTextColor = palette.textPrimary,
+                    focusedContainerColor = palette.surface,
+                    unfocusedContainerColor = palette.surface
+                ),
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            // Hint line under the Groq field
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "Free, no card — your own quota. Voice uses your Groq key for speech-to-text and fast replies; your Gemini key does the talking.",
+                fontSize = 12.sp,
+                color = palette.textSecondary,
+                lineHeight = 17.sp
+            )
+
+            if (groqValidationMessage != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                val gMsgColor = when (groqKeyStatus) {
+                    SetupKeyStatus.VALID -> Color(0xFF10B981)
+                    SetupKeyStatus.TRANSIENT -> Color(0xFFF59E0B)
+                    SetupKeyStatus.INVALID -> Color(0xFFEF4444)
+                    SetupKeyStatus.CHECKING, SetupKeyStatus.IDLE -> palette.textSecondary
+                }
+                Text(
+                    text = groqValidationMessage!!,
+                    fontSize = 13.sp,
+                    color = gMsgColor
+                )
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Groq Action Buttons
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                OutlinedButton(
+                    onClick = {
+                        val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://console.groq.com/keys"))
+                        browserIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                        context.startActivity(browserIntent)
+                    },
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = palette.primary),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Get Free Key")
+                }
+
+                MiraButton(
+                    text = "Test Groq Key",
+                    onClick = {
+                        val trimmed = groqKeyInput.trim()
+                        if (trimmed.isBlank()) {
+                            groqKeyStatus = SetupKeyStatus.INVALID
+                            groqValidationMessage = "Please enter a Groq API key"
+                            return@MiraButton
+                        }
+                        if (!securePrefs.isSecureStorageAvailable()) {
+                            groqKeyStatus = SetupKeyStatus.INVALID
+                            groqValidationMessage = "Secure storage unavailable on this device — key was not saved"
+                            return@MiraButton
+                        }
+                        isCheckingGroqKey = true
+                        groqKeyStatus = SetupKeyStatus.CHECKING
+                        groqValidationMessage = "Validating key with Groq..."
+                        scope.launch {
+                            val outcome = serverVoiceClient.validateGroqKey(trimmed)
+                            isCheckingGroqKey = false
+                            when (outcome) {
+                                is KeyValidationOutcome.Valid -> {
+                                    val saved = securePrefs.setGroqApiKey(trimmed)
+                                    if (saved) {
+                                        groqKeyStatus = SetupKeyStatus.VALID
+                                        groqValidationMessage = "Valid Groq Key! Stored encrypted on device."
+                                    } else {
+                                        groqKeyStatus = SetupKeyStatus.INVALID
+                                        groqValidationMessage = "Secure storage unavailable on this device — key was not saved"
+                                    }
+                                }
+                                is KeyValidationOutcome.TransientServerBusy -> {
+                                    val saved = securePrefs.setGroqApiKey(trimmed)
+                                    if (saved) {
+                                        groqKeyStatus = SetupKeyStatus.TRANSIENT
+                                        groqValidationMessage = outcome.message
+                                    } else {
+                                        groqKeyStatus = SetupKeyStatus.INVALID
+                                        groqValidationMessage = "Groq servers busy. Key was NOT rejected — try again shortly."
+                                    }
+                                }
+                                is KeyValidationOutcome.InvalidKey -> {
+                                    groqKeyStatus = SetupKeyStatus.INVALID
+                                    groqValidationMessage = outcome.userFacingMessage
+                                }
+                            }
+                        }
+                    },
+                    isLoading = isCheckingGroqKey,
                     modifier = Modifier.weight(1f)
                 )
             }

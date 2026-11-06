@@ -118,6 +118,7 @@ class ServerVoiceSession(
             onStageChanged(VoiceStage.ERROR)
             return
         }
+        audioRecorder?.enableLiveForwarding(true)
     }
 
     private fun connectWebSocket() {

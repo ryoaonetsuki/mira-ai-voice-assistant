@@ -1,6 +1,10 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
-import io.github.ryoaonetsuki.mira.ui.icons.Lucide
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -70,15 +74,15 @@ fun MarketsScreen(
                 title = { Text("Markets & Watchlist", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Lucide.arrowLeft, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 actions = {
                     IconButton(onClick = { refreshAllQuotes() }) {
-                        Icon(Lucide.refreshCw, contentDescription = "Refresh", tint = palette.primary)
+                        Icon(Icons.Rounded.Refresh, contentDescription = "Refresh", tint = palette.primary)
                     }
                     IconButton(onClick = { showAddDialog = true }) {
-                        Icon(Lucide.plus, contentDescription = "Add Symbol", tint = palette.primary)
+                        Icon(Icons.Rounded.Add, contentDescription = "Add Symbol", tint = palette.primary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -166,7 +170,7 @@ fun MarketsScreen(
                                     }
                                 ) {
                                     Icon(
-                                        imageVector = Lucide.x,
+                                        imageVector = Icons.Rounded.Close,
                                         contentDescription = "Remove",
                                         tint = palette.textSecondary,
                                         modifier = Modifier.size(18.dp)

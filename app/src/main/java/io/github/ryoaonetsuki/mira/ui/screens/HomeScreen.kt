@@ -17,6 +17,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -51,6 +52,7 @@ fun HomeScreen(
     val micAmp by MicService.micAmplitude.collectAsState()
     val userName by userPrefs.userNameFlow.collectAsState(initial = "Alex")
     val orbStyle by userPrefs.orbStyleFlow.collectAsState(initial = "Mira Neon")
+    val errorMessage by MicService.errorMessage.collectAsState()
 
     var weatherData by remember { mutableStateOf(WeatherData("24°C", "60%", "Clear")) }
 
@@ -87,11 +89,14 @@ fun HomeScreen(
         QuickChip("Vent", Icons.Rounded.Favorite, "I need someone to listen and talk things through.")
     )
 
+    val isLive = liveState != LiveState.IDLE && liveState != LiveState.ERROR
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(palette.background)
     ) {
+        // Scrollable main content
         Column(
             modifier = Modifier
                 .weight(1f)
@@ -113,17 +118,41 @@ fun HomeScreen(
                     color = palette.textPrimary
                 )
                 Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = when (liveState) {
-                        LiveState.IDLE -> "Mira is ready to assist you"
-                        LiveState.CONNECTING -> "Connecting to live voice..."
-                        LiveState.LISTENING -> "Listening to your voice..."
-                        LiveState.SPEAKING -> "Speaking..."
-                        LiveState.ERROR -> "Voice session error — check key"
-                    },
-                    fontSize = 13.sp,
-                    color = palette.textSecondary
-                )
+
+                // Error message display — shows real error when in ERROR state
+                if (liveState == LiveState.ERROR && errorMessage != null) {
+                    Text(
+                        text = errorMessage ?: "Voice session error",
+                        fontSize = 13.sp,
+                        color = Color(0xFFEF4444)
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    // Retry button
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "Retry",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = palette.primary,
+                            modifier = Modifier.clickable {
+                                MicService.stopService(context)
+                                MicService.startService(context)
+                            }
+                        )
+                    }
+                } else {
+                    Text(
+                        text = when (liveState) {
+                            LiveState.IDLE -> "Mira is ready to assist you"
+                            LiveState.CONNECTING -> "Connecting to live voice..."
+                            LiveState.LISTENING -> "Listening to your voice..."
+                            LiveState.SPEAKING -> "Speaking..."
+                            LiveState.ERROR -> "Voice session error — check key"
+                        },
+                        fontSize = 13.sp,
+                        color = palette.textSecondary
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(14.dp))
@@ -220,7 +249,40 @@ fun HomeScreen(
 
             Spacer(modifier = Modifier.height(22.dp))
 
-            // Quick action chips
+            // "Ask Mira anything…" input bar (above chips)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(palette.surface)
+                    .clickable { onNavigate(Screen.Chat.route) }
+                    .padding(horizontal = 14.dp, vertical = 12.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.ChatBubbleOutline,
+                    contentDescription = null,
+                    tint = palette.textSecondary,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = "Ask Mira anything…",
+                    fontSize = 14.sp,
+                    color = palette.textSecondary,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(
+                    imageVector = Icons.Rounded.Send,
+                    contentDescription = "Send",
+                    tint = palette.primary,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Quick action chips — directly above the bottom nav bar
             LazyRow(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -252,92 +314,137 @@ fun HomeScreen(
                     }
                 }
             }
+
+            Spacer(modifier = Modifier.height(8.dp))
         }
 
-        // Bottom Controls: Input Bar + Talk/Stop Button
-        Column(
+        // Bottom Navigation Bar
+        HomeBottomNavBar(
+            isLive = isLive,
+            context = context,
+            palette = palette,
+            onNavigate = onNavigate
+        )
+    }
+}
+
+@Composable
+private fun HomeBottomNavBar(
+    isLive: Boolean,
+    context: android.content.Context,
+    palette: io.github.ryoaonetsuki.mira.ui.theme.MiraPalette,
+    onNavigate: (String) -> Unit
+) {
+    val micButtonGradient = if (isLive) {
+        Brush.verticalGradient(listOf(Color(0xFFEF4444), Color(0xFFDC2626)))
+    } else {
+        Brush.verticalGradient(listOf(Color(0xFF22D3EE), Color(0xFF8B5CF6)))
+    }
+
+    Surface(
+        color = palette.surface,
+        shadowElevation = 12.dp,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(palette.surface)
-                .padding(horizontal = 18.dp, vertical = 12.dp)
+                .navigationBarsPadding()
+                .height(64.dp)
+                .padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceEvenly
         ) {
-            // Fake input bar that navigates to Chat screen
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
+            // Home tab
+            BottomNavItem(
+                icon = Icons.Rounded.Home,
+                label = "Home",
+                selected = true,
+                palette = palette,
+                onClick = { /* already on home */ }
+            )
+
+            // Scan tab
+            BottomNavItem(
+                icon = Icons.Rounded.QrCodeScanner,
+                label = "Scan",
+                selected = false,
+                palette = palette,
+                onClick = { onNavigate(Screen.Scan.route) }
+            )
+
+            // Centre BIG Voice button
+            Box(
+                contentAlignment = Alignment.Center,
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(palette.background)
-                    .clickable { onNavigate(Screen.Chat.route) }
-                    .padding(horizontal = 14.dp, vertical = 12.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.ChatBubbleOutline,
-                    contentDescription = null,
-                    tint = palette.textSecondary,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(10.dp))
-                Text(
-                    text = "Ask Mira anything…",
-                    fontSize = 14.sp,
-                    color = palette.textSecondary,
-                    modifier = Modifier.weight(1f)
-                )
-                Icon(
-                    imageVector = Icons.Rounded.Send,
-                    contentDescription = "Send",
-                    tint = palette.primary,
-                    modifier = Modifier.size(18.dp)
-                )
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // Big Mic Talk / Stop Button
-            val isLive = liveState != LiveState.IDLE && liveState != LiveState.ERROR
-            val micButtonGradient = if (isLive) {
-                Brush.horizontalGradient(listOf(Color(0xFFEF4444), Color(0xFFDC2626)))
-            } else {
-                Brush.horizontalGradient(listOf(palette.primary, palette.secondary))
-            }
-
-            Button(
-                onClick = {
-                    if (isLive) {
-                        MicService.stopService(context)
-                    } else {
-                        MicService.startService(context)
-                    }
-                },
-                shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
-                contentPadding = PaddingValues(),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(52.dp)
-                    .clip(RoundedCornerShape(16.dp))
+                    .size(56.dp)
+                    .shadow(elevation = 8.dp, shape = CircleShape)
+                    .clip(CircleShape)
                     .background(micButtonGradient)
+                    .clickable {
+                        if (isLive) {
+                            MicService.stopService(context)
+                        } else {
+                            MicService.startService(context)
+                        }
+                    }
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center
-                ) {
-                    Icon(
-                        imageVector = if (isLive) Icons.Rounded.Stop else Icons.Rounded.Mic,
-                        contentDescription = null,
-                        tint = Color.Black,
-                        modifier = Modifier.size(22.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = if (isLive) "Stop Session" else "Talk to Mira",
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.Black
-                    )
-                }
+                Icon(
+                    imageVector = if (isLive) Icons.Rounded.Stop else Icons.Rounded.Mic,
+                    contentDescription = if (isLive) "Stop Session" else "Talk to Mira",
+                    tint = Color.White,
+                    modifier = Modifier.size(26.dp)
+                )
             }
+
+            // Extensions tab
+            BottomNavItem(
+                icon = Icons.Rounded.Extension,
+                label = "Extensions",
+                selected = false,
+                palette = palette,
+                onClick = { onNavigate(Screen.Extensions.route) }
+            )
+
+            // Chat tab
+            BottomNavItem(
+                icon = Icons.Rounded.Chat,
+                label = "Chat",
+                selected = false,
+                palette = palette,
+                onClick = { onNavigate(Screen.Chat.route) }
+            )
         }
+    }
+}
+
+@Composable
+private fun BottomNavItem(
+    icon: ImageVector,
+    label: String,
+    selected: Boolean,
+    palette: io.github.ryoaonetsuki.mira.ui.theme.MiraPalette,
+    onClick: () -> Unit
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 6.dp)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = label,
+            tint = if (selected) palette.primary else palette.textSecondary,
+            modifier = Modifier.size(22.dp)
+        )
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+            text = label,
+            fontSize = 10.sp,
+            color = if (selected) palette.primary else palette.textSecondary,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
+        )
     }
 }

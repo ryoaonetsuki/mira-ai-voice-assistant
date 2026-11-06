@@ -1,5 +1,6 @@
 package io.github.ryoaonetsuki.mira.ui.components
 
+import io.github.ryoaonetsuki.mira.ui.icons.Lucide
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -8,8 +9,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -40,23 +39,23 @@ fun AppDrawer(
     val palette = LocalMiraPalette.current
 
     val drawerItems = listOf(
-        DrawerItem("Home", Screen.Home.route, Icons.Rounded.Home, "Core"),
-        DrawerItem("Chat", Screen.Chat.route, Icons.Rounded.ChatBubble, "Core"),
-        DrawerItem("Memories", Screen.Memories.route, Icons.Rounded.AutoAwesome, "Productivity"),
-        DrawerItem("Mira Rules", Screen.Rules.route, Icons.Rounded.Rule, "Productivity"),
-        DrawerItem("Documents", Screen.Documents.route, Icons.Rounded.Description, "Productivity"),
-        DrawerItem("Photos", Screen.Photos.route, Icons.Rounded.PhotoLibrary, "Productivity"),
-        DrawerItem("Code Projects", Screen.CodeProjects.route, Icons.Rounded.Code, "Creation"),
-        DrawerItem("Whiteboard", Screen.Whiteboard.route, Icons.Rounded.Brush, "Creation"),
-        DrawerItem("Vibes", Screen.Vibes.route, Icons.Rounded.GraphicEq, "Lifestyle"),
-        DrawerItem("Markets", Screen.Markets.route, Icons.Rounded.TrendingUp, "Lifestyle"),
-        DrawerItem("Marketing", Screen.Marketing.route, Icons.Rounded.Campaign, "Creation"),
-        DrawerItem("Extensions", Screen.Extensions.route, Icons.Rounded.Extension, "System"),
-        DrawerItem("Image Gen", Screen.ImageGen.route, Icons.Rounded.Image, "Tools"),
-        DrawerItem("Web Search", Screen.WebSearch.route, Icons.Rounded.Search, "Tools"),
-        DrawerItem("Browser", Screen.Browser.route, Icons.Rounded.Language, "Tools"),
-        DrawerItem("Settings", Screen.SettingsHub.route, Icons.Rounded.Settings, "System"),
-        DrawerItem("About", Screen.About.route, Icons.Rounded.Info, "System")
+        DrawerItem("Home", Screen.Home.route, Lucide.house, "Core"),
+        DrawerItem("Chat", Screen.Chat.route, Lucide.messageSquare, "Core"),
+        DrawerItem("Memories", Screen.Memories.route, Lucide.sparkles, "Productivity"),
+        DrawerItem("Mira Rules", Screen.Rules.route, Lucide.scale, "Productivity"),
+        DrawerItem("Documents", Screen.Documents.route, Lucide.fileText, "Productivity"),
+        DrawerItem("Photos", Screen.Photos.route, Lucide.images, "Productivity"),
+        DrawerItem("Code Projects", Screen.CodeProjects.route, Lucide.code, "Creation"),
+        DrawerItem("Whiteboard", Screen.Whiteboard.route, Lucide.brush, "Creation"),
+        DrawerItem("Vibes", Screen.Vibes.route, Lucide.audioLines, "Lifestyle"),
+        DrawerItem("Markets", Screen.Markets.route, Lucide.trendingUp, "Lifestyle"),
+        DrawerItem("Marketing", Screen.Marketing.route, Lucide.megaphone, "Creation"),
+        DrawerItem("Extensions", Screen.Extensions.route, Lucide.puzzle, "System"),
+        DrawerItem("Image Gen", Screen.ImageGen.route, Lucide.image, "Tools"),
+        DrawerItem("Web Search", Screen.WebSearch.route, Lucide.search, "Tools"),
+        DrawerItem("Browser", Screen.Browser.route, Lucide.globe, "Tools"),
+        DrawerItem("Settings", Screen.SettingsHub.route, Lucide.settings, "System"),
+        DrawerItem("About", Screen.About.route, Lucide.info, "System")
     )
 
     ModalDrawerSheet(

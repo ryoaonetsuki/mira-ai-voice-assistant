@@ -22,11 +22,24 @@ import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
 fun SocialSettingsScreen(
     onBack: () -> Unit
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val palette = LocalMiraPalette.current
+    val scope = rememberCoroutineScope()
+    val userPrefs = remember { io.github.ryoaonetsuki.mira.data.preferences.UserPreferences(context) }
 
-    var userHandle by remember { mutableStateOf("@mira_creator") }
-    var captionVoice by remember { mutableStateOf("Witty, bold and tech-savvy") }
-    var dailyStoryEnabled by remember { mutableStateOf(true) }
+    val savedHandle by userPrefs.userHandleFlow.collectAsState(initial = "@mira_creator")
+    val savedVoice by userPrefs.captionVoiceFlow.collectAsState(initial = "Witty, bold and tech-savvy")
+    val savedDailyStory by userPrefs.dailyStoryFlow.collectAsState(initial = true)
+
+    var userHandle by remember { mutableStateOf(savedHandle) }
+    var captionVoice by remember { mutableStateOf(savedVoice) }
+    var dailyStoryEnabled by remember { mutableStateOf(savedDailyStory) }
+
+    LaunchedEffect(savedHandle, savedVoice, savedDailyStory) {
+        userHandle = savedHandle
+        captionVoice = savedVoice
+        dailyStoryEnabled = savedDailyStory
+    }
 
     Scaffold(
         topBar = {
@@ -57,7 +70,10 @@ fun SocialSettingsScreen(
                 MiraCard(modifier = Modifier.fillMaxWidth()) {
                     OutlinedTextField(
                         value = userHandle,
-                        onValueChange = { userHandle = it },
+                        onValueChange = {
+                            userHandle = it
+                            scope.launch { userPrefs.setUserHandle(it) }
+                        },
                         label = { Text("Your Social Handle") },
                         placeholder = { Text("@username") },
                         singleLine = true,
@@ -66,7 +82,10 @@ fun SocialSettingsScreen(
                     Spacer(modifier = Modifier.height(10.dp))
                     OutlinedTextField(
                         value = captionVoice,
-                        onValueChange = { captionVoice = it },
+                        onValueChange = {
+                            captionVoice = it
+                            scope.launch { userPrefs.setCaptionVoice(it) }
+                        },
                         label = { Text("Caption Style & Voice") },
                         placeholder = { Text("e.g. Minimalist, professional") },
                         modifier = Modifier.fillMaxWidth()
@@ -87,7 +106,10 @@ fun SocialSettingsScreen(
                         }
                         MiraSwitch(
                             checked = dailyStoryEnabled,
-                            onCheckedChange = { dailyStoryEnabled = it }
+                            onCheckedChange = {
+                                dailyStoryEnabled = it
+                                scope.launch { userPrefs.setDailyStory(it) }
+                            }
                         )
                     }
                 }

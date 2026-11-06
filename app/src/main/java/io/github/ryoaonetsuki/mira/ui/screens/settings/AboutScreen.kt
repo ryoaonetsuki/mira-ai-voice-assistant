@@ -104,7 +104,7 @@ fun AboutScreen(
                     )
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "Mira is built with user privacy as a foundation. All BYOK Gemini API keys and connector credentials are encrypted using Android Keystore AES256-GCM hardware security. Voice sessions connect directly to Google's official Gemini Live WebSocket without intermediary proxy logging.",
+                        text = "Mira is built with user privacy as a foundation. All API keys and connector credentials are encrypted using Android Keystore AES256-GCM hardware security. Voice sessions connect directly via secure low-latency WebSocket without intermediary proxy logging.",
                         fontSize = 12.sp,
                         color = palette.textSecondary,
                         lineHeight = 18.sp

@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import io.github.ryoaonetsuki.mira.MiraAppScope
 import io.github.ryoaonetsuki.mira.R
 import io.github.ryoaonetsuki.mira.backend.ApiKeyResolver
 import io.github.ryoaonetsuki.mira.backend.KeySource
@@ -48,10 +49,12 @@ import io.github.ryoaonetsuki.mira.network.ConnectorIntentHandler
 import io.github.ryoaonetsuki.mira.network.GeminiRestClient
 import io.github.ryoaonetsuki.mira.network.GroundingSource
 import io.github.ryoaonetsuki.mira.network.MiraChatSearchHeuristic
+import io.github.ryoaonetsuki.mira.network.currentDateTimeLine
 import io.github.ryoaonetsuki.mira.network.normalizeApiKey
 import io.github.ryoaonetsuki.mira.projects.WebsiteProjectManager
 import io.github.ryoaonetsuki.mira.server.LocalProjectServer
 import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -75,7 +78,6 @@ fun ChatScreen(
 ) {
     val context = LocalContext.current
     val palette = LocalMiraPalette.current
-    val scope = rememberCoroutineScope()
     val db = remember { MiraDatabase.getInstance(context) }
     val securePrefs = remember { SecurePreferences(context) }
     val userPrefs = remember { UserPreferences(context) }
@@ -131,17 +133,37 @@ fun ChatScreen(
         when {
             url.startsWith("mira://project/") -> {
                 val projectName = url.removePrefix("mira://project/").trim()
-                scope.launch {
+                MiraAppScope.scope.launch {
                     try {
                         val internalProjectsDir = File(context.filesDir, "projects")
                         val projDir = File(internalProjectsDir, projectName)
-                        val targetDir = if (projDir.exists()) projDir else {
-                            val list = WebsiteProjectManager.listProjects(internalProjectsDir)
-                            list.firstOrNull { it.name.contains(projectName) || projectName.contains(it.name) }?.dir ?: projDir
+                        val extProjectsDir = context.getExternalFilesDir(null)?.let { File(it, "Mira/Projects") }
+                        val extProjDir = extProjectsDir?.let { File(it, projectName) }
+
+                        val targetDir = when {
+                            projDir.exists() -> projDir
+                            extProjDir != null && extProjDir.exists() -> extProjDir
+                            else -> {
+                                val internalList = WebsiteProjectManager.listProjects(internalProjectsDir)
+                                val matchedInternal = internalList.firstOrNull { it.name.contains(projectName, ignoreCase = true) || projectName.contains(it.name, ignoreCase = true) }?.dir
+                                if (matchedInternal != null) {
+                                    matchedInternal
+                                } else if (extProjectsDir != null && extProjectsDir.exists()) {
+                                    val extList = WebsiteProjectManager.listProjects(extProjectsDir)
+                                    extList.firstOrNull { it.name.contains(projectName, ignoreCase = true) || projectName.contains(it.name, ignoreCase = true) }?.dir ?: projDir
+                                } else {
+                                    projDir
+                                }
+                            }
                         }
                         val serverUrl = LocalProjectServer.startServer(targetDir)
                         onOpenBrowser?.invoke(serverUrl)
                     } catch (e: Exception) {
+                        if (e is CancellationException) return@launch
+                        val msg = e.message ?: ""
+                        if (msg.contains("coroutine scope left the composition", ignoreCase = true)) {
+                            return@launch
+                        }
                         android.util.Log.e("ChatScreen", "Could not start local site preview: ${e.message}")
                         Toast.makeText(context, "Could not open preview: ${e.message}", Toast.LENGTH_SHORT).show()
                     }
@@ -149,7 +171,7 @@ fun ChatScreen(
             }
             url.startsWith("mira://file/") -> {
                 val fileName = url.removePrefix("mira://file/").trim()
-                scope.launch {
+                MiraAppScope.scope.launch {
                     try {
                         val internalFile = File(File(context.filesDir, "files"), fileName)
                         val extDir = context.getExternalFilesDir(null)?.let { File(it, "Mira/Files") }
@@ -170,6 +192,11 @@ fun ChatScreen(
                             content = content
                         )
                     } catch (e: Exception) {
+                        if (e is CancellationException) return@launch
+                        val msg = e.message ?: ""
+                        if (msg.contains("coroutine scope left the composition", ignoreCase = true)) {
+                            return@launch
+                        }
                         android.util.Log.e("ChatScreen", "Could not open code viewer: ${e.message}")
                         Toast.makeText(context, "Could not open file: ${e.message}", Toast.LENGTH_SHORT).show()
                     }
@@ -222,7 +249,7 @@ fun ChatScreen(
                     // New conversation
                     IconButton(onClick = {
                         val newId = UUID.randomUUID().toString()
-                        scope.launch {
+                        MiraAppScope.scope.launch {
                             db.chatDao().insertConversation(
                                 ConversationEntity(
                                     id = newId,
@@ -607,7 +634,7 @@ fun ChatScreen(
                                 inputMessage = ""
                                 isSending = true
                                 isBuildingFileNow = false
-                                scope.launch {
+                                MiraAppScope.scope.launch {
                                     var apiKey = ""
                                     var useServer = false
                                     var sysPrompt = ""
@@ -674,7 +701,9 @@ fun ChatScreen(
                                             "If asked directly whether you are an AI, a robot, or a real human: stay in character, say you are Mira, their companion, here with them — never claim to be a biological human, and never give a robotic disclaimer or lecture about being an AI. Then gently steer back to the conversation."
                                         }
 
+                                        val dateLine = currentDateTimeLine()
                                         sysPrompt = buildString {
+                                            append("Current date and time (from the device clock — always trust this, never guess or use training knowledge): $dateLine. If asked for the date, time or day, answer from this line.\n")
                                             append(personaType.basePrompt)
                                             append(" ")
                                             append(toneDescription)
@@ -692,12 +721,12 @@ fun ChatScreen(
                                         }
 
                                         allMsgs = messages + userMsg
-                                        val shouldGround = MiraChatSearchHeuristic.isTimeSensitive(text)
+                                        val shouldGround = MiraChatSearchHeuristic.isChatSearchWorthy(text)
                                         var capturedSources: List<GroundingSource> = emptyList()
                                         val accumulated = StringBuilder()
                                         var anyChunkReceived = false
 
-                                        withTimeout(90_000L) {
+                                        withTimeout(180_000L) {
                                             try {
                                                 restClient.generateChatResponseStreaming(
                                                     apiKey = apiKey,
@@ -724,10 +753,14 @@ fun ChatScreen(
                                                     }
                                                 }
                                             } catch (streamErr: Exception) {
+                                                if (streamErr is CancellationException) throw streamErr
                                                 if (anyChunkReceived) {
-                                                    accumulated.append("\n[Connection error: ${streamErr.message ?: "Stream interrupted"}]")
-                                                    val (displayOverview, _) = WebsiteProjectManager.extractStreamingDisplay(accumulated.toString(), isBangla)
-                                                    streamingMessageText = displayOverview
+                                                    val streamErrMsg = streamErr.message ?: "Stream interrupted"
+                                                    if (!streamErrMsg.contains("coroutine scope left the composition", ignoreCase = true)) {
+                                                        accumulated.append("\n[Connection error: $streamErrMsg]")
+                                                        val (displayOverview, _) = WebsiteProjectManager.extractStreamingDisplay(accumulated.toString(), isBangla)
+                                                        streamingMessageText = displayOverview
+                                                    }
                                                 } else {
                                                     throw streamErr
                                                 }
@@ -746,7 +779,7 @@ fun ChatScreen(
                                                 )
                                             )
                                         } else {
-                                            val fallbackResponse = withTimeout(90_000L) {
+                                            val fallbackResponse = withTimeout(180_000L) {
                                                 restClient.generateChatResponse(
                                                     apiKey = apiKey,
                                                     history = allMsgs,
@@ -768,13 +801,17 @@ fun ChatScreen(
                                                 )
                                             } else {
                                                 val reason = fallbackResponse.exceptionOrNull()?.message ?: "Unknown error"
-                                                db.chatDao().insertMessage(
-                                                    ChatMessageEntity(
-                                                        conversationId = currentConversationId,
-                                                        role = "error",
-                                                        content = "Mira could not reply: $reason"
+                                                if (reason.contains("coroutine scope left the composition", ignoreCase = true)) {
+                                                    Toast.makeText(context, "Action interrupted", Toast.LENGTH_SHORT).show()
+                                                } else {
+                                                    db.chatDao().insertMessage(
+                                                        ChatMessageEntity(
+                                                            conversationId = currentConversationId,
+                                                            role = "error",
+                                                            content = "Mira could not reply: $reason"
+                                                        )
                                                     )
-                                                )
+                                                }
                                             }
                                         }
                                     } catch (e: TimeoutCancellationException) {
@@ -783,7 +820,7 @@ fun ChatScreen(
                                                 ChatMessageEntity(
                                                     conversationId = currentConversationId,
                                                     role = "model",
-                                                    content = streamingMessageText!! + "\n[Timed out after 90 seconds]"
+                                                    content = streamingMessageText!! + "\n[Timed out after 180 seconds]"
                                                 )
                                             )
                                         } else {
@@ -791,17 +828,25 @@ fun ChatScreen(
                                                 ChatMessageEntity(
                                                     conversationId = currentConversationId,
                                                     role = "error",
-                                                    content = "Mira could not reply: request timed out after 90 seconds"
+                                                    content = "Mira could not reply: request timed out after 180 seconds"
                                                 )
                                             )
                                         }
                                     } catch (e: Exception) {
+                                        if (e is CancellationException) {
+                                            return@launch
+                                        }
+                                        val errMessage = e.message ?: "Unknown error"
+                                        if (errMessage.contains("coroutine scope left the composition", ignoreCase = true)) {
+                                            Toast.makeText(context, "Action interrupted", Toast.LENGTH_SHORT).show()
+                                            return@launch
+                                        }
                                         if (streamingMessageText != null && streamingMessageText!!.isNotEmpty()) {
                                             db.chatDao().insertMessage(
                                                 ChatMessageEntity(
                                                     conversationId = currentConversationId,
                                                     role = "model",
-                                                    content = streamingMessageText!! + "\n[Error: ${e.message ?: "Unknown error"}]"
+                                                    content = streamingMessageText!! + "\n[Error: $errMessage]"
                                                 )
                                             )
                                         } else {
@@ -811,7 +856,7 @@ fun ChatScreen(
                                                     history = allMsgs,
                                                     systemPrompt = sysPrompt,
                                                     useServerProxy = useServer,
-                                                    enableGrounding = MiraChatSearchHeuristic.isTimeSensitive(text)
+                                                    enableGrounding = MiraChatSearchHeuristic.isChatSearchWorthy(text)
                                                 )
                                             } catch (_: Exception) { null }
 
@@ -827,13 +872,18 @@ fun ChatScreen(
                                                     )
                                                 )
                                             } else {
-                                                db.chatDao().insertMessage(
-                                                    ChatMessageEntity(
-                                                        conversationId = currentConversationId,
-                                                        role = "error",
-                                                        content = "Mira could not reply: ${e.message ?: "Unknown error"}"
+                                                val fallbackReason = fallback?.exceptionOrNull()?.message ?: errMessage
+                                                if (fallbackReason.contains("coroutine scope left the composition", ignoreCase = true)) {
+                                                    Toast.makeText(context, "Action interrupted", Toast.LENGTH_SHORT).show()
+                                                } else {
+                                                    db.chatDao().insertMessage(
+                                                        ChatMessageEntity(
+                                                            conversationId = currentConversationId,
+                                                            role = "error",
+                                                            content = "Mira could not reply: $fallbackReason"
+                                                        )
                                                     )
-                                                )
+                                                }
                                             }
                                         }
                                     } finally {
@@ -877,7 +927,7 @@ fun ChatScreen(
                 confirmButton = {
                     TextButton(onClick = {
                         showClearConfirm = false
-                        scope.launch {
+                        MiraAppScope.scope.launch {
                             db.chatDao().deleteMessagesForConversation(currentConversationId)
                         }
                     }) {

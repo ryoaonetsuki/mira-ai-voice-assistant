@@ -1,6 +1,23 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
-import io.github.ryoaonetsuki.mira.ui.icons.Lucide
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Alarm
+import androidx.compose.material.icons.rounded.Book
+import androidx.compose.material.icons.rounded.CalendarToday
+import androidx.compose.material.icons.rounded.CenterFocusStrong
+import androidx.compose.material.icons.rounded.Chat
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Extension
+import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material.icons.rounded.Mood
+import androidx.compose.material.icons.rounded.MusicNote
+import androidx.compose.material.icons.rounded.Newspaper
+import androidx.compose.material.icons.rounded.QrCodeScanner
+import androidx.compose.material.icons.rounded.School
+import androidx.compose.material.icons.rounded.Stop
+import androidx.compose.material.icons.rounded.WbSunny
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
@@ -95,14 +112,14 @@ fun HomeScreen(
     }
 
     val quickChips = listOf(
-        QuickChip("Music", Lucide.eighthNote, "Let's play some music to match the mood."),
-        QuickChip("Study", Lucide.graduationCap, "Help me study and explain key concepts."),
-        QuickChip("Journal", Lucide.book, "Let's do a quick journal entry about today."),
-        QuickChip("News", Lucide.newspaper, "What are the top news headlines right now?"),
-        QuickChip("Tasks", Lucide.circleCheck, "What tasks should I focus on next?"),
-        QuickChip("Reminder", Lucide.alarmClock, "Set a reminder for my upcoming schedule."),
-        QuickChip("Focus", Lucide.focus, "Let's begin a 25-minute Pomodoro focus session."),
-        QuickChip("Vent", Lucide.heart, "I need someone to listen and talk things through.")
+        QuickChip("Music", Icons.Rounded.MusicNote, "Let's play some music to match the mood."),
+        QuickChip("Study", Icons.Rounded.School, "Help me study and explain key concepts."),
+        QuickChip("Journal", Icons.Rounded.Book, "Let's do a quick journal entry about today."),
+        QuickChip("News", Icons.Rounded.Newspaper, "What are the top news headlines right now?"),
+        QuickChip("Tasks", Icons.Rounded.CheckCircle, "What tasks should I focus on next?"),
+        QuickChip("Reminder", Icons.Rounded.Alarm, "Set a reminder for my upcoming schedule."),
+        QuickChip("Focus", Icons.Rounded.CenterFocusStrong, "Let's begin a 25-minute Pomodoro focus session."),
+        QuickChip("Vent", Icons.Rounded.Favorite, "I need someone to listen and talk things through.")
     )
 
     val isLive = liveState == LiveState.CONNECTING || liveState == LiveState.LISTENING || liveState == LiveState.SPEAKING
@@ -169,7 +186,7 @@ fun HomeScreen(
                     cornerRadius = 14.dp
                 ) {
                     Icon(
-                        imageVector = Lucide.sun,
+                        imageVector = Icons.Rounded.WbSunny,
                         contentDescription = "Weather",
                         tint = palette.primary,
                         modifier = Modifier.size(18.dp)
@@ -194,7 +211,7 @@ fun HomeScreen(
                     cornerRadius = 14.dp
                 ) {
                     Icon(
-                        imageVector = Lucide.calendar,
+                        imageVector = Icons.Rounded.CalendarToday,
                         contentDescription = "Date",
                         tint = palette.secondary,
                         modifier = Modifier.size(18.dp)
@@ -219,7 +236,7 @@ fun HomeScreen(
                     cornerRadius = 14.dp
                 ) {
                     Icon(
-                        imageVector = Lucide.faceSlightlySmiling,
+                        imageVector = Icons.Rounded.Mood,
                         contentDescription = "Mood",
                         tint = Color(0xFF10B981),
                         modifier = Modifier.size(18.dp)
@@ -359,7 +376,7 @@ private fun HomeBottomNavBar(
         ) {
             // Home tab
             BottomNavItem(
-                icon = Lucide.house,
+                icon = Icons.Rounded.Home,
                 label = "Home",
                 selected = true,
                 palette = palette,
@@ -368,7 +385,7 @@ private fun HomeBottomNavBar(
 
             // Scan tab
             BottomNavItem(
-                icon = Lucide.scanQrCode,
+                icon = Icons.Rounded.QrCodeScanner,
                 label = "Scan",
                 selected = false,
                 palette = palette,
@@ -400,7 +417,7 @@ private fun HomeBottomNavBar(
                     }
             ) {
                 Icon(
-                    imageVector = if (isLive) Lucide.square else Lucide.mic,
+                    imageVector = if (isLive) Icons.Rounded.Stop else Icons.Rounded.Mic,
                     contentDescription = if (isLive) "Stop Session" else "Talk to Mira",
                     tint = Color.White,
                     modifier = Modifier.size(26.dp)
@@ -409,7 +426,7 @@ private fun HomeBottomNavBar(
 
             // Extensions tab
             BottomNavItem(
-                icon = Lucide.puzzle,
+                icon = Icons.Rounded.Extension,
                 label = "Extensions",
                 selected = false,
                 palette = palette,
@@ -418,7 +435,7 @@ private fun HomeBottomNavBar(
 
             // Chat tab
             BottomNavItem(
-                icon = Lucide.messageCircle,
+                icon = Icons.Rounded.Chat,
                 label = "Chat",
                 selected = false,
                 palette = palette,

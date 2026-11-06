@@ -1,5 +1,6 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -15,6 +16,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -26,9 +28,12 @@ import io.github.ryoaonetsuki.mira.data.local.entities.ConversationEntity
 import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
 import io.github.ryoaonetsuki.mira.data.preferences.UserPreferences
 import io.github.ryoaonetsuki.mira.network.GeminiRestClient
+import io.github.ryoaonetsuki.mira.network.normalizeApiKey
 import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import java.util.UUID
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -54,6 +59,9 @@ fun ChatScreen(
     val messages by db.chatDao().getMessagesForConversation(currentConversationId).collectAsState(initial = emptyList())
 
     val listState = rememberLazyListState()
+
+    // Mira avatar gradient colours
+    val miraGradient = Brush.linearGradient(listOf(Color(0xFF22D3EE), Color(0xFF8B5CF6)))
 
     // Ensure default conversation exists
     LaunchedEffect(Unit) {
@@ -182,54 +190,123 @@ fun ChatScreen(
                         .weight(1f)
                         .fillMaxWidth()
                         .padding(horizontal = 14.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    contentPadding = PaddingValues(vertical = 10.dp)
                 ) {
                     items(messages) { msg ->
                         val isUser = msg.role == "user"
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .widthIn(max = 280.dp)
-                                    .clip(
-                                        RoundedCornerShape(
-                                            topStart = 16.dp,
-                                            topEnd = 16.dp,
-                                            bottomStart = if (isUser) 16.dp else 4.dp,
-                                            bottomEnd = if (isUser) 4.dp else 16.dp
-                                        )
-                                    )
-                                    .background(if (isUser) palette.primary else palette.surface)
-                                    .padding(horizontal = 14.dp, vertical = 10.dp)
+                        val isError = msg.role == "error"
+
+                        if (isUser) {
+                            // User message — right-aligned, no avatar
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
                             ) {
-                                Text(
-                                    text = msg.content,
-                                    fontSize = 14.sp,
-                                    lineHeight = 20.sp,
-                                    color = if (isUser) Color.Black else palette.textPrimary
-                                )
+                                Box(
+                                    modifier = Modifier
+                                        .widthIn(max = 280.dp)
+                                        .clip(
+                                            RoundedCornerShape(
+                                                topStart = 16.dp,
+                                                topEnd = 16.dp,
+                                                bottomStart = 16.dp,
+                                                bottomEnd = 4.dp
+                                            )
+                                        )
+                                        .background(palette.primary)
+                                        .padding(horizontal = 14.dp, vertical = 10.dp)
+                                ) {
+                                    Text(
+                                        text = msg.content,
+                                        fontSize = 14.sp,
+                                        lineHeight = 20.sp,
+                                        color = Color.Black
+                                    )
+                                }
+                            }
+                        } else {
+                            // Mira / error message — left-aligned with avatar circle
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.Start,
+                                verticalAlignment = Alignment.Bottom
+                            ) {
+                                // Avatar circle
+                                Box(
+                                    contentAlignment = Alignment.Center,
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .clip(CircleShape)
+                                        .background(if (isError) Color(0xFFEF4444) else miraGradient)
+                                ) {
+                                    Text(
+                                        text = if (isError) "!" else "M",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .widthIn(max = 260.dp)
+                                        .clip(
+                                            RoundedCornerShape(
+                                                topStart = 4.dp,
+                                                topEnd = 16.dp,
+                                                bottomStart = 16.dp,
+                                                bottomEnd = 16.dp
+                                            )
+                                        )
+                                        .background(
+                                            if (isError) Color(0xFFEF4444).copy(alpha = 0.15f)
+                                            else palette.surface
+                                        )
+                                        .padding(horizontal = 14.dp, vertical = 10.dp)
+                                ) {
+                                    Text(
+                                        text = msg.content,
+                                        fontSize = 14.sp,
+                                        lineHeight = 20.sp,
+                                        color = if (isError) Color(0xFFEF4444) else palette.textPrimary
+                                    )
+                                }
                             }
                         }
                     }
+
+                    // Animated 3-dot typing indicator
                     if (isSending) {
                         item {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.Start
+                                horizontalArrangement = Arrangement.Start,
+                                verticalAlignment = Alignment.Bottom
                             ) {
+                                // Avatar
                                 Box(
+                                    contentAlignment = Alignment.Center,
                                     modifier = Modifier
-                                        .clip(RoundedCornerShape(14.dp))
-                                        .background(palette.surface)
-                                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                                        .size(32.dp)
+                                        .clip(CircleShape)
+                                        .background(miraGradient)
                                 ) {
                                     Text(
-                                        text = "Mira is thinking…",
-                                        fontSize = 12.sp,
-                                        color = palette.textSecondary
+                                        text = "M",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White
                                     )
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(topStart = 4.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 16.dp))
+                                        .background(palette.surface)
+                                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                                ) {
+                                    TypingDotsIndicator(palette.textSecondary)
                                 }
                             }
                         }
@@ -242,6 +319,7 @@ fun ChatScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .fillMaxWidth()
+                    .imePadding()
                     .background(palette.surface)
                     .padding(horizontal = 14.dp, vertical = 8.dp)
             ) {
@@ -270,39 +348,64 @@ fun ChatScreen(
                             inputMessage = ""
                             isSending = true
                             scope.launch {
-                                // Insert user turn
-                                val userMsg = ChatMessageEntity(
-                                    conversationId = currentConversationId,
-                                    role = "user",
-                                    content = text
-                                )
-                                db.chatDao().insertMessage(userMsg)
+                                try {
+                                    // Insert user turn
+                                    val userMsg = ChatMessageEntity(
+                                        conversationId = currentConversationId,
+                                        role = "user",
+                                        content = text
+                                    )
+                                    db.chatDao().insertMessage(userMsg)
 
-                                val apiKey = securePrefs.getGeminiApiKey() ?: ""
-                                val persona = userPrefs.personaFlow.first()
-                                val rules = db.ruleDao().getActiveRules().joinToString("\n") { "- ${it.rule}" }
-                                val sysPrompt = "You are $persona, a brilliant, thoughtful, and helpful AI assistant. Rules:\n$rules"
+                                    val rawKey = securePrefs.getGeminiApiKey() ?: ""
+                                    val apiKey = normalizeApiKey(rawKey)
+                                    val persona = userPrefs.personaFlow.first()
+                                    val rules = db.ruleDao().getActiveRules().joinToString("\n") { "- ${it.rule}" }
+                                    val sysPrompt = "You are $persona, a brilliant, thoughtful, and helpful AI assistant. Rules:\n$rules"
 
-                                val allMsgs = messages + userMsg
-                                val response = restClient.generateChatResponse(apiKey, allMsgs, sysPrompt)
+                                    val allMsgs = messages + userMsg
 
-                                isSending = false
-                                if (response.isSuccess) {
+                                    // 90-second overall timeout
+                                    val response = withTimeout(90_000L) {
+                                        restClient.generateChatResponse(apiKey, allMsgs, sysPrompt)
+                                    }
+
+                                    if (response.isSuccess) {
+                                        db.chatDao().insertMessage(
+                                            ChatMessageEntity(
+                                                conversationId = currentConversationId,
+                                                role = "model",
+                                                content = response.getOrThrow()
+                                            )
+                                        )
+                                    } else {
+                                        val reason = response.exceptionOrNull()?.message ?: "Unknown error"
+                                        db.chatDao().insertMessage(
+                                            ChatMessageEntity(
+                                                conversationId = currentConversationId,
+                                                role = "error",
+                                                content = "Mira could not reply: $reason"
+                                            )
+                                        )
+                                    }
+                                } catch (e: TimeoutCancellationException) {
                                     db.chatDao().insertMessage(
                                         ChatMessageEntity(
                                             conversationId = currentConversationId,
-                                            role = "model",
-                                            content = response.getOrThrow()
+                                            role = "error",
+                                            content = "Mira could not reply: request timed out after 90 seconds"
                                         )
                                     )
-                                } else {
+                                } catch (e: Exception) {
                                     db.chatDao().insertMessage(
                                         ChatMessageEntity(
                                             conversationId = currentConversationId,
-                                            role = "model",
-                                            content = "Sorry, I encountered an issue: ${response.exceptionOrNull()?.message}"
+                                            role = "error",
+                                            content = "Mira could not reply: ${e.message ?: "Unknown error"}"
                                         )
                                     )
+                                } finally {
+                                    isSending = false
                                 }
                             }
                         }
@@ -346,6 +449,54 @@ fun ChatScreen(
                 containerColor = palette.surface,
                 titleContentColor = palette.textPrimary,
                 textContentColor = palette.textSecondary
+            )
+        }
+    }
+}
+
+/** Animated three-dot typing indicator using infiniteTransition. */
+@Composable
+private fun TypingDotsIndicator(dotColor: Color) {
+    val infiniteTransition = rememberInfiniteTransition(label = "typing_dots")
+
+    val dot1Alpha by infiniteTransition.animateFloat(
+        initialValue = 0.3f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(500, easing = EaseInOut),
+            repeatMode = RepeatMode.Reverse,
+            initialStartOffset = StartOffset(0)
+        ),
+        label = "dot1"
+    )
+    val dot2Alpha by infiniteTransition.animateFloat(
+        initialValue = 0.3f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(500, easing = EaseInOut),
+            repeatMode = RepeatMode.Reverse,
+            initialStartOffset = StartOffset(160)
+        ),
+        label = "dot2"
+    )
+    val dot3Alpha by infiniteTransition.animateFloat(
+        initialValue = 0.3f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(500, easing = EaseInOut),
+            repeatMode = RepeatMode.Reverse,
+            initialStartOffset = StartOffset(320)
+        ),
+        label = "dot3"
+    )
+
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        listOf(dot1Alpha, dot2Alpha, dot3Alpha).forEach { alpha ->
+            Box(
+                modifier = Modifier
+                    .size(7.dp)
+                    .clip(CircleShape)
+                    .background(dotColor.copy(alpha = alpha))
             )
         }
     }

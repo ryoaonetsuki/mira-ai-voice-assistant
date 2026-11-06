@@ -1,11 +1,10 @@
 package io.github.ryoaonetsuki.mira.ui.screens.settings
 
+import io.github.ryoaonetsuki.mira.ui.icons.Lucide
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -37,12 +36,12 @@ fun SkillsSettingsScreen(
 
     val skills = remember {
         mutableStateListOf(
-            MiraSkill("web_search", "Web Search Playbook", "Gathers fresh info and web citations from the live internet", Icons.Rounded.Search, skillPrefs.getBoolean("skill_web_search", true)),
-            MiraSkill("coding", "Full-Stack Code Agent", "Builds interactive web apps and scripts in app storage", Icons.Rounded.Code, skillPrefs.getBoolean("skill_coding", true)),
-            MiraSkill("memory", "Long-Term Memory Keeper", "Extracts durable personal facts and routines from voice dialogues", Icons.Rounded.AutoAwesome, skillPrefs.getBoolean("skill_memory", true)),
-            MiraSkill("marketing", "Business Post Creator", "Generates high-converting marketing copy and captions", Icons.Rounded.Campaign, skillPrefs.getBoolean("skill_marketing", true)),
-            MiraSkill("finance", "Market Watcher", "Fetches live ticker quotes and crypto data via Yahoo Finance", Icons.Rounded.TrendingUp, skillPrefs.getBoolean("skill_finance", true)),
-            MiraSkill("macros", "Android Device Macros", "Executes phone calls, WhatsApp messages, and maps navigation", Icons.Rounded.PhoneAndroid, skillPrefs.getBoolean("skill_macros", true))
+            MiraSkill("web_search", "Web Search Playbook", "Gathers fresh info and web citations from the live internet", Lucide.search, skillPrefs.getBoolean("skill_web_search", true)),
+            MiraSkill("coding", "Full-Stack Code Agent", "Builds interactive web apps and scripts in app storage", Lucide.code, skillPrefs.getBoolean("skill_coding", true)),
+            MiraSkill("memory", "Long-Term Memory Keeper", "Extracts durable personal facts and routines from voice dialogues", Lucide.sparkles, skillPrefs.getBoolean("skill_memory", true)),
+            MiraSkill("marketing", "Business Post Creator", "Generates high-converting marketing copy and captions", Lucide.megaphone, skillPrefs.getBoolean("skill_marketing", true)),
+            MiraSkill("finance", "Market Watcher", "Fetches live ticker quotes and crypto data via Yahoo Finance", Lucide.trendingUp, skillPrefs.getBoolean("skill_finance", true)),
+            MiraSkill("macros", "Android Device Macros", "Executes phone calls, WhatsApp messages, and maps navigation", Lucide.smartphone, skillPrefs.getBoolean("skill_macros", true))
         )
     }
 
@@ -52,7 +51,7 @@ fun SkillsSettingsScreen(
                 title = { Text("Installed Skills", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(Lucide.arrowLeft, contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)

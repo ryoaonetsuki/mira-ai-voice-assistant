@@ -1,13 +1,16 @@
 package io.github.ryoaonetsuki.mira.service
 
+import android.Manifest
 import android.app.*
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import io.github.ryoaonetsuki.mira.MainActivity
 import io.github.ryoaonetsuki.mira.R
 import io.github.ryoaonetsuki.mira.automation.MacroRunner
@@ -108,28 +111,52 @@ class MicService : Service() {
         _userTranscript.value = ""
         _modelTranscript.value = ""
         _errorMessage.value = null
+        _lastVoiceDiagnostic.value = null
+
+        val hasMicPermission = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+        Log.i(TAG, "Starting voice session — mic permission status: $hasMicPermission")
+        if (!hasMicPermission) {
+            Log.e(TAG, "Microphone permission not granted at session start — aborting before opening session")
+            _liveState.value = LiveState.ERROR
+            _errorMessage.value = "Microphone permission not granted — allow it in Settings"
+            _lastVoiceDiagnostic.value = "Microphone permission not granted — allow it in Settings"
+            return
+        }
+
         _liveState.value = LiveState.CONNECTING
 
         serviceScope.launch {
             val userPrefs = UserPreferences(applicationContext)
             val resolver = io.github.ryoaonetsuki.mira.backend.ApiKeyResolver(applicationContext)
             val keySource = resolver.resolveKey()
+            val keySourceLabel = when (keySource) {
+                is io.github.ryoaonetsuki.mira.backend.KeySource.UserKey -> "UserKey (length=${keySource.key.length})"
+                is io.github.ryoaonetsuki.mira.backend.KeySource.ServerKey -> "ServerKey"
+                is io.github.ryoaonetsuki.mira.backend.KeySource.NoKey -> "NoKey"
+            }
+            Log.i(TAG, "Key source: $keySourceLabel")
 
             val (apiKey, ephemeralToken) = when (keySource) {
                 is io.github.ryoaonetsuki.mira.backend.KeySource.UserKey -> Pair(keySource.key, null)
                 is io.github.ryoaonetsuki.mira.backend.KeySource.ServerKey -> {
+                    Log.i(TAG, "Attempting to mint ephemeral token via server...")
                     val tokenResult = resolver.mintLiveToken()
                     if (tokenResult.isSuccess) {
+                        Log.i(TAG, "Server live token mint SUCCEEDED (token acquired)")
                         Pair("", tokenResult.getOrThrow())
                     } else {
                         val err = tokenResult.exceptionOrNull()?.message ?: "Failed to mint token"
-                        Log.e(TAG, "Server live token mint failed: $err")
+                        Log.e(TAG, "Server live token mint FAILED: $err")
                         _liveState.value = LiveState.ERROR
                         _errorMessage.value = "Server voice token failed — configure API key in Settings"
                         return@launch
                     }
                 }
                 is io.github.ryoaonetsuki.mira.backend.KeySource.NoKey -> {
+                    Log.w(TAG, "No API key available for voice session")
                     _liveState.value = LiveState.ERROR
                     _errorMessage.value = "API key is required"
                     return@launch
@@ -142,6 +169,7 @@ class MicService : Service() {
             val language = userPrefs.languageFlow.first()
             val secretMode = userPrefs.secretModeFlow.first()
             val liveModel = userPrefs.liveModelFlow.first()
+            Log.i(TAG, "Session configuration: model=$liveModel, voice=$voiceName, language=$language, persona=$personaName, secretMode=$secretMode")
 
             val db = MiraDatabase.getInstance(applicationContext)
             val activeRules = withContext(Dispatchers.IO) {
@@ -172,6 +200,7 @@ class MicService : Service() {
                 append(toneDescription)
                 append("\nLanguage rule: Reply ONLY in $language. Never add a translation in any other language. Never mix languages.")
                 append("\nIdentity rule: $identityRule")
+                append("\nWeb search rule: If the user asks you to search or look something up, use web search and give the latest information, never old knowledge; for normal talk answer directly and fast.")
                 if (customInstructions.isNotBlank()) {
                     append("\nUser instructions: $customInstructions")
                 }
@@ -229,6 +258,7 @@ class MicService : Service() {
                             liveClient?.endSession()
                             return
                         }
+                        Log.i(TAG, "AudioRecorder recording started successfully upon setupComplete")
                         _liveState.value = LiveState.LISTENING
                         _errorMessage.value = null // Clear error on successful setup
 
@@ -335,7 +365,9 @@ class MicService : Service() {
                     }
 
                     override fun onError(message: String) {
+                        Log.e(TAG, "Voice session error termination: $message")
                         _liveState.value = LiveState.ERROR
+                        _lastVoiceDiagnostic.value = message
                         _errorMessage.value = message
                         connectorJob?.cancel()
                         audioPlayer?.stopImmediatelyAndFlush()
@@ -343,6 +375,7 @@ class MicService : Service() {
                     }
 
                     override fun onClosed(reason: String) {
+                        Log.i(TAG, "Voice session closed termination: $reason")
                         if (_liveState.value != LiveState.ERROR) {
                             _liveState.value = LiveState.IDLE
                         }
@@ -358,6 +391,7 @@ class MicService : Service() {
     }
 
     private fun stopLiveVoiceSession() {
+        Log.i(TAG, "Stopping voice session (user action or stop requested)")
         stopLiveVoiceSessionInternal()
         _liveState.value = LiveState.IDLE
     }
@@ -417,6 +451,9 @@ class MicService : Service() {
 
         private val _errorMessage = MutableStateFlow<String?>(null)
         val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
+
+        private val _lastVoiceDiagnostic = MutableStateFlow<String?>(null)
+        val lastVoiceDiagnostic: StateFlow<String?> = _lastVoiceDiagnostic.asStateFlow()
 
         fun startService(context: Context) {
             val intent = Intent(context, MicService::class.java).apply { action = ACTION_START }

@@ -28,7 +28,7 @@ async function handleRequest(request) {
     return new Response(
       JSON.stringify({
         service: "mira-server-voice",
-        version: "2.0.0",
+        version: "2.0.1",
         ok: true,
         streaming: true,
       }),
@@ -339,11 +339,11 @@ function handleVoiceSession(ws, groqKey, geminiKey) {
         if (turnSignal.aborted) return;
         const errMsg = String(err.message || "");
         if (errMsg.includes("401") || errMsg.includes("403")) {
-          sendJson({ type: "error", message: "API key problem — check your keys in Settings" });
+          sendJson({ type: "error", code: "auth_failed", message: "API key problem — check your keys in Settings" });
           resetListening();
           return;
         }
-        sendJson({ type: "error", message: "Voice transcription unavailable — try again" });
+        sendJson({ type: "error", code: "transcribe_failed", message: "Voice transcription unavailable — try again" });
         resetListening();
         return;
       }
@@ -377,7 +377,7 @@ function handleVoiceSession(ws, groqKey, geminiKey) {
       await streamLlmAndTts(trimmedFinal, searchContext, turnSignal);
     } catch (err) {
       if (!turnSignal.aborted) {
-        sendJson({ type: "error", message: "Voice reply unavailable — try again" });
+        sendJson({ type: "error", code: "reply_failed", message: "Voice reply unavailable — try again" });
       }
     } finally {
       if (!turnSignal.aborted) {
@@ -447,7 +447,7 @@ function handleVoiceSession(ws, groqKey, geminiKey) {
 
     let llmSuccess = false;
 
-    // 1. Primary LLM: Groq gpt-oss-120b streaming
+    // 1. Primary LLM: Groq openai/gpt-oss-120b streaming
     try {
       await streamGroqChat(groqKey, systemPromptText, userPromptText, processToken, signal);
       llmSuccess = true;
@@ -455,13 +455,13 @@ function handleVoiceSession(ws, groqKey, geminiKey) {
       if (signal.aborted) return;
       const msg = String(groqErr.message || "");
       if (msg.includes("401") || msg.includes("403")) {
-        sendJson({ type: "error", message: "API key problem — check your keys in Settings" });
+        sendJson({ type: "error", code: "groq_failed", message: "API key problem — check your keys in Settings" });
         return;
       }
-      // Non-auth error: fall back once to Gemini 3.8 Flash
+      // Non-auth error: fall back to Gemini streaming ladder
     }
 
-    // 2. Fallback LLM: Gemini 3.8 Flash streaming
+    // 2. Fallback LLM: Gemini streaming ladder
     if (!llmSuccess && !signal.aborted) {
       try {
         await streamGeminiChat(geminiKey, systemPromptText, userPromptText, processToken, signal);
@@ -470,10 +470,10 @@ function handleVoiceSession(ws, groqKey, geminiKey) {
         if (signal.aborted) return;
         const msg = String(geminiErr.message || "");
         if (msg.includes("401") || msg.includes("403")) {
-          sendJson({ type: "error", message: "API key problem — check your keys in Settings" });
+          sendJson({ type: "error", code: "gemini_failed", message: "API key problem — check your keys in Settings" });
           return;
         }
-        sendJson({ type: "error", message: "Chat service unavailable — please try again" });
+        sendJson({ type: "error", code: "gemini_failed", message: "Chat service unavailable — please try again" });
         return;
       }
     }
@@ -529,30 +529,90 @@ async function transcribeWithGroqWhisper(pcmBytes, groqKey, language, signal) {
 }
 
 /**
- * Streams Groq gpt-oss-120b chat completions via SSE.
+ * Sleep helper that respects AbortSignal.
+ */
+function sleep(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal && signal.aborted) {
+      return reject(new Error("Aborted"));
+    }
+    let timer = null;
+    const onAbort = () => {
+      if (timer) clearTimeout(timer);
+      reject(new Error("Aborted"));
+    };
+    timer = setTimeout(() => {
+      if (signal) signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    if (signal) {
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+  });
+}
+
+/**
+ * Streams Groq openai/gpt-oss-120b chat completions via SSE.
+ * Retries once on transient 429/5xx with ~1s pause (never on 400/401/403).
  */
 async function streamGroqChat(groqKey, systemPrompt, userPrompt, onToken, signal) {
-  const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${groqKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "gpt-oss-120b",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
-      temperature: 0.7,
-      max_tokens: 600,
-      stream: true,
-    }),
-    signal,
+  const requestBody = JSON.stringify({
+    model: "openai/gpt-oss-120b",
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ],
+    temperature: 0.7,
+    reasoning_effort: "low",
+    max_completion_tokens: 600,
+    stream: true,
   });
 
-  if (!response.ok) {
-    throw new Error(`Groq LLM error HTTP ${response.status}`);
+  let response;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (signal.aborted) throw new Error("Aborted");
+
+    try {
+      response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${groqKey}`,
+          "Content-Type": "application/json",
+        },
+        body: requestBody,
+        signal,
+      });
+    } catch (err) {
+      if (signal.aborted) throw err;
+      if (attempt === 0) {
+        await sleep(1000, signal);
+        continue;
+      }
+      throw err;
+    }
+
+    if (response.ok) {
+      break;
+    }
+
+    const status = response.status;
+    // Auth errors: 401, 403; Bad request: 400. Do NOT retry on these.
+    if (status === 400 || status === 401 || status === 403) {
+      throw new Error(`Groq LLM error HTTP ${status}`);
+    }
+
+    // Transient 429 / 5xx: retry ONCE
+    const isTransient = status === 429 || (status >= 500 && status < 600);
+    if (attempt === 0 && isTransient && !signal.aborted) {
+      await sleep(1000, signal);
+      continue;
+    }
+
+    throw new Error(`Groq LLM error HTTP ${status}`);
+  }
+
+  if (!response || !response.ok) {
+    throw new Error(`Groq LLM error HTTP ${response ? response.status : "unknown"}`);
   }
 
   const reader = response.body.getReader();
@@ -585,17 +645,19 @@ async function streamGroqChat(groqKey, systemPrompt, userPrompt, onToken, signal
 }
 
 /**
- * Streams Gemini 3.8 Flash chat completions via SSE as fallback.
+ * Streams Gemini chat completions via SSE as fallback.
+ * Retries transient 429/503 up to 2 times (~1.5s backoff),
+ * walking the model ladder: gemini-3.8-flash -> gemini-3.6-flash -> gemini-3.5-flash-lite.
  */
 async function streamGeminiChat(geminiKey, systemPrompt, userPrompt, onToken, signal) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse&key=${geminiKey}`;
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-goog-api-key": geminiKey,
-    },
-    body: JSON.stringify({
+  const models = ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite"];
+  let lastError = null;
+
+  for (const model of models) {
+    if (signal.aborted) throw new Error("Aborted");
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${geminiKey}`;
+    const requestBody = JSON.stringify({
       systemInstruction: {
         parts: [{ text: systemPrompt }],
       },
@@ -609,40 +671,83 @@ async function streamGeminiChat(geminiKey, systemPrompt, userPrompt, onToken, si
         temperature: 0.7,
         maxOutputTokens: 600,
       },
-    }),
-    signal,
-  });
+    });
 
-  if (!response.ok) {
-    throw new Error(`Gemini stream error HTTP ${response.status}`);
-  }
+    for (let attempt = 0; attempt <= 2; attempt++) {
+      if (signal.aborted) throw new Error("Aborted");
 
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder("utf-8");
-  let buffer = "";
-
-  while (!signal.aborted) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-
-    for (const rawLine of lines) {
-      const line = rawLine.trim();
-      if (!line.startsWith("data:")) continue;
-      const dataStr = line.slice(5).trim();
-
+      let response;
       try {
-        const parsed = JSON.parse(dataStr);
-        const textChunk = parsed.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (textChunk) {
-          onToken(textChunk);
+        response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-goog-api-key": geminiKey,
+          },
+          body: requestBody,
+          signal,
+        });
+      } catch (err) {
+        if (signal.aborted) throw err;
+        lastError = err;
+        if (attempt < 2) {
+          await sleep(1500, signal);
+          continue;
         }
-      } catch (_) {}
+        break; // retries exhausted for this model, walk ladder
+      }
+
+      if (response.ok) {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        let buffer = "";
+
+        while (!signal.aborted) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+
+          for (const rawLine of lines) {
+            const line = rawLine.trim();
+            if (!line.startsWith("data:")) continue;
+            const dataStr = line.slice(5).trim();
+
+            try {
+              const parsed = JSON.parse(dataStr);
+              const textChunk = parsed.candidates?.[0]?.content?.parts?.[0]?.text;
+              if (textChunk) {
+                onToken(textChunk);
+              }
+            } catch (_) {}
+          }
+        }
+        return; // Success!
+      }
+
+      const status = response.status;
+      lastError = new Error(`Gemini stream error HTTP ${status}`);
+
+      // Auth error (401, 403): abort immediately, do NOT retry or walk ladder
+      if (status === 401 || status === 403) {
+        throw lastError;
+      }
+
+      // Transient 429 or 503: retry up to 2 times with ~1.5s backoff
+      const isTransient = status === 429 || status === 503;
+      if (attempt < 2 && isTransient && !signal.aborted) {
+        await sleep(1500, signal);
+        continue;
+      }
+
+      // Non-transient error or retries exhausted: move to next model in ladder
+      break;
     }
   }
+
+  throw lastError || new Error("Gemini chat fallback failed across all models");
 }
 
 /**

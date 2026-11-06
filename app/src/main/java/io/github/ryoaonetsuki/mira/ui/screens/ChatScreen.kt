@@ -841,9 +841,15 @@ fun ChatScreen(
                                         var sysPrompt = ""
                                         var allMsgs: List<ChatMessageEntity> = emptyList()
                                         var currentAttachments: List<ChatAttachment> = emptyList()
-                                        var webSearchOn = true
-                                        var deepThinkingOn = false
-                                        var shouldGround = if (webSearchOn) MiraChatSearchHeuristic.isChatSearchWorthy(text) else false
+                                        // ROUND 6: initialise from the live toggle state
+                                        // (the chips above the input) — never hardcoded
+                                        // defaults. The real prefs are re-read below
+                                        // (webSearchEnabledFlow/deepThinkingEnabledFlow
+                                        // .first()) before any API call, so the toggles
+                                        // always gate grounding + thinking.
+                                        var webSearchOn = webSearchEnabled
+                                        var deepThinkingOn = deepThinkingEnabled
+                                        var shouldGround = false
                                         try {
                                             val keySource = resolver.resolveKey()
                                             if (keySource is KeySource.NoKey) {

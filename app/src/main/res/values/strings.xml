@@ -2,4 +2,5 @@
     <string name="app_name">Mira AI</string>
     <string name="mic_service_notification_title">Mira is listening</string>
     <string name="mic_service_notification_text">Real-time voice session active</string>
+    <string name="accessibility_service_description">Mira AI screen automation for WhatsApp, YouTube, and system macros.</string>
 </resources>

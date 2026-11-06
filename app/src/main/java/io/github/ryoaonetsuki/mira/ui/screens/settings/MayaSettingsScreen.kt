@@ -40,7 +40,7 @@ fun MayaSettingsScreen(
 
     val persona by userPrefs.personaFlow.collectAsState(initial = "Mira")
     val assistantName by userPrefs.assistantNameFlow.collectAsState(initial = "Mira")
-    val language by userPrefs.languageFlow.collectAsState(initial = "English (US / Global)")
+    val language by userPrefs.languageFlow.collectAsState(initial = "Bangla (Bengali)")
     val drivingMode by userPrefs.drivingModeFlow.collectAsState(initial = false)
     val sleepTimeout by userPrefs.sleepTimeoutFlow.collectAsState(initial = 5)
 

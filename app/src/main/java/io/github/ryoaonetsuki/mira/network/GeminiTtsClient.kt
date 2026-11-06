@@ -33,6 +33,62 @@ class GeminiTtsClient(private val context: Context) {
     private val anonKey: String
         get() = try { io.github.ryoaonetsuki.mira.BuildConfig.SUPABASE_ANON_KEY } catch (_: Throwable) { "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp2bmZ3bHF4ZGJvbW10b3p1Z3p0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM5MTM2NDksImV4cCI6MjEwOTQ4OTY0OX0.uqyERmXVe2GEP2oaU0xc7I9V1ry-43adAEg6jddYBpk" }
 
+    fun cleanMarkdownForSpeech(raw: String): String {
+        return raw
+            // Replace markdown links [text](url) with text
+            .replace(Regex("""\[([^\]]+)\]\([^)]+\)"""), "$1")
+            // Remove bold / italics asterisks and underscores
+            .replace(Regex("""\*{1,3}([^*]+)\*{1,3}"""), "$1")
+            .replace(Regex("""_{1,3}([^_]+)_{1,3}"""), "$1")
+            // Remove code blocks and inline code
+            .replace(Regex("""`{1,3}([^`]+)`{1,3}"""), "$1")
+            // Remove heading marks (#)
+            .replace(Regex("""(?m)^#+\s*"""), "")
+            // Remove remaining stray *, #, `
+            .replace("*", "")
+            .replace("#", "")
+            .replace("`", "")
+            .trim()
+    }
+
+    suspend fun speakText(
+        apiKey: String,
+        text: String,
+        voiceName: String,
+        useServerProxy: Boolean = false
+    ): Result<ByteArray> = withContext(Dispatchers.IO) {
+        val cleanKey = normalizeApiKey(apiKey)
+        if (!useServerProxy && cleanKey.isBlank()) {
+            return@withContext Result.failure(Exception("API key is required for TTS."))
+        }
+
+        val speechText = cleanMarkdownForSpeech(text).take(1000).trim()
+        if (speechText.isBlank()) {
+            return@withContext Result.failure(Exception("No speech text provided"))
+        }
+
+        // Verified TTS model ladder (ai.google.dev/gemini-api/docs/speech-generation):
+        // 1. gemini-3.8-flash-tts (flagship studio quality)
+        // 2. gemini-3.8-flash-lite-tts (high throughput & fast)
+        val ttsLadder = listOf(
+            "gemini-3.8-flash-tts",
+            "gemini-3.8-flash-lite-tts"
+        )
+
+        var lastError: Exception = Exception("All TTS models failed")
+        for (model in ttsLadder) {
+            val result = requestTtsAudio(cleanKey, model, voiceName, speechText, useServerProxy)
+            if (result.isSuccess) {
+                return@withContext result
+            }
+            val err = result.exceptionOrNull() ?: Exception("Unknown error")
+            Log.w(TAG, "TTS model $model failed: ${err.message}. Trying next...")
+            lastError = Exception("$model: ${err.message}")
+        }
+
+        Result.failure(lastError)
+    }
+
     suspend fun generatePreview(apiKey: String, voiceName: String, useServerProxy: Boolean = false): Result<ByteArray> = withContext(Dispatchers.IO) {
         val cleanKey = normalizeApiKey(apiKey)
         if (!useServerProxy && cleanKey.isBlank()) {
@@ -52,29 +108,12 @@ class GeminiTtsClient(private val context: Context) {
             }
         }
 
-        // Verified TTS model ladder (ai.google.dev/gemini-api/docs/speech-generation):
-        // 1. gemini-3.8-flash-tts (flagship studio quality)
-        // 2. gemini-3.8-flash-lite-tts (high throughput & fast)
-        // (Legacy preview TTS removed Nov 2026 after Google shut it down on Nov 17, 2026)
-        val ttsLadder = listOf(
-            "gemini-3.8-flash-tts",
-            "gemini-3.8-flash-lite-tts"
-        )
-
-        var lastError: Exception = Exception("All TTS models failed")
-        for (model in ttsLadder) {
-            val result = requestTtsAudio(cleanKey, model, voiceName, useServerProxy)
-            if (result.isSuccess) {
-                val audioBytes = result.getOrThrow()
-                saveToCache(cachedFile, audioBytes)
-                return@withContext Result.success(audioBytes)
-            }
-            val err = result.exceptionOrNull() ?: Exception("Unknown error")
-            Log.w(TAG, "TTS model $model failed: ${err.message}. Trying next...")
-            lastError = Exception("$model: ${err.message}")
+        val previewText = "Hi, I'm Mira, your voice assistant."
+        val result = speakText(cleanKey, previewText, voiceName, useServerProxy)
+        if (result.isSuccess) {
+            saveToCache(cachedFile, result.getOrThrow())
         }
-
-        Result.failure(lastError)
+        result
     }
 
     private fun saveToCache(file: File, bytes: ByteArray) {
@@ -86,19 +125,19 @@ class GeminiTtsClient(private val context: Context) {
         }
     }
 
-    private fun requestTtsAudio(apiKey: String, model: String, voiceName: String, useServerProxy: Boolean): Result<ByteArray> {
+    private fun requestTtsAudio(apiKey: String, model: String, voiceName: String, text: String, useServerProxy: Boolean): Result<ByteArray> {
         try {
             val bodyJson = JSONObject().apply {
                 if (useServerProxy) {
                     put("action", "tts")
                     put("model", model)
-                    put("text", "Hi, I'm Mira, your voice assistant.")
+                    put("text", text)
                     put("voiceName", voiceName)
                 } else {
                     val contents = JSONArray().apply {
                         val partObj = JSONObject().apply {
                             val parts = JSONArray().apply {
-                                put(JSONObject().put("text", "Hi, I'm Mira, your voice assistant."))
+                                put(JSONObject().put("text", text))
                             }
                             put("parts", parts)
                         }

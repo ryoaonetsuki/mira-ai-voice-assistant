@@ -48,6 +48,17 @@ enum class LiveState {
     ERROR
 }
 
+enum class VoiceStage(val label: String) {
+    IDLE("Idle"),
+    CONNECTING("Connecting…"),
+    WAITING_FOR_SETUP("Waiting for setup"),
+    LISTENING("Listening"),
+    RECOGNISING("Recognising"),
+    THINKING("Thinking"),
+    SPEAKING("Speaking"),
+    ERROR("Error")
+}
+
 class MicService : Service() {
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -62,12 +73,35 @@ class MicService : Service() {
     // Fallback voice mode & session
     private var fallbackSession: FallbackVoiceSession? = null
     private var androidTts: TextToSpeech? = null
-    private var isFallbackMode: Boolean = false
+    private var isFallbackMode: Boolean
+        get() = _isFallbackMode.value
+        set(value) {
+            _isFallbackMode.value = value
+        }
     private var cachedResolvedKey: String = ""
     private var cachedUseServerProxy: Boolean = false
     private var cachedVoiceName: String = "Aoede"
     private var cachedSystemPrompt: String = ""
     private var cachedLanguage: String = "Bangla (Bengali)"
+    @Volatile
+    private var isAwaitingFinalReply: Boolean = false
+
+    private fun handlePlaybackSpeakingChanged(isSpeaking: Boolean) {
+        if (isSpeaking && _liveState.value != LiveState.ERROR && _liveState.value != LiveState.IDLE) {
+            _liveState.value = LiveState.SPEAKING
+            _voiceStage.value = VoiceStage.SPEAKING
+        } else if (!isSpeaking && _liveState.value == LiveState.SPEAKING) {
+            if (isFallbackMode && isAwaitingFinalReply) {
+                _voiceStage.value = VoiceStage.THINKING
+            } else {
+                _liveState.value = LiveState.LISTENING
+                _voiceStage.value = VoiceStage.LISTENING
+                if (isFallbackMode) {
+                    fallbackSession?.resumeListening()
+                }
+            }
+        }
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -133,6 +167,9 @@ class MicService : Service() {
         _modelTranscript.value = ""
         _errorMessage.value = null
         _lastVoiceDiagnostic.value = null
+        _audioChunksSent.value = 0L
+        _audioChunksReceived.value = 0L
+        _isFallbackMode.value = false
 
         val hasMicPermission = ContextCompat.checkSelfPermission(
             this,
@@ -142,12 +179,14 @@ class MicService : Service() {
         if (!hasMicPermission) {
             Log.e(TAG, "Microphone permission not granted at session start — aborting before opening session")
             _liveState.value = LiveState.ERROR
+            _voiceStage.value = VoiceStage.ERROR
             _errorMessage.value = "Microphone permission not granted — allow it in Settings"
             _lastVoiceDiagnostic.value = "Microphone permission not granted — allow it in Settings"
             return
         }
 
         _liveState.value = LiveState.CONNECTING
+        _voiceStage.value = VoiceStage.CONNECTING
 
         serviceScope.launch {
             val userPrefs = UserPreferences(applicationContext)
@@ -172,6 +211,7 @@ class MicService : Service() {
                         val err = tokenResult.exceptionOrNull()?.message ?: "Failed to mint token"
                         Log.e(TAG, "Server live token mint FAILED: $err")
                         _liveState.value = LiveState.ERROR
+                        _voiceStage.value = VoiceStage.ERROR
                         _errorMessage.value = "Server voice token failed — configure API key in Settings"
                         return@launch
                     }
@@ -179,6 +219,7 @@ class MicService : Service() {
                 is io.github.ryoaonetsuki.mira.backend.KeySource.NoKey -> {
                     Log.w(TAG, "No API key available for voice session")
                     _liveState.value = LiveState.ERROR
+                    _voiceStage.value = VoiceStage.ERROR
                     _errorMessage.value = "API key is required"
                     return@launch
                 }
@@ -227,9 +268,10 @@ class MicService : Service() {
                 append(personaType.basePrompt)
                 append(" ")
                 append(toneDescription)
+                val searchAckPhrase = MiraChatSearchHeuristic.getAcknowledgementPhrase(language)
                 append("\nLanguage rule: Reply ONLY in $language. Never add a translation in any other language. Never mix languages.")
                 append("\nIdentity rule: $identityRule")
-                append("\nWeb search rule: If the user asks you to search or look something up, use web search and give the latest information, never old knowledge; for normal talk answer directly and fast.")
+                append("\nWeb search rule: When the user asks you to search or look something up, or asks about something you do not know or have no latest news about: you must FIRST SAY ALOUD the acknowledgement in $language: \"$searchAckPhrase\", then wait for the fresh search results to be provided, then speak the final answer. Never stay silent while searching, and never guess when you do not know. For normal voice talk answer directly and fast.")
                 if (customInstructions.isNotBlank()) {
                     append("\nUser instructions: $customInstructions")
                 }
@@ -241,24 +283,19 @@ class MicService : Service() {
             cachedSystemPrompt = fullSystemPrompt
 
             _liveState.value = LiveState.CONNECTING
+            _voiceStage.value = VoiceStage.CONNECTING
             _errorMessage.value = null // Clear any previous error on new session start
 
             // Initialize Audio Player (24kHz)
             audioPlayer = AudioPlayer { isSpeaking ->
-                if (isSpeaking && _liveState.value != LiveState.ERROR && _liveState.value != LiveState.IDLE) {
-                    _liveState.value = LiveState.SPEAKING
-                } else if (!isSpeaking && _liveState.value == LiveState.SPEAKING) {
-                    _liveState.value = LiveState.LISTENING
-                    if (isFallbackMode) {
-                        fallbackSession?.resumeListening()
-                    }
-                }
+                handlePlaybackSpeakingChanged(isSpeaking)
             }
 
             // Initialize Audio Recorder (16kHz)
             audioRecorder = AudioRecorder(
                 onAudioChunk = { chunk ->
                     liveClient?.sendAudioChunk(chunk)
+                    _audioChunksSent.value = liveClient?.audioChunksSent ?: 0L
                 },
                 onAmplitude = { amp ->
                     _micAmplitude.value = amp
@@ -276,10 +313,12 @@ class MicService : Service() {
                 listener = object : GeminiLiveClient.LiveEventsListener {
                     override fun onConnecting(model: String) {
                         _liveState.value = LiveState.CONNECTING
+                        _voiceStage.value = VoiceStage.CONNECTING
                     }
 
                     override fun onConnected() {
                         Log.i(TAG, "Connected to Gemini Live WebSocket")
+                        _voiceStage.value = VoiceStage.WAITING_FOR_SETUP
                     }
 
                     override fun onSetupComplete() {
@@ -287,12 +326,14 @@ class MicService : Service() {
                         if (!recordStarted) {
                             Log.e(TAG, "AudioRecorder failed to start recording (permission or init failure)")
                             _liveState.value = LiveState.ERROR
+                            _voiceStage.value = VoiceStage.ERROR
                             _errorMessage.value = "Microphone could not start — check the mic permission"
                             liveClient?.endSession()
                             return
                         }
                         Log.i(TAG, "AudioRecorder recording started successfully upon setupComplete")
                         _liveState.value = LiveState.LISTENING
+                        _voiceStage.value = VoiceStage.LISTENING
                         _errorMessage.value = null // Clear error on successful setup
 
                         // Record notice
@@ -308,19 +349,25 @@ class MicService : Service() {
                     }
 
                     override fun onAudioData(pcmBytes: ByteArray) {
+                        _audioChunksReceived.value = liveClient?.audioChunksReceived ?: 0L
                         audioPlayer?.playAudioChunk(pcmBytes)
                     }
 
                     override fun onInterrupted() {
                         // User barge-in detected by server
+                        liveSearchJob?.cancel()
                         audioPlayer?.stopImmediatelyAndFlush()
                         _liveState.value = LiveState.LISTENING
+                        _voiceStage.value = VoiceStage.LISTENING
+                        handledTranscripts.clear()
                     }
 
                     override fun onTurnComplete() {
                         if (_liveState.value == LiveState.SPEAKING) {
                             _liveState.value = LiveState.LISTENING
+                            _voiceStage.value = VoiceStage.LISTENING
                         }
+                        liveSearchJob?.cancel()
                         // Clear handled transcripts so same command can run again in next turn
                         handledTranscripts.clear()
                     }
@@ -328,6 +375,9 @@ class MicService : Service() {
                     override fun onTranscript(text: String, isUser: Boolean) {
                         if (isUser) {
                             _userTranscript.value = text
+                            if (_liveState.value != LiveState.SPEAKING && _liveState.value != LiveState.ERROR) {
+                                _voiceStage.value = VoiceStage.RECOGNISING
+                            }
 
                             val cleanText = text.trim()
                             val words = cleanText.split("\\s+".toRegex()).filter { it.isNotBlank() }
@@ -368,9 +418,17 @@ class MicService : Service() {
                                 }
                             }
 
-                            // Debounced live web search injection for time-sensitive queries in Gemini Live
+                            // Debounced live web search injection with spoken acknowledgement for search requests in Gemini Live
                             liveSearchJob?.cancel()
-                            if (words.size >= 2 && MiraChatSearchHeuristic.isTimeSensitive(cleanText)) {
+                            if (words.size >= 2 && MiraChatSearchHeuristic.isSearchRequest(cleanText)) {
+                                val ackKey = "ack:search_turn"
+                                if (handledTranscripts.add(ackKey) && liveClient?.isSessionReady() == true) {
+                                    val ackPhrase = MiraChatSearchHeuristic.getAcknowledgementPhrase(cachedLanguage)
+                                    val ackInstruction = "[Search request detected. Say aloud immediately in $cachedLanguage: \"$ackPhrase\". Do not answer yet; fresh search results are being retrieved.]"
+                                    liveClient?.sendTextMessage(ackInstruction)
+                                    Log.i(TAG, "Sent immediate search acknowledgement instruction to Gemini Live: $ackPhrase")
+                                }
+
                                 val searchKey = "search:" + cleanText.lowercase(Locale.ROOT)
                                 if (!handledTranscripts.contains(searchKey)) {
                                     liveSearchJob = serviceScope.launch(Dispatchers.IO) {
@@ -383,9 +441,12 @@ class MicService : Service() {
                                                     val searchLines = searchResults.mapIndexed { idx, res ->
                                                         "${idx + 1}. ${res.title} — ${res.snippet} (${res.url})"
                                                     }.joinToString("\n")
-                                                    val payload = "[Live web search — searched just now, $dateLine:\n$searchLines\nAnswer ONLY from these fresh results, briefly, in $cachedLanguage.]"
+                                                    val payload = "[Live web search — searched just now, $dateLine:\n$searchLines\nAnswer ONLY from these fresh results, briefly, in $cachedLanguage. Do not repeat the acknowledgement.]"
                                                     liveClient?.sendTextMessage(payload)
                                                     Log.i(TAG, "Injected live search results into active Gemini Live session for query: $cleanText")
+                                                } else if (liveClient?.isSessionReady() == true) {
+                                                    val payload = "[No fresh web results found for \"$cleanText\". Briefly inform the user in $cachedLanguage that you could not find current information on this.]"
+                                                    liveClient?.sendTextMessage(payload)
                                                 }
                                             } catch (e: Exception) {
                                                 Log.w(TAG, "Error performing live voice web search: ${e.message}")
@@ -442,6 +503,7 @@ class MicService : Service() {
                         Log.i(TAG, "Voice session closed termination: $reason")
                         if (_liveState.value != LiveState.ERROR && !isFallbackMode) {
                             _liveState.value = LiveState.IDLE
+                            _voiceStage.value = VoiceStage.IDLE
                         }
                         connectorJob?.cancel()
                         audioPlayer?.stopImmediatelyAndFlush()
@@ -459,11 +521,15 @@ class MicService : Service() {
         Log.i(TAG, "Stopping voice session (user action or stop requested)")
         stopLiveVoiceSessionInternal()
         _liveState.value = LiveState.IDLE
+        _voiceStage.value = VoiceStage.IDLE
     }
 
     private fun stopLiveVoiceSessionInternal() {
         connectorJob?.cancel()
         connectorJob = null
+        liveSearchJob?.cancel()
+        liveSearchJob = null
+        isAwaitingFinalReply = false
         handledTranscripts.clear()
         audioRecorder?.stopRecording()
         audioRecorder = null
@@ -479,6 +545,8 @@ class MicService : Service() {
         liveClient?.endSession()
         liveClient = null
         isFallbackMode = false
+        _audioChunksSent.value = 0L
+        _audioChunksReceived.value = 0L
         _micAmplitude.value = 0f
     }
 
@@ -490,7 +558,19 @@ class MicService : Service() {
         Log.i(TAG, "Switching to fallback voice session (Live error: $errorMessage)")
         isFallbackMode = true
         _errorMessage.value = null
+
+        if (!SpeechRecognizer.isRecognitionAvailable(applicationContext)) {
+            Log.e(TAG, "SpeechRecognizer is NOT available on this device")
+            val noSpeechMsg = "Voice recognition isn't available on this device — please use text chat"
+            _liveState.value = LiveState.ERROR
+            _voiceStage.value = VoiceStage.ERROR
+            _errorMessage.value = noSpeechMsg
+            _lastVoiceDiagnostic.value = noSpeechMsg
+            return
+        }
+
         _liveState.value = LiveState.LISTENING
+        _voiceStage.value = VoiceStage.LISTENING
 
         // Show ONE short Toast
         Toast.makeText(
@@ -504,14 +584,7 @@ class MicService : Service() {
 
         if (audioPlayer == null) {
             audioPlayer = AudioPlayer { isSpeaking ->
-                if (isSpeaking && _liveState.value != LiveState.ERROR && _liveState.value != LiveState.IDLE) {
-                    _liveState.value = LiveState.SPEAKING
-                } else if (!isSpeaking && _liveState.value == LiveState.SPEAKING) {
-                    _liveState.value = LiveState.LISTENING
-                    if (isFallbackMode) {
-                        fallbackSession?.resumeListening()
-                    }
-                }
+                handlePlaybackSpeakingChanged(isSpeaking)
             }
         }
 
@@ -520,20 +593,36 @@ class MicService : Service() {
             context = applicationContext,
             languageCode = bcp47,
             onFinalText = { text ->
+                _voiceStage.value = VoiceStage.THINKING
+                _audioChunksSent.value = _audioChunksSent.value + 1L
                 handleFallbackFinalText(text)
             },
             onPartialText = { partial ->
+                _voiceStage.value = VoiceStage.RECOGNISING
                 _userTranscript.value = partial
             },
             onListeningChanged = { listening ->
                 if (listening && _liveState.value != LiveState.SPEAKING && _liveState.value != LiveState.ERROR && _liveState.value != LiveState.IDLE) {
                     _liveState.value = LiveState.LISTENING
+                    _voiceStage.value = VoiceStage.LISTENING
                 }
             },
             onError = { errMsg ->
+                isAwaitingFinalReply = false
                 Log.w(TAG, "Fallback voice session error: $errMsg")
                 _errorMessage.value = errMsg
                 _lastVoiceDiagnostic.value = errMsg
+                _liveState.value = LiveState.ERROR
+                _voiceStage.value = VoiceStage.ERROR
+                _micAmplitude.value = 0f
+            },
+            onAmplitude = { amp ->
+                _micAmplitude.value = amp
+            },
+            onSpeechStart = {
+                if (_liveState.value != LiveState.SPEAKING && _liveState.value != LiveState.ERROR && _liveState.value != LiveState.IDLE) {
+                    _voiceStage.value = VoiceStage.RECOGNISING
+                }
             }
         ).apply { start() }
     }
@@ -549,20 +638,31 @@ class MicService : Service() {
                         override fun onStart(utteranceId: String?) {
                             if (_liveState.value != LiveState.IDLE) {
                                 _liveState.value = LiveState.SPEAKING
+                                _voiceStage.value = VoiceStage.SPEAKING
                             }
                         }
 
                         override fun onDone(utteranceId: String?) {
                             if (_liveState.value != LiveState.IDLE) {
-                                _liveState.value = LiveState.LISTENING
-                                fallbackSession?.resumeListening()
+                                if (isAwaitingFinalReply || utteranceId == "mira_ack_utterance") {
+                                    _voiceStage.value = VoiceStage.THINKING
+                                } else {
+                                    _liveState.value = LiveState.LISTENING
+                                    _voiceStage.value = VoiceStage.LISTENING
+                                    fallbackSession?.resumeListening()
+                                }
                             }
                         }
 
                         override fun onError(utteranceId: String?) {
                             if (_liveState.value != LiveState.IDLE) {
-                                _liveState.value = LiveState.LISTENING
-                                fallbackSession?.resumeListening()
+                                if (isAwaitingFinalReply || utteranceId == "mira_ack_utterance") {
+                                    _voiceStage.value = VoiceStage.THINKING
+                                } else {
+                                    _liveState.value = LiveState.LISTENING
+                                    _voiceStage.value = VoiceStage.LISTENING
+                                    fallbackSession?.resumeListening()
+                                }
                             }
                         }
                     })
@@ -619,35 +719,49 @@ class MicService : Service() {
     }
 
     private suspend fun generateAndSpeakRestReply(text: String) {
+        val isSearch = MiraChatSearchHeuristic.isSearchRequest(text)
+        if (isSearch) {
+            isAwaitingFinalReply = true
+            val ackText = MiraChatSearchHeuristic.getAcknowledgementPhrase(cachedLanguage)
+            _modelTranscript.value = ackText
+            speakFallbackReply(ackText, isAck = true)
+        }
+
         val mockMsg = ChatMessageEntity(
             conversationId = "voice_fallback",
             role = "user",
             content = text
         )
-        val shouldGround = MiraChatSearchHeuristic.isTimeSensitive(text)
         val restClient = GeminiRestClient()
         // Voice turns stay FAST: fastest model, no thinking, narrow (time-sensitive
         // only) search gate — the chat defaults (3.8-flash + thinking + wide gate)
         // would make spoken replies slow.
-        val voiceSystemPrompt = cachedSystemPrompt +
-            "\nKeep voice answers short and fast — a few sentences at most unless the user asks for detail."
+        val voiceSystemPrompt = buildString {
+            append(cachedSystemPrompt)
+            append("\nKeep voice answers short and fast — a few sentences at most unless the user asks for detail.")
+            if (isSearch) {
+                append("\nYou have already spoken the search acknowledgement aloud to the user. Do NOT repeat the acknowledgement phrase — provide ONLY the final answer directly and concisely.")
+            }
+        }
         val respResult = restClient.generateChatResponse(
             apiKey = cachedResolvedKey,
             history = listOf(mockMsg),
             systemPrompt = voiceSystemPrompt,
             model = "gemini-3.5-flash-lite",
             useServerProxy = cachedUseServerProxy,
-            enableGrounding = shouldGround,
+            enableGrounding = isSearch,
             enableThinking = false,
             isChatCall = false
         )
 
         if (respResult.isFailure) {
+            isAwaitingFinalReply = false
             val err = respResult.exceptionOrNull()?.message ?: "Unknown error"
             Log.e(TAG, "REST chat response failed in fallback: $err")
             withContext(Dispatchers.Main) {
                 Toast.makeText(applicationContext, "Chat error: $err", Toast.LENGTH_SHORT).show()
                 _liveState.value = LiveState.LISTENING
+                _voiceStage.value = VoiceStage.LISTENING
                 fallbackSession?.resumeListening()
             }
             return
@@ -655,10 +769,12 @@ class MicService : Service() {
 
         val replyText = respResult.getOrThrow().text
         _modelTranscript.value = replyText
-        speakFallbackReply(replyText)
+        _audioChunksReceived.value = _audioChunksReceived.value + 1L
+        isAwaitingFinalReply = false
+        speakFallbackReply(replyText, isAck = false)
     }
 
-    private suspend fun speakFallbackReply(replyText: String) {
+    private suspend fun speakFallbackReply(replyText: String, isAck: Boolean = false) {
         val ttsClient = GeminiTtsClient(applicationContext)
         val ttsResult = ttsClient.speakText(
             apiKey = cachedResolvedKey,
@@ -673,21 +789,14 @@ class MicService : Service() {
         } else {
             Log.w(TAG, "Gemini TTS failed (${ttsResult.exceptionOrNull()?.message}) — falling back to Android TextToSpeech")
             withContext(Dispatchers.Main) {
-                speakWithAndroidTts(replyText)
+                speakWithAndroidTts(replyText, isAck = isAck)
             }
         }
     }
 
     private fun playPcmChunks(pcmBytes: ByteArray) {
         val player = audioPlayer ?: AudioPlayer { isSpeaking ->
-            if (isSpeaking && _liveState.value != LiveState.ERROR && _liveState.value != LiveState.IDLE) {
-                _liveState.value = LiveState.SPEAKING
-            } else if (!isSpeaking && _liveState.value == LiveState.SPEAKING) {
-                _liveState.value = LiveState.LISTENING
-                if (isFallbackMode) {
-                    fallbackSession?.resumeListening()
-                }
-            }
+            handlePlaybackSpeakingChanged(isSpeaking)
         }.also { audioPlayer = it }
 
         val chunkSize = 4096
@@ -700,18 +809,24 @@ class MicService : Service() {
         }
     }
 
-    private fun speakWithAndroidTts(replyText: String) {
+    private fun speakWithAndroidTts(replyText: String, isAck: Boolean = false) {
         val tts = androidTts
         if (tts == null) {
-            _liveState.value = LiveState.LISTENING
-            fallbackSession?.resumeListening()
+            if (!isAck) {
+                _liveState.value = LiveState.LISTENING
+                _voiceStage.value = VoiceStage.LISTENING
+                fallbackSession?.resumeListening()
+            }
             return
         }
-        val cleanText = GeminiTtsClient(applicationContext).cleanMarkdownForSpeech(replyText)
+        val cleanText = GeminiTtsClient.cleanMarkdownForSpeech(replyText)
         _liveState.value = LiveState.SPEAKING
+        _voiceStage.value = VoiceStage.SPEAKING
         val params = android.os.Bundle()
-        params.putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "mira_fallback_utterance")
-        tts.speak(cleanText, TextToSpeech.QUEUE_FLUSH, params, "mira_fallback_utterance")
+        val utteranceId = if (isAck) "mira_ack_utterance" else "mira_fallback_utterance"
+        params.putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, utteranceId)
+        val queueMode = if (isAck) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD
+        tts.speak(cleanText, queueMode, params, utteranceId)
     }
 
     private fun createNotificationChannel() {
@@ -744,6 +859,18 @@ class MicService : Service() {
 
         private val _liveState = MutableStateFlow(LiveState.IDLE)
         val liveState: StateFlow<LiveState> = _liveState.asStateFlow()
+
+        private val _voiceStage = MutableStateFlow(VoiceStage.IDLE)
+        val voiceStage: StateFlow<VoiceStage> = _voiceStage.asStateFlow()
+
+        private val _isFallbackMode = MutableStateFlow(false)
+        val isFallbackMode: StateFlow<Boolean> = _isFallbackMode.asStateFlow()
+
+        private val _audioChunksSent = MutableStateFlow(0L)
+        val audioChunksSent: StateFlow<Long> = _audioChunksSent.asStateFlow()
+
+        private val _audioChunksReceived = MutableStateFlow(0L)
+        val audioChunksReceived: StateFlow<Long> = _audioChunksReceived.asStateFlow()
 
         private val _micAmplitude = MutableStateFlow(0f)
         val micAmplitude: StateFlow<Float> = _micAmplitude.asStateFlow()

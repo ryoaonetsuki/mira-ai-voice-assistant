@@ -3,23 +3,29 @@ package io.github.ryoaonetsuki.mira.voice
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
+import android.os.Build
 import android.util.Log
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
+/**
+ * Streaming AudioTrack player for Gemini Live 24 kHz PCM16 mono audio (ROUND 12 spec §3.2).
+ * Operates with a bounded queue and supports low latency where available.
+ * Implements instant barge-in flushing on user speech or server interruption.
+ */
 class AudioPlayer(
     private val onSpeakingStateChanged: (Boolean) -> Unit
 ) {
     private var audioTrack: AudioTrack? = null
-    private val audioQueue = LinkedBlockingQueue<ByteArray>()
+    // Bounded queue to prevent unbounded memory growth if playback stalls
+    private val audioQueue = LinkedBlockingQueue<ByteArray>(200)
     private val isPlaying = AtomicBoolean(false)
     private var playbackThread: Thread? = null
 
     @Volatile
     private var isSpeakingState: Boolean = false
 
-    /** True while an utterance is actively playing (round 9 barge-in check). */
     fun isSpeaking(): Boolean = isSpeakingState
 
     private var totalAudioBytesWritten: Long = 0L
@@ -43,7 +49,7 @@ class AudioPlayer(
             val minBufferSize = AudioTrack.getMinBufferSize(sampleRate, channelConfig, audioFormat)
             val bufferSize = maxOf(minBufferSize, 8192)
 
-            val track = AudioTrack.Builder()
+            val trackBuilder = AudioTrack.Builder()
                 .setAudioAttributes(
                     AudioAttributes.Builder()
                         .setUsage(AudioAttributes.USAGE_ASSISTANT)
@@ -59,19 +65,24 @@ class AudioPlayer(
                 )
                 .setBufferSizeInBytes(bufferSize)
                 .setTransferMode(AudioTrack.MODE_STREAM)
-                .build()
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                trackBuilder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+            }
+
+            val track = trackBuilder.build()
 
             if (track.state != AudioTrack.STATE_INITIALIZED) {
-                Log.e(TAG, "AudioTrack initialization failed (state != STATE_INITIALIZED: ${track.state})")
+                Log.e(TAG, "MIRA_LIVE_VOICE: AudioTrack init failed (state != STATE_INITIALIZED: ${track.state})")
                 try { track.release() } catch (_: Exception) {}
                 audioTrack = null
                 return false
             }
 
-            // Pre-primed: play() called immediately upon initialization
+            // Pre-primed: play() called immediately
             track.play()
             if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
-                Log.e(TAG, "AudioTrack.play() failed to enter PLAYSTATE_PLAYING (playState=${track.playState})")
+                Log.e(TAG, "MIRA_LIVE_VOICE: AudioTrack.play() failed (playState=${track.playState})")
                 try { track.release() } catch (_: Exception) {}
                 audioTrack = null
                 return false
@@ -79,10 +90,10 @@ class AudioPlayer(
 
             audioTrack = track
             startPlaybackLoop()
-            Log.i(TAG, "AudioTrack initialized successfully at 24kHz mono (USAGE_ASSISTANT, state=STATE_INITIALIZED, playState=PLAYSTATE_PLAYING)")
+            Log.i(TAG, "MIRA_LIVE_VOICE: AudioTrack initialized at 24kHz mono (low-latency streaming)")
             return true
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to init AudioTrack: ${e.message}", e)
+            Log.e(TAG, "MIRA_LIVE_VOICE: Failed to init AudioTrack: ${e.message}", e)
             audioTrack = null
             return false
         }
@@ -95,54 +106,47 @@ class AudioPlayer(
             while (isPlaying.get()) {
                 try {
                     if (!isSpeakingState) {
-                        // Idle state: block until the first chunk of an utterance arrives
+                        // Wait for first chunk of an utterance
                         val firstChunk = audioQueue.take()
                         if (firstChunk.isEmpty()) continue
 
-                        // Start utterance pre-buffer collection:
-                        // Drain rule: wait until queued audio reaches >= 9,600 bytes OR 350 ms elapsed
-                        val firstArrivalMs = System.currentTimeMillis()
-                        val prebufferBatch = mutableListOf<ByteArray>()
-                        prebufferBatch.add(firstChunk)
-                        var totalPrebufferBytes = firstChunk.size
+                        // Short pre-buffer (wait up to 150ms or 4,800 bytes for smooth start)
+                        val startMs = System.currentTimeMillis()
+                        val batch = mutableListOf<ByteArray>()
+                        batch.add(firstChunk)
+                        var batchBytes = firstChunk.size
 
-                        while (totalPrebufferBytes < PREBUFFER_MAX_BYTES) {
-                            val elapsed = System.currentTimeMillis() - firstArrivalMs
-                            val remainingMs = PREBUFFER_TIMEOUT_MS - elapsed
-                            if (remainingMs <= 0) break
+                        while (batchBytes < PREBUFFER_MAX_BYTES) {
+                            val elapsed = System.currentTimeMillis() - startMs
+                            val remaining = PREBUFFER_TIMEOUT_MS - elapsed
+                            if (remaining <= 0) break
 
-                            val nextChunk = audioQueue.poll(remainingMs, TimeUnit.MILLISECONDS)
-                            if (nextChunk != null && nextChunk.isNotEmpty()) {
-                                prebufferBatch.add(nextChunk)
-                                totalPrebufferBytes += nextChunk.size
+                            val next = audioQueue.poll(remaining, TimeUnit.MILLISECONDS)
+                            if (next != null && next.isNotEmpty()) {
+                                batch.add(next)
+                                batchBytes += next.size
                             } else {
-                                // Timeout elapsed
                                 break
                             }
                         }
 
-                        val prebufferMs = System.currentTimeMillis() - firstArrivalMs
-                        Log.i(TAG, "t5 playback-start prebuffer_ms=$prebufferMs queued_bytes=$totalPrebufferBytes")
-
                         isSpeakingState = true
                         onSpeakingStateChanged(true)
+                        Log.i(TAG, "MIRA_LIVE_VOICE: Playback started (prebuffer=${System.currentTimeMillis() - startMs}ms, bytes=$batchBytes)")
 
-                        // Write initial pre-buffered chunks
-                        for (chunk in prebufferBatch) {
+                        for (chunk in batch) {
                             if (!isPlaying.get() || !isSpeakingState) break
                             writeChunkToTrack(chunk)
                         }
                     } else {
-                        // Speaking state: poll with 300ms grace period mid-utterance
-                        val chunk = audioQueue.poll(300, TimeUnit.MILLISECONDS)
+                        // Mid-utterance: poll with 250ms grace period
+                        val chunk = audioQueue.poll(250, TimeUnit.MILLISECONDS)
                         if (chunk == null) {
-                            // Queue has stayed empty for 300ms grace period -> utterance complete
                             isSpeakingState = false
                             onSpeakingStateChanged(false)
-                            Log.d(TAG, "Speaking grace period expired (300ms queue empty) — switched speaking state to false")
+                            Log.d(TAG, "MIRA_LIVE_VOICE: Utterance playback ended (queue drained)")
                             continue
                         }
-
                         if (chunk.isNotEmpty()) {
                             writeChunkToTrack(chunk)
                         }
@@ -150,7 +154,7 @@ class AudioPlayer(
                 } catch (e: InterruptedException) {
                     break
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error in AudioPlayer playback loop: ${e.message}", e)
+                    Log.e(TAG, "MIRA_LIVE_VOICE: Error in AudioPlayer loop: ${e.message}", e)
                 }
             }
             if (isSpeakingState) {
@@ -169,11 +173,6 @@ class AudioPlayer(
             if (written >= 0) {
                 totalAudioBytesWritten += written
                 lastPlaybackDiag = "chunks=$totalAudioChunksWritten, bytes=$totalAudioBytesWritten"
-                if (written < chunk.size) {
-                    Log.w(TAG, "AudioTrack.write partial write: $written/${chunk.size} bytes (chunk #$totalAudioChunksWritten)")
-                } else if (totalAudioChunksWritten == 1L || totalAudioChunksWritten % 50L == 0L) {
-                    Log.d(TAG, "AudioTrack wrote chunk #$totalAudioChunksWritten: $written bytes (total: $totalAudioBytesWritten bytes)")
-                }
             } else {
                 val errMeaning = when (written) {
                     AudioTrack.ERROR_INVALID_OPERATION -> "ERROR_INVALID_OPERATION"
@@ -182,27 +181,21 @@ class AudioPlayer(
                     AudioTrack.ERROR -> "ERROR"
                     else -> "UNKNOWN ($written)"
                 }
-                lastPlaybackDiag = "chunks=$totalAudioChunksWritten, bytes=$totalAudioBytesWritten, writeError=$errMeaning"
-                Log.e(TAG, "AudioTrack.write failed: code $written ($errMeaning) for chunk of ${chunk.size} bytes (chunk #$totalAudioChunksWritten)")
+                Log.e(TAG, "MIRA_LIVE_VOICE: AudioTrack.write error: $errMeaning ($written)")
             }
-        } else {
-            Log.e(TAG, "Cannot write audio: AudioTrack is null or not initialized")
         }
     }
 
     fun playAudioChunk(pcmData: ByteArray) {
         if (!isPlaying.get() || audioTrack == null) {
             val initialized = initAudioTrack()
-            if (!initialized) {
-                Log.e(TAG, "playAudioChunk dropped ${pcmData.size} bytes because AudioTrack could not be initialized")
-                return
-            }
+            if (!initialized) return
         }
         audioQueue.offer(pcmData)
     }
 
     /**
-     * Instantly stops audio playback, clears all queued PCM frames, and resets buffer for barge-in.
+     * Instantly halts audio playback, clears queued PCM frames, and resets track for barge-in.
      */
     fun stopImmediatelyAndFlush() {
         audioQueue.clear()
@@ -214,9 +207,9 @@ class AudioPlayer(
             audioTrack?.pause()
             audioTrack?.flush()
             audioTrack?.play()
-            Log.i(TAG, "Barge-in: AudioTrack flushed and playback halted immediately")
+            Log.i(TAG, "MIRA_LIVE_VOICE: AudioTrack playback flushed (barge-in)")
         } catch (e: Exception) {
-            Log.e(TAG, "Error during AudioTrack flush: ${e.message}")
+            Log.e(TAG, "MIRA_LIVE_VOICE: Error flushing AudioTrack: ${e.message}")
         }
     }
 
@@ -241,22 +234,22 @@ class AudioPlayer(
                     track.stop()
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "Error stopping AudioTrack: ${e.message}")
+                Log.w(TAG, "MIRA_LIVE_VOICE: Error stopping AudioTrack: ${e.message}")
             } finally {
                 try {
                     track.release()
                 } catch (e: Exception) {
-                    Log.w(TAG, "Error releasing AudioTrack: ${e.message}")
+                    Log.w(TAG, "MIRA_LIVE_VOICE: Error releasing AudioTrack: ${e.message}")
                 }
             }
         }
-        Log.i(TAG, "AudioPlayer released (total written: $totalAudioChunksWritten chunks, $totalAudioBytesWritten bytes)")
+        Log.i(TAG, "MIRA_LIVE_VOICE: AudioPlayer released ($totalAudioChunksWritten chunks, $totalAudioBytesWritten bytes)")
     }
 
     companion object {
-        private const val TAG = "MiraAudioPlayer"
+        private const val TAG = "MIRA_LIVE_VOICE"
         const val SAMPLE_RATE = 24000
-        const val PREBUFFER_MAX_BYTES = 9600
-        const val PREBUFFER_TIMEOUT_MS = 350L
+        const val PREBUFFER_MAX_BYTES = 4800 // ~100ms at 24kHz PCM16 mono
+        const val PREBUFFER_TIMEOUT_MS = 150L
     }
 }

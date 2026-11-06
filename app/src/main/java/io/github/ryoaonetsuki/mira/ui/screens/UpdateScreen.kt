@@ -1,6 +1,9 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
-import io.github.ryoaonetsuki.mira.ui.icons.Lucide
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.SystemUpdate
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.background
@@ -61,7 +64,7 @@ fun UpdateScreen(
                 title = { Text("App Updates", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Lucide.arrowLeft, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -84,7 +87,7 @@ fun UpdateScreen(
                     .background(palette.primary.copy(alpha = 0.15f))
             ) {
                 Icon(
-                    imageVector = Lucide.arrowDownToLine,
+                    imageVector = Icons.Rounded.SystemUpdate,
                     contentDescription = null,
                     tint = palette.primary,
                     modifier = Modifier.size(34.dp)
@@ -166,7 +169,7 @@ fun UpdateScreen(
                 onClick = { checkForUpdates() },
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Icon(Lucide.refreshCw, contentDescription = null, modifier = Modifier.size(18.dp))
+                Icon(Icons.Rounded.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
                 Text("Check Again")
             }

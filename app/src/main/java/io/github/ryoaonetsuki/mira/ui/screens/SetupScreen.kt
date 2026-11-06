@@ -102,7 +102,7 @@ fun SetupScreen(
         isServerKeyAvailable = resolver.isServerKeyConfigured()
     }
 
-    val testAndSaveKeys: () -> Unit = {
+    val testAndSaveKeys: () -> Unit = testAndSaveKeys@{
         val normalizedGemini = normalizeApiKey(apiKeyInput)
         val trimmedGroq = groqKeyInput.trim()
 

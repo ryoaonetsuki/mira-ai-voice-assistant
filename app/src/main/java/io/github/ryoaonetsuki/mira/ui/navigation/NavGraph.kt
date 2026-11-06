@@ -10,10 +10,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavHostController
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
 import io.github.ryoaonetsuki.mira.data.local.MiraDatabase
 import io.github.ryoaonetsuki.mira.ui.components.AppDrawer
 import io.github.ryoaonetsuki.mira.ui.components.AppTopBar
@@ -102,8 +104,18 @@ fun MiraNavGraph(
                 )
             }
 
-            composable(Screen.Setup.route) {
+            composable(
+                route = Screen.Setup.route,
+                arguments = listOf(
+                    navArgument("startStep") {
+                        type = NavType.IntType
+                        defaultValue = 1
+                    }
+                )
+            ) { backStackEntry ->
+                val startStep = backStackEntry.arguments?.getInt("startStep") ?: 1
                 SetupScreen(
+                    startStep = startStep,
                     onSetupComplete = {
                         navController.navigate(Screen.Home.route) {
                             popUpTo(Screen.Setup.route) { inclusive = true }

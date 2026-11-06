@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
 import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -44,6 +45,7 @@ import kotlinx.coroutines.launch
 
 @Composable
 fun SetupScreen(
+    startStep: Int = 1,
     onSetupComplete: () -> Unit
 ) {
     val context = LocalContext.current
@@ -53,7 +55,7 @@ fun SetupScreen(
     val restClient = remember { GeminiRestClient() }
     val resolver = remember { io.github.ryoaonetsuki.mira.backend.ApiKeyResolver(context) }
 
-    var currentStep by remember { mutableIntStateOf(1) }
+    var currentStep by remember { mutableIntStateOf(startStep) }
     var apiKeyInput by remember { mutableStateOf(securePrefs.getGeminiApiKey() ?: "") }
     var isKeyVisible by remember { mutableStateOf(false) }
     var isCheckingKey by remember { mutableStateOf(false) }
@@ -77,6 +79,14 @@ fun SetupScreen(
         mutableStateOf(powerManager.isIgnoringBatteryOptimizations(context.packageName))
     }
 
+    var hasFileAccess by remember {
+        mutableStateOf(
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                Environment.isExternalStorageManager()
+            } else true
+        )
+    }
+
     var isAccessibilityEnabled by remember {
         mutableStateOf(MiraAccessibilityService.isEnabled(context))
     }
@@ -87,6 +97,9 @@ fun SetupScreen(
             if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
                 hasMicPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
                 isBatteryIgnoringOptimizations = powerManager.isIgnoringBatteryOptimizations(context.packageName)
+                hasFileAccess = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    Environment.isExternalStorageManager()
+                } else true
                 isAccessibilityEnabled = MiraAccessibilityService.isEnabled(context)
             }
         }
@@ -315,7 +328,7 @@ fun SetupScreen(
             )
             Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = "Microphone & Battery optimization are required for real-time voice. The rest enable tools and features.",
+                text = "Microphone, Battery optimization & File Management are required for real-time voice and file creation. The rest enable tools and features.",
                 fontSize = 14.sp,
                 color = palette.textSecondary
             )
@@ -358,6 +371,28 @@ fun SetupScreen(
                                 context.startActivity(intent)
                             } catch (e: Exception) {
                                 val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                                context.startActivity(intent)
+                            }
+                        }
+                    )
+                }
+
+                // Required 3: File Management
+                item {
+                    PermissionRow(
+                        title = "File Management (Required)",
+                        subtitle = "Mira needs file access to save websites, code and files you ask her to build",
+                        icon = Icons.Rounded.Folder,
+                        isGranted = hasFileAccess,
+                        isRequired = true,
+                        onClick = {
+                            try {
+                                val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                                    data = Uri.parse("package:${context.packageName}")
+                                }
+                                context.startActivity(intent)
+                            } catch (e: Exception) {
+                                val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
                                 context.startActivity(intent)
                             }
                         }
@@ -456,21 +491,30 @@ fun SetupScreen(
             LaunchedEffect(Unit) {
                 hasMicPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
                 isBatteryIgnoringOptimizations = powerManager.isIgnoringBatteryOptimizations(context.packageName)
+                hasFileAccess = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    Environment.isExternalStorageManager()
+                } else true
             }
 
+            val isReady = hasMicPermission && isBatteryIgnoringOptimizations && hasFileAccess
             MiraButton(
                 text = "Finish & Start Talking",
-                enabled = hasMicPermission,
+                enabled = isReady,
                 onClick = {
                     onSetupComplete()
                 },
                 modifier = Modifier.fillMaxWidth()
             )
 
-            if (!hasMicPermission) {
+            val missingList = mutableListOf<String>().apply {
+                if (!hasMicPermission) add("Microphone")
+                if (!isBatteryIgnoringOptimizations) add("Battery")
+                if (!hasFileAccess) add("File Management")
+            }
+            if (missingList.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = "* Microphone permission is required to continue",
+                    text = "* ${missingList.joinToString(", ")} permission is required to continue",
                     fontSize = 12.sp,
                     color = Color(0xFFEF4444),
                     modifier = Modifier.align(Alignment.CenterHorizontally)

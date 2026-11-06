@@ -7,6 +7,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 class GeminiLiveClient(
     private val apiKey: String,
@@ -38,7 +39,10 @@ class GeminiLiveClient(
     private val isSetupComplete = AtomicBoolean(false)
     private val isRunning = AtomicBoolean(false)
 
-    // Handshake fallback model ladder
+    // Handshake fallback model ladder.
+    // NOTE: models/gemini-2.5-flash-native-audio-preview-12-2025 and
+    //       models/gemini-3.1-flash-live-preview are legacy models scheduled
+    //       to shut down on 2026-11-17 but are still live as of now.
     private val modelFallbackLadder = listOf(
         initialModel,
         "models/gemini-3.8-live",
@@ -46,8 +50,13 @@ class GeminiLiveClient(
         "models/gemini-3.1-flash-live-preview"
     ).distinct()
 
-    private var currentModelIndex = 0
-    private var hasAutoReconnected = false
+    private val currentModelIndex = AtomicInteger(0)
+    // Track which model indices have already been attempted this session (no infinite loops)
+    private val attemptedIndices = mutableSetOf<Int>()
+
+    // Setup timeout: 25 seconds to receive setupComplete after sending setup
+    private val SETUP_TIMEOUT_MS = 25_000L
+    private var setupTimeoutThread: Thread? = null
 
     fun startSession() {
         if (apiKey.isBlank()) {
@@ -56,18 +65,39 @@ class GeminiLiveClient(
         }
         isRunning.set(true)
         isSetupComplete.set(false)
+        currentModelIndex.set(0)
+        attemptedIndices.clear()
         connectWithCurrentModel()
     }
 
     private fun connectWithCurrentModel() {
-        val model = modelFallbackLadder.getOrElse(currentModelIndex) { modelFallbackLadder.first() }
+        val idx = currentModelIndex.get()
+        if (idx >= modelFallbackLadder.size) {
+            listener.onError("All voice models failed. Check your API key and network connection.")
+            return
+        }
+        if (attemptedIndices.contains(idx)) {
+            // Safety: skip already-attempted indices
+            if (idx + 1 < modelFallbackLadder.size) {
+                currentModelIndex.incrementAndGet()
+                connectWithCurrentModel()
+            } else {
+                listener.onError("All voice models already attempted — no more fallbacks.")
+            }
+            return
+        }
+        attemptedIndices.add(idx)
+
+        val model = modelFallbackLadder[idx]
+        // Send both ?key= param and x-goog-api-key header
         val wsUrl = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=$apiKey"
 
-        Log.i(TAG, "Connecting to Gemini Live WS using model: $model")
+        Log.i(TAG, "Connecting to Gemini Live WS using model: $model (index $idx)")
         listener.onConnecting(model)
 
         val request = Request.Builder()
             .url(wsUrl)
+            .header("x-goog-api-key", apiKey)
             .build()
 
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
@@ -75,10 +105,11 @@ class GeminiLiveClient(
                 Log.i(TAG, "WebSocket connection opened successfully (HTTP ${response.code})")
                 listener.onConnected()
                 sendSetupMessage(webSocket, model)
+                startSetupTimeout(webSocket)
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
-                handleIncomingMessage(text)
+                handleIncomingMessage(text, webSocket)
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
@@ -88,41 +119,82 @@ class GeminiLiveClient(
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 Log.i(TAG, "WebSocket closed: code=$code, reason=$reason")
+                cancelSetupTimeout()
                 val wasSetup = isSetupComplete.get()
                 isSetupComplete.set(false)
 
-                if (isRunning.get()) {
-                    if (!wasSetup && currentModelIndex + 1 < modelFallbackLadder.size) {
-                        currentModelIndex++
-                        val nextModel = modelFallbackLadder[currentModelIndex]
+                if (isRunning.get() && !wasSetup) {
+                    val nextIdx = currentModelIndex.get() + 1
+                    if (nextIdx < modelFallbackLadder.size && !attemptedIndices.contains(nextIdx)) {
+                        currentModelIndex.set(nextIdx)
+                        val nextModel = modelFallbackLadder[nextIdx]
                         Log.w(TAG, "Setup failed or refused. Falling back to next model: $nextModel")
-                        connectWithCurrentModel()
-                        return
-                    } else if (!hasAutoReconnected) {
-                        hasAutoReconnected = true
-                        Log.i(TAG, "Unexpected close. Attempting one-time auto-reconnect...")
                         connectWithCurrentModel()
                         return
                     }
                 }
-                listener.onClosed(reason.ifBlank { "Session closed ($code)" })
+                if (isRunning.get()) {
+                    listener.onClosed(reason.ifBlank { "Session closed ($code)" })
+                }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 Log.e(TAG, "WebSocket failure: ${t.message}, code=${response?.code}", t)
+                cancelSetupTimeout()
                 val wasSetup = isSetupComplete.get()
                 isSetupComplete.set(false)
 
-                if (isRunning.get() && !wasSetup && currentModelIndex + 1 < modelFallbackLadder.size) {
-                    currentModelIndex++
-                    val nextModel = modelFallbackLadder[currentModelIndex]
-                    Log.w(TAG, "Handshake failed. Trying next model: $nextModel")
-                    connectWithCurrentModel()
-                } else {
-                    listener.onError("Connection failed: ${t.message ?: "Network error"}")
+                val errDetail = buildString {
+                    append(t.message ?: "Network error")
+                    if (response != null) append(" (HTTP ${response.code})")
                 }
+
+                if (isRunning.get() && !wasSetup) {
+                    val nextIdx = currentModelIndex.get() + 1
+                    if (nextIdx < modelFallbackLadder.size && !attemptedIndices.contains(nextIdx)) {
+                        currentModelIndex.set(nextIdx)
+                        val nextModel = modelFallbackLadder[nextIdx]
+                        Log.w(TAG, "Handshake failed. Trying next model: $nextModel")
+                        connectWithCurrentModel()
+                        return
+                    }
+                }
+                listener.onError("Connection failed: $errDetail")
             }
         })
+    }
+
+    /**
+     * Starts a 25-second timeout. If setupComplete does not arrive within this window,
+     * close the socket and fall through to the next model in the ladder.
+     */
+    private fun startSetupTimeout(ws: WebSocket) {
+        cancelSetupTimeout()
+        setupTimeoutThread = Thread {
+            try {
+                Thread.sleep(SETUP_TIMEOUT_MS)
+                if (!isSetupComplete.get() && isRunning.get()) {
+                    Log.w(TAG, "Setup timeout after ${SETUP_TIMEOUT_MS}ms — closing socket and trying next model")
+                    ws.close(1001, "Setup timeout")
+                    isSetupComplete.set(false)
+
+                    val nextIdx = currentModelIndex.get() + 1
+                    if (nextIdx < modelFallbackLadder.size && !attemptedIndices.contains(nextIdx)) {
+                        currentModelIndex.set(nextIdx)
+                        connectWithCurrentModel()
+                    } else {
+                        listener.onError("Voice session timed out waiting for server setup (tried all models).")
+                    }
+                }
+            } catch (e: InterruptedException) {
+                // Cancelled — setup completed normally
+            }
+        }.also { it.isDaemon = true; it.start() }
+    }
+
+    private fun cancelSetupTimeout() {
+        setupTimeoutThread?.interrupt()
+        setupTimeoutThread = null
     }
 
     private fun sendSetupMessage(ws: WebSocket, model: String) {
@@ -131,12 +203,13 @@ class GeminiLiveClient(
             val setupDetails = JSONObject()
             setupDetails.put("model", model)
 
-            // Generation config
-            val genConfig = JSONObject()
+            // Response modalities at setup top level (AUDIO)
             val modalities = JSONArray()
             modalities.put("AUDIO")
-            genConfig.put("responseModalities", modalities)
+            setupDetails.put("responseModalities", modalities)
 
+            // Generation config
+            val genConfig = JSONObject()
             val speechConfig = JSONObject()
             val voiceConfig = JSONObject()
             val prebuiltVoiceConfig = JSONObject()
@@ -171,13 +244,38 @@ class GeminiLiveClient(
         }
     }
 
-    private fun handleIncomingMessage(jsonText: String) {
+    private fun handleIncomingMessage(jsonText: String, ws: WebSocket) {
         try {
             val json = JSONObject(jsonText)
+
+            // 0. Server error frame — parse and treat as failure, fall through ladder
+            if (json.has("error")) {
+                val errorObj = json.getJSONObject("error")
+                val errCode = errorObj.optInt("code", -1)
+                val errMsg = errorObj.optString("message", "Unknown server error")
+                Log.e(TAG, "Server sent error frame: code=$errCode, message=$errMsg")
+                cancelSetupTimeout()
+                isSetupComplete.set(false)
+                ws.close(1001, "Server error: $errMsg")
+
+                if (isRunning.get()) {
+                    val nextIdx = currentModelIndex.get() + 1
+                    if (nextIdx < modelFallbackLadder.size && !attemptedIndices.contains(nextIdx)) {
+                        currentModelIndex.set(nextIdx)
+                        Log.w(TAG, "Falling through to next model after server error")
+                        connectWithCurrentModel()
+                    } else {
+                        val displayCode = if (errCode != -1) " (code $errCode)" else ""
+                        listener.onError("Voice session error$displayCode: $errMsg")
+                    }
+                }
+                return
+            }
 
             // 1. Setup complete check
             if (json.has("setupComplete")) {
                 Log.i(TAG, ">>> SETUP COMPLETE received from Gemini Live! Starting audio transmission.")
+                cancelSetupTimeout()
                 isSetupComplete.set(true)
                 listener.onSetupComplete()
                 return
@@ -257,12 +355,10 @@ class GeminiLiveClient(
             val base64Data = Base64.encodeToString(pcmBytes, Base64.NO_WRAP)
             val root = JSONObject()
             val realtimeInput = JSONObject()
-            val mediaChunks = JSONArray()
             val audioObj = JSONObject()
             audioObj.put("data", base64Data)
             audioObj.put("mimeType", "audio/pcm;rate=16000")
-            mediaChunks.put(audioObj)
-            realtimeInput.put("mediaChunks", mediaChunks)
+            realtimeInput.put("audio", audioObj)
             root.put("realtimeInput", realtimeInput)
 
             webSocket?.send(root.toString())
@@ -274,6 +370,7 @@ class GeminiLiveClient(
     fun endSession() {
         isRunning.set(false)
         isSetupComplete.set(false)
+        cancelSetupTimeout()
         try {
             webSocket?.close(1000, "User ended session")
             webSocket = null

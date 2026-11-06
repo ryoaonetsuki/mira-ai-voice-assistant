@@ -51,6 +51,11 @@ sealed class KeyValidationOutcome {
     }
 }
 
+data class LiveCapabilityOutcome(
+    val isCapable: Boolean,
+    val message: String
+)
+
 /**
  * Checks whether the key looks plausible.
  * Accepts keys starting with AQ. (new AI Studio format), AIza (traditional format),
@@ -589,6 +594,82 @@ class GeminiRestClient {
             KeyValidationOutcome.TransientServerBusy(lastStatusCode = null)
         } else {
             KeyValidationOutcome.InvalidKey("Validation timed out")
+        }
+    }
+
+    /**
+     * In-app Live-capability check (ROUND 12 spec §3.7):
+     * Runs GET https://generativelanguage.googleapis.com/v1beta/models with the x-goog-api-key header
+     * and reports plainly whether models/gemini-3.8-live with bidiGenerateContent is listed.
+     */
+    suspend fun checkLiveCapability(apiKey: String): LiveCapabilityOutcome {
+        val key = normalizeApiKey(apiKey)
+        if (key.isBlank()) {
+            return LiveCapabilityOutcome(
+                isCapable = false,
+                message = "API key cannot be empty"
+            )
+        }
+        return withContext(Dispatchers.IO) {
+            try {
+                val request = Request.Builder()
+                    .url("https://generativelanguage.googleapis.com/v1beta/models")
+                    .header("x-goog-api-key", key)
+                    .get()
+                    .build()
+                validationClient.newCall(request).execute().use { response ->
+                    val body = response.body?.string() ?: ""
+                    if (!response.isSuccessful) {
+                        val errMsg = try {
+                            val json = JSONObject(body)
+                            json.optJSONObject("error")?.optString("message") ?: "HTTP ${response.code}"
+                        } catch (_: Exception) {
+                            "HTTP ${response.code}"
+                        }
+                        return@withContext LiveCapabilityOutcome(
+                            isCapable = false,
+                            message = if (response.code == 400 || response.code == 403 || response.code == 401) {
+                                "API key problem — check your key in Settings"
+                            } else {
+                                "Could not check Live capability: $errMsg"
+                            }
+                        )
+                    }
+                    val json = JSONObject(body)
+                    val models = json.optJSONArray("models") ?: JSONArray()
+                    var hasLiveModel = false
+                    for (i in 0 until models.length()) {
+                        val modelObj = models.optJSONObject(i) ?: continue
+                        val name = modelObj.optString("name", "")
+                        if (name == "models/gemini-3.8-live" || name == "gemini-3.8-live") {
+                            val methods = modelObj.optJSONArray("supportedGenerationMethods") ?: JSONArray()
+                            for (j in 0 until methods.length()) {
+                                if (methods.optString(j) == "bidiGenerateContent") {
+                                    hasLiveModel = true
+                                    break
+                                }
+                            }
+                        }
+                        if (hasLiveModel) break
+                    }
+                    if (hasLiveModel) {
+                        LiveCapabilityOutcome(
+                            isCapable = true,
+                            message = "Live voice available on this key"
+                        )
+                    } else {
+                        LiveCapabilityOutcome(
+                            isCapable = false,
+                            message = "This key cannot use Live voice — create a new key in Google AI Studio"
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                LiveCapabilityOutcome(
+                    isCapable = false,
+                    message = "Live check failed: ${e.message ?: "Network error"}"
+                )
+            }
         }
     }
 

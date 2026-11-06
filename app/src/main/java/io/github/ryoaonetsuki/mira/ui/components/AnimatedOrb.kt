@@ -102,7 +102,7 @@ fun AnimatedOrb(
         Box(
             contentAlignment = Alignment.Center,
             modifier = Modifier
-                .size(250.dp)
+                .size(300.dp)
                 .padding(8.dp)
         ) {
             Canvas(modifier = Modifier.fillMaxSize()) {

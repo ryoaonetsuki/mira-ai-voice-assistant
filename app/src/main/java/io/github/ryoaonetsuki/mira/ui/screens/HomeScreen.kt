@@ -1,5 +1,6 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
+import io.github.ryoaonetsuki.mira.ui.icons.Lucide
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
@@ -15,8 +16,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -58,6 +57,11 @@ fun HomeScreen(
     val weatherClient = remember { WeatherClient() }
 
     val liveState by MicService.liveState.collectAsState()
+    val voiceStage by MicService.voiceStage.collectAsState()
+    val isFallbackMode by MicService.isFallbackMode.collectAsState()
+    val audioChunksSent by MicService.audioChunksSent.collectAsState()
+    val audioChunksReceived by MicService.audioChunksReceived.collectAsState()
+    val lastVoiceDiagnostic by MicService.lastVoiceDiagnostic.collectAsState()
     val micAmp by MicService.micAmplitude.collectAsState()
     val userName by userPrefs.userNameFlow.collectAsState(initial = "Alex")
     val orbStyle by userPrefs.orbStyleFlow.collectAsState(initial = "Mira Neon")
@@ -97,14 +101,14 @@ fun HomeScreen(
     }
 
     val quickChips = listOf(
-        QuickChip("Music", Icons.Rounded.MusicNote, "Let's play some music to match the mood."),
-        QuickChip("Study", Icons.Rounded.School, "Help me study and explain key concepts."),
-        QuickChip("Journal", Icons.Rounded.Book, "Let's do a quick journal entry about today."),
-        QuickChip("News", Icons.Rounded.Newspaper, "What are the top news headlines right now?"),
-        QuickChip("Tasks", Icons.Rounded.CheckCircle, "What tasks should I focus on next?"),
-        QuickChip("Reminder", Icons.Rounded.Alarm, "Set a reminder for my upcoming schedule."),
-        QuickChip("Focus", Icons.Rounded.CenterFocusStrong, "Let's begin a 25-minute Pomodoro focus session."),
-        QuickChip("Vent", Icons.Rounded.Favorite, "I need someone to listen and talk things through.")
+        QuickChip("Music", Lucide.eighthNote, "Let's play some music to match the mood."),
+        QuickChip("Study", Lucide.graduationCap, "Help me study and explain key concepts."),
+        QuickChip("Journal", Lucide.book, "Let's do a quick journal entry about today."),
+        QuickChip("News", Lucide.newspaper, "What are the top news headlines right now?"),
+        QuickChip("Tasks", Lucide.circleCheck, "What tasks should I focus on next?"),
+        QuickChip("Reminder", Lucide.alarmClock, "Set a reminder for my upcoming schedule."),
+        QuickChip("Focus", Lucide.focus, "Let's begin a 25-minute Pomodoro focus session."),
+        QuickChip("Vent", Lucide.heart, "I need someone to listen and talk things through.")
     )
 
     val isLive = liveState == LiveState.CONNECTING || liveState == LiveState.LISTENING || liveState == LiveState.SPEAKING
@@ -171,7 +175,7 @@ fun HomeScreen(
                     cornerRadius = 14.dp
                 ) {
                     Icon(
-                        imageVector = Icons.Rounded.WbSunny,
+                        imageVector = Lucide.sun,
                         contentDescription = "Weather",
                         tint = palette.primary,
                         modifier = Modifier.size(18.dp)
@@ -196,7 +200,7 @@ fun HomeScreen(
                     cornerRadius = 14.dp
                 ) {
                     Icon(
-                        imageVector = Icons.Rounded.CalendarToday,
+                        imageVector = Lucide.calendar,
                         contentDescription = "Date",
                         tint = palette.secondary,
                         modifier = Modifier.size(18.dp)
@@ -221,7 +225,7 @@ fun HomeScreen(
                     cornerRadius = 14.dp
                 ) {
                     Icon(
-                        imageVector = Icons.Rounded.Mood,
+                        imageVector = Lucide.faceSlightlySmiling,
                         contentDescription = "Mood",
                         tint = Color(0xFF10B981),
                         modifier = Modifier.size(18.dp)
@@ -265,15 +269,18 @@ fun HomeScreen(
                 color = palette.textSecondary
             )
 
-            // 'Heard: ...' line under the status when transcript exists
-            if (userTranscript.isNotBlank() && (liveState == LiveState.LISTENING || liveState == LiveState.SPEAKING || liveState == LiveState.CONNECTING)) {
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "Heard: $userTranscript",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = palette.primary,
-                    maxLines = 2
+            // Voice diagnostics card: shown ONLY while a session is active (liveState != IDLE)
+            if (liveState != LiveState.IDLE) {
+                Spacer(modifier = Modifier.height(12.dp))
+                VoiceDiagnosticsCard(
+                    isFallback = isFallbackMode,
+                    stage = if (liveState == LiveState.ERROR) "Error" else voiceStage.label,
+                    micAmplitude = micAmp,
+                    transcript = userTranscript,
+                    chunksSent = audioChunksSent,
+                    chunksReceived = audioChunksReceived,
+                    lastError = lastVoiceDiagnostic ?: errorMessage,
+                    palette = palette
                 )
             }
 
@@ -369,7 +376,7 @@ private fun HomeBottomNavBar(
         ) {
             // Home tab
             BottomNavItem(
-                icon = Icons.Rounded.Home,
+                icon = Lucide.house,
                 label = "Home",
                 selected = true,
                 palette = palette,
@@ -378,7 +385,7 @@ private fun HomeBottomNavBar(
 
             // Scan tab
             BottomNavItem(
-                icon = Icons.Rounded.QrCodeScanner,
+                icon = Lucide.scanQrCode,
                 label = "Scan",
                 selected = false,
                 palette = palette,
@@ -410,7 +417,7 @@ private fun HomeBottomNavBar(
                     }
             ) {
                 Icon(
-                    imageVector = if (isLive) Icons.Rounded.Stop else Icons.Rounded.Mic,
+                    imageVector = if (isLive) Lucide.square else Lucide.mic,
                     contentDescription = if (isLive) "Stop Session" else "Talk to Mira",
                     tint = Color.White,
                     modifier = Modifier.size(26.dp)
@@ -419,7 +426,7 @@ private fun HomeBottomNavBar(
 
             // Extensions tab
             BottomNavItem(
-                icon = Icons.Rounded.Extension,
+                icon = Lucide.puzzle,
                 label = "Extensions",
                 selected = false,
                 palette = palette,
@@ -428,7 +435,7 @@ private fun HomeBottomNavBar(
 
             // Chat tab
             BottomNavItem(
-                icon = Icons.Rounded.Chat,
+                icon = Lucide.messageCircle,
                 label = "Chat",
                 selected = false,
                 palette = palette,
@@ -466,5 +473,140 @@ private fun BottomNavItem(
             color = if (selected) palette.primary else palette.textSecondary,
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
         )
+    }
+}
+
+@Composable
+private fun VoiceDiagnosticsCard(
+    isFallback: Boolean,
+    stage: String,
+    micAmplitude: Float,
+    transcript: String,
+    chunksSent: Long,
+    chunksReceived: Long,
+    lastError: String?,
+    palette: io.github.ryoaonetsuki.mira.ui.theme.MiraPalette
+) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = palette.surfaceVariant.copy(alpha = 0.85f),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp, vertical = 4.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp)
+        ) {
+            // Header: Path Badge + Stage
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = if (isFallback) Color(0xFFF59E0B).copy(alpha = 0.2f) else palette.primary.copy(alpha = 0.2f)
+                ) {
+                    Text(
+                        text = if (isFallback) "TAP-TO-TALK" else "LIVE",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isFallback) Color(0xFFF59E0B) else palette.primary,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                    )
+                }
+
+                Text(
+                    text = stage,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = palette.textPrimary
+                )
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Mic Level Bar
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "Mic",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = palette.textSecondary
+                )
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(3.dp))
+                        .background(palette.surface)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .fillMaxWidth(fraction = micAmplitude.coerceIn(0f, 1f))
+                            .clip(RoundedCornerShape(3.dp))
+                            .background(
+                                Brush.horizontalGradient(
+                                    listOf(palette.primary, palette.secondary)
+                                )
+                            )
+                    )
+                }
+                Text(
+                    text = "${(micAmplitude.coerceIn(0f, 1f) * 100).toInt()}%",
+                    fontSize = 10.sp,
+                    color = palette.textSecondary
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Heard line
+            Text(
+                text = if (transcript.isNotBlank()) "Heard: $transcript" else "Heard: (listening...)",
+                fontSize = 12.sp,
+                color = if (transcript.isNotBlank()) palette.textPrimary else palette.textSecondary,
+                maxLines = 3
+            )
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            // Audio chunks sent / received counts
+            val statsLabel = if (isFallback) {
+                "Turns: $chunksSent sent • $chunksReceived replies"
+            } else {
+                "Audio chunks: $chunksSent sent • $chunksReceived recv"
+            }
+            Text(
+                text = statsLabel,
+                fontSize = 11.sp,
+                color = palette.textSecondary
+            )
+
+            // Last error line (only if error exists)
+            if (!lastError.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = Color(0xFFEF4444).copy(alpha = 0.15f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "Error: $lastError",
+                        fontSize = 11.sp,
+                        color = Color(0xFFEF4444),
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                        maxLines = 3
+                    )
+                }
+            }
+        }
     }
 }

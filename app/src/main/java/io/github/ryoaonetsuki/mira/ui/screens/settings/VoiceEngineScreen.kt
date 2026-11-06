@@ -5,6 +5,10 @@ import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.RecordVoiceOver
 import androidx.compose.material.icons.rounded.VerifiedUser
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.VisibilityOff
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -53,7 +57,8 @@ fun VoiceEngineScreen(
     val fastListening by userPrefs.fastListeningFlow.collectAsState(initial = true)
     val echoGuard by userPrefs.echoGuardFlow.collectAsState(initial = true)
 
-    var deepgramKeyInput by remember { mutableStateOf(securePrefs.getDeepgramKey() ?: "") }
+    var groqKeyInput by remember { mutableStateOf(securePrefs.getGroqApiKey() ?: "") }
+    var isGroqKeyVisible by remember { mutableStateOf(false) }
     var showVoicePickerDialog by remember { mutableStateOf(false) }
     var showGuardianDialog by remember { mutableStateOf(false) }
     var voiceprintLabel by remember { mutableStateOf(securePrefs.getEnrolledFaceName() ?: "Owner (Alex)") }
@@ -257,21 +262,36 @@ fun VoiceEngineScreen(
                 }
             }
 
-            // Deepgram Backup Transcriber
+            // Server Voice (Groq)
             item {
                 MiraCard(modifier = Modifier.fillMaxWidth()) {
-                    Text("Backup Transcriber (Deepgram Nova-3)", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
+                    Text("Server Voice (Groq)", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
                     Spacer(modifier = Modifier.height(4.dp))
-                    Text("Optional STT fallback if Google rate limits are encountered.", fontSize = 12.sp, color = palette.textSecondary)
+                    Text("Free at console.groq.com — no card, your own quota", fontSize = 12.sp, color = palette.textSecondary)
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedTextField(
-                        value = deepgramKeyInput,
+                        value = groqKeyInput,
                         onValueChange = {
-                            deepgramKeyInput = it
-                            securePrefs.setDeepgramKey(it.trim())
+                            groqKeyInput = it
+                            if (it.isBlank()) {
+                                securePrefs.clearGroqApiKey()
+                            } else {
+                                securePrefs.setGroqApiKey(it.trim())
+                            }
                         },
-                        placeholder = { Text("Deepgram API Key (Optional)") },
+                        placeholder = { Text("Groq API Key (starts with gsk_)") },
+                        visualTransformation = if (isGroqKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { isGroqKeyVisible = !isGroqKeyVisible }) {
+                                Icon(
+                                    imageVector = if (isGroqKeyVisible) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+                                    contentDescription = "Toggle Visibility",
+                                    tint = palette.textSecondary
+                                )
+                            }
+                        },
                         singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
                         modifier = Modifier.fillMaxWidth()
                     )
                 }

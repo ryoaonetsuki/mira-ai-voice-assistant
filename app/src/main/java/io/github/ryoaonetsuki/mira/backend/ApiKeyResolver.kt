@@ -73,11 +73,26 @@ class ApiKeyResolver(private val context: Context) {
         }
     }
 
-    suspend fun mintLiveToken(): Result<String> = withContext(Dispatchers.IO) {
+    suspend fun mintLiveToken(): Result<String> {
+        val payload = JSONObject().apply {
+            put("action", "mintLiveToken")
+        }
+        return requestLiveToken(payload)
+    }
+
+    suspend fun mintLiveTokenForUserKey(userKey: String): Result<String> {
+        val payload = JSONObject().apply {
+            put("action", "mintLiveToken")
+            put("customKey", userKey)
+            put("uses", 3)
+            put("expireMinutes", 30)
+            put("newSessionMinutes", 5)
+        }
+        return requestLiveToken(payload)
+    }
+
+    private suspend fun requestLiveToken(payload: JSONObject): Result<String> = withContext(Dispatchers.IO) {
         try {
-            val payload = JSONObject().apply {
-                put("action", "mintLiveToken")
-            }
             val req = Request.Builder()
                 .url(edgeFunctionUrl)
                 .addHeader("apikey", anonKey)
@@ -91,7 +106,7 @@ class ApiKeyResolver(private val context: Context) {
                     return@withContext Result.failure(Exception("HTTP ${resp.code}: $body"))
                 }
                 val json = JSONObject(body)
-                val token = json.optString("token")
+                val token = json.optString("token").ifBlank { json.optString("name") }
                 if (token.isNotBlank()) {
                     Result.success(token)
                 } else {

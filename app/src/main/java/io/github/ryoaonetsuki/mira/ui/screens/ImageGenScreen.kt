@@ -1,5 +1,6 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
+import io.github.ryoaonetsuki.mira.ui.icons.Lucide
 import android.content.ContentValues
 import android.graphics.Bitmap
 import android.graphics.drawable.BitmapDrawable
@@ -10,8 +11,6 @@ import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -101,7 +100,7 @@ fun ImageGenScreen(
                 title = { Text("Image Generation", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(Lucide.arrowLeft, contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -160,7 +159,7 @@ fun ImageGenScreen(
                 if (currentImageUrl == null) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Icon(
-                            imageVector = Icons.Rounded.Image,
+                            imageVector = Lucide.image,
                             contentDescription = null,
                             tint = palette.surfaceVariant,
                             modifier = Modifier.size(54.dp)
@@ -187,7 +186,7 @@ fun ImageGenScreen(
                     colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Icon(Icons.Rounded.Download, contentDescription = null, tint = androidx.compose.ui.graphics.Color.Black)
+                    Icon(Lucide.download, contentDescription = null, tint = androidx.compose.ui.graphics.Color.Black)
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(if (isSaving) "Saving..." else "Save to Gallery", color = androidx.compose.ui.graphics.Color.Black)
                 }

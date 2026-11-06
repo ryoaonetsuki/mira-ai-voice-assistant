@@ -107,7 +107,7 @@ class GeminiRestClient {
         // Step 1: models-list check
         try {
             val url = "https://generativelanguage.googleapis.com/v1beta/models?key=$key"
-            val request = Request.Builder().url(url).get().build()
+            val request = Request.Builder().url(url).header("x-goog-api-key", key).get().build()
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
                     val body = response.body?.string() ?: ""
@@ -221,7 +221,7 @@ class GeminiRestClient {
                         .build()
                 } else {
                     val url = "https://generativelanguage.googleapis.com/v1beta/models/$m:streamGenerateContent?alt=sse&key=$key"
-                    Request.Builder().url(url).post(root.toString().toRequestBody(jsonMediaType)).build()
+                    Request.Builder().url(url).header("x-goog-api-key", key).post(root.toString().toRequestBody(jsonMediaType)).build()
                 }
 
                 val call = client.newCall(request)
@@ -338,7 +338,7 @@ class GeminiRestClient {
                     .build()
             } else {
                 val url = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey"
-                Request.Builder().url(url).post(root.toString().toRequestBody(jsonMediaType)).build()
+                Request.Builder().url(url).header("x-goog-api-key", apiKey).post(root.toString().toRequestBody(jsonMediaType)).build()
             }
 
             client.newCall(request).execute().use { response ->

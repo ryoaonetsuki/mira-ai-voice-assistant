@@ -1,5 +1,6 @@
 package io.github.ryoaonetsuki.mira.ui.screens.settings
 
+import io.github.ryoaonetsuki.mira.ui.icons.Lucide
 import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
@@ -15,8 +16,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import io.github.ryoaonetsuki.mira.ui.components.MiraSwitch
 import androidx.compose.runtime.*
@@ -99,7 +98,7 @@ fun AdvancedSettingsScreen(
                 title = { Text("Advanced & Security", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(Lucide.arrowLeft, contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -340,7 +339,7 @@ fun AdvancedSettingsScreen(
                             Text("Quick contacts notified during emergencies", fontSize = 12.sp, color = palette.textSecondary)
                         }
                         IconButton(onClick = { showSosDialog = true }) {
-                            Icon(Icons.Rounded.Add, contentDescription = "Add SOS", tint = palette.primary)
+                            Icon(Lucide.plus, contentDescription = "Add SOS", tint = palette.primary)
                         }
                     }
 
@@ -353,7 +352,7 @@ fun AdvancedSettingsScreen(
                         ) {
                             Text("${c.name} (${c.phone})", fontSize = 13.sp, color = palette.textPrimary, modifier = Modifier.weight(1f))
                             IconButton(onClick = { scope.launch { db.sosContactDao().deleteContact(c) } }) {
-                                Icon(Icons.Rounded.Close, contentDescription = "Delete", tint = palette.textSecondary, modifier = Modifier.size(16.dp))
+                                Icon(Lucide.x, contentDescription = "Delete", tint = palette.textSecondary, modifier = Modifier.size(16.dp))
                             }
                         }
                     }

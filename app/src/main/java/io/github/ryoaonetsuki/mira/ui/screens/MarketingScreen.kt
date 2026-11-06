@@ -1,6 +1,9 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
-import io.github.ryoaonetsuki.mira.ui.icons.Lucide
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.DeleteOutline
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -60,7 +63,7 @@ fun MarketingScreen(
                 title = { Text("Marketing Assistant", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Lucide.arrowLeft, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -166,7 +169,7 @@ fun MarketingScreen(
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier.weight(1f)
                         ) {
-                            Icon(Lucide.copy, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Icon(Icons.Rounded.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(6.dp))
                             Text("Copy")
                         }
@@ -240,10 +243,10 @@ fun MarketingScreen(
                                     )
                                 }
                                 IconButton(onClick = { copyToClipboard(post.content) }) {
-                                    Icon(Lucide.copy, contentDescription = "Copy", tint = palette.textSecondary)
+                                    Icon(Icons.Rounded.ContentCopy, contentDescription = "Copy", tint = palette.textSecondary)
                                 }
                                 IconButton(onClick = { scope.launch { db.postDao().deletePost(post) } }) {
-                                    Icon(Lucide.trash, contentDescription = "Delete", tint = palette.textSecondary)
+                                    Icon(Icons.Rounded.DeleteOutline, contentDescription = "Delete", tint = palette.textSecondary)
                                 }
                             }
                         }

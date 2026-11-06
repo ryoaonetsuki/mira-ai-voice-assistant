@@ -1,6 +1,14 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
-import io.github.ryoaonetsuki.mira.ui.icons.Lucide
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.ArrowBackIosNew
+import androidx.compose.material.icons.rounded.ArrowForward
+import androidx.compose.material.icons.rounded.ArrowForwardIos
+import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.Laptop
+import androidx.compose.material.icons.rounded.PhoneAndroid
+import androidx.compose.material.icons.rounded.Refresh
 import android.graphics.Bitmap
 import android.webkit.WebChromeClient
 import android.webkit.WebView
@@ -51,7 +59,7 @@ fun BrowserScreen(
                         .padding(horizontal = 8.dp, vertical = 6.dp)
                 ) {
                     IconButton(onClick = onBack) {
-                        Icon(Lucide.arrowLeft, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
                     }
 
                     // Address bar
@@ -69,7 +77,7 @@ fun BrowserScreen(
                                 }
                                 webViewInstance?.loadUrl(url)
                             }) {
-                                Icon(Lucide.arrowRight, contentDescription = "Go", tint = palette.primary)
+                                Icon(Icons.Rounded.ArrowForward, contentDescription = "Go", tint = palette.primary)
                             }
                         },
                         colors = OutlinedTextFieldDefaults.colors(
@@ -96,7 +104,7 @@ fun BrowserScreen(
                         webViewInstance?.reload()
                     }) {
                         Icon(
-                            imageVector = if (isDesktopMode) Lucide.laptop else Lucide.smartphone,
+                            imageVector = if (isDesktopMode) Icons.Rounded.Laptop else Icons.Rounded.PhoneAndroid,
                             contentDescription = "Desktop Toggle",
                             tint = if (isDesktopMode) palette.primary else palette.textSecondary
                         )
@@ -104,7 +112,7 @@ fun BrowserScreen(
 
                     // Reload
                     IconButton(onClick = { webViewInstance?.reload() }) {
-                        Icon(Lucide.refreshCw, contentDescription = "Reload", tint = palette.textPrimary)
+                        Icon(Icons.Rounded.Refresh, contentDescription = "Reload", tint = palette.textPrimary)
                     }
                 }
 
@@ -131,13 +139,13 @@ fun BrowserScreen(
                     enabled = canGoBack,
                     onClick = { webViewInstance?.goBack() }
                 ) {
-                    Icon(Lucide.chevronLeft, contentDescription = "Back", tint = if (canGoBack) palette.textPrimary else palette.textSecondary.copy(alpha = 0.4f))
+                    Icon(Icons.Rounded.ArrowBackIosNew, contentDescription = "Back", tint = if (canGoBack) palette.textPrimary else palette.textSecondary.copy(alpha = 0.4f))
                 }
                 IconButton(
                     enabled = canGoForward,
                     onClick = { webViewInstance?.goForward() }
                 ) {
-                    Icon(Lucide.chevronRight, contentDescription = "Forward", tint = if (canGoForward) palette.textPrimary else palette.textSecondary.copy(alpha = 0.4f))
+                    Icon(Icons.Rounded.ArrowForwardIos, contentDescription = "Forward", tint = if (canGoForward) palette.textPrimary else palette.textSecondary.copy(alpha = 0.4f))
                 }
                 Box(
                     contentAlignment = Alignment.Center,
@@ -151,7 +159,7 @@ fun BrowserScreen(
                 IconButton(onClick = {
                     webViewInstance?.loadUrl("https://duckduckgo.com")
                 }) {
-                    Icon(Lucide.house, contentDescription = "Home", tint = palette.textPrimary)
+                    Icon(Icons.Rounded.Home, contentDescription = "Home", tint = palette.textPrimary)
                 }
             }
         },

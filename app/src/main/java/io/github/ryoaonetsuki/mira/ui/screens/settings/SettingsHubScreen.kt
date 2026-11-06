@@ -1,5 +1,6 @@
 package io.github.ryoaonetsuki.mira.ui.screens.settings
 
+import io.github.ryoaonetsuki.mira.ui.icons.Lucide
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -7,8 +8,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -38,19 +37,19 @@ fun SettingsHubScreen(
     val palette = LocalMiraPalette.current
 
     val rows = listOf(
-        SettingsHubRow("Mira & Persona", "Persona, assistant name, language, driving mode", Icons.Rounded.Face, Screen.SettingsMaya.route, "Assistant"),
-        SettingsHubRow("Personal Profile", "Your name, API key, music app & song", Icons.Rounded.Person, Screen.SettingsPersonal.route, "Assistant"),
-        SettingsHubRow("Secret Settings", "Friendly vs Romantic tone with age confirmation", Icons.Rounded.Favorite, Screen.SettingsSecret.route, "Assistant"),
-        SettingsHubRow("Voice Engine", "Mind/Soul/Swift models, 30 voices, Deepgram key", Icons.Rounded.GraphicEq, Screen.SettingsVoice.route, "Voice"),
-        SettingsHubRow("Advanced & Security", "Themes, orb styles, Face Lock, SOS, Touch Guard", Icons.Rounded.Security, Screen.SettingsAdvanced.route, "System"),
-        SettingsHubRow("Connectors", "GitHub, Telegram, Notion, Spotify, Linear, Todoist", Icons.Rounded.Link, Screen.SettingsConnectors.route, "Integrations"),
-        SettingsHubRow("Email", "Send-as address, signature, AI email composer", Icons.Rounded.Email, Screen.SettingsEmail.route, "Integrations"),
-        SettingsHubRow("Messages & WhatsApp", "Auto-reply template, Notification listener", Icons.Rounded.Chat, Screen.SettingsMessages.route, "Integrations"),
-        SettingsHubRow("Social Media", "Handle, caption voice, story ideas", Icons.Rounded.Share, Screen.SettingsSocial.route, "Integrations"),
-        SettingsHubRow("Optional Integrations", "Image provider, Maps key, Web search engines", Icons.Rounded.Tune, Screen.SettingsOptional.route, "Integrations"),
-        SettingsHubRow("Skills", "Installed playbooks & tool capabilities", Icons.Rounded.AutoAwesome, Screen.SettingsSkills.route, "System"),
-        SettingsHubRow("Backup & Restore", "Export & restore memories and chats via SAF", Icons.Rounded.Backup, Screen.SettingsBackup.route, "System"),
-        SettingsHubRow("About Mira AI", "Version, developer info, open-source licenses", Icons.Rounded.Info, Screen.About.route, "System")
+        SettingsHubRow("Mira & Persona", "Persona, assistant name, language, driving mode", Lucide.faceSlightlySmiling, Screen.SettingsMaya.route, "Assistant"),
+        SettingsHubRow("Personal Profile", "Your name, API key, music app & song", Lucide.user, Screen.SettingsPersonal.route, "Assistant"),
+        SettingsHubRow("Secret Settings", "Friendly vs Romantic tone with age confirmation", Lucide.heart, Screen.SettingsSecret.route, "Assistant"),
+        SettingsHubRow("Voice Engine", "Mind/Soul/Swift models, 30 voices, Deepgram key", Lucide.audioLines, Screen.SettingsVoice.route, "Voice"),
+        SettingsHubRow("Advanced & Security", "Themes, orb styles, Face Lock, SOS, Touch Guard", Lucide.shieldCheck, Screen.SettingsAdvanced.route, "System"),
+        SettingsHubRow("Connectors", "GitHub, Telegram, Notion, Spotify, Linear, Todoist", Lucide.link, Screen.SettingsConnectors.route, "Integrations"),
+        SettingsHubRow("Email", "Send-as address, signature, AI email composer", Lucide.mail, Screen.SettingsEmail.route, "Integrations"),
+        SettingsHubRow("Messages & WhatsApp", "Auto-reply template, Notification listener", Lucide.messageCircle, Screen.SettingsMessages.route, "Integrations"),
+        SettingsHubRow("Social Media", "Handle, caption voice, story ideas", Lucide.share2, Screen.SettingsSocial.route, "Integrations"),
+        SettingsHubRow("Optional Integrations", "Image provider, Maps key, Web search engines", Lucide.slidersHorizontal, Screen.SettingsOptional.route, "Integrations"),
+        SettingsHubRow("Skills", "Installed playbooks & tool capabilities", Lucide.sparkles, Screen.SettingsSkills.route, "System"),
+        SettingsHubRow("Backup & Restore", "Export & restore memories and chats via SAF", Lucide.cloudUpload, Screen.SettingsBackup.route, "System"),
+        SettingsHubRow("About Mira AI", "Version, developer info, open-source licenses", Lucide.info, Screen.About.route, "System")
     )
 
     Scaffold(
@@ -59,7 +58,7 @@ fun SettingsHubScreen(
                 title = { Text("Settings", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(Lucide.arrowLeft, contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -125,7 +124,7 @@ fun SettingsHubScreen(
                     }
 
                     Icon(
-                        imageVector = Icons.Rounded.ChevronRight,
+                        imageVector = Lucide.chevronRight,
                         contentDescription = null,
                         tint = palette.textSecondary
                     )

@@ -2,118 +2,91 @@ package io.github.ryoaonetsuki.mira.voice
 
 import android.util.Base64
 import android.util.Log
+import io.github.ryoaonetsuki.mira.network.normalizeApiKey
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import okhttp3.*
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
-sealed class LiveAuthMode(val label: String) {
-    data class Ephemeral(val token: String) : LiveAuthMode("ephemeral")
-    data class DirectKey(val key: String) : LiveAuthMode("direct")
-    data class Relay(val key: String, val relayUrl: String) : LiveAuthMode("relay")
-    data class CloudflareRelay(val key: String, val workerUrl: String) : LiveAuthMode("cf-relay")
+/**
+ * State machine states for GeminiLiveClient per ROUND 12 spec §3.1.
+ */
+enum class LiveClientState {
+    IDLE,
+    REQUESTING_PERMISSION,
+    CONNECTING,
+    CONFIGURING,
+    LISTENING,
+    PROCESSING,
+    SPEAKING,
+    INTERRUPTED,
+    RECONNECTING,
+    ERROR,
+    STOPPED
 }
 
+/**
+ * Native Gemini Live voice client rebuilt for ROUND 12.
+ *
+ * Implements a single-path, coroutine-based StateFlow state machine over a direct OkHttp
+ * WebSocket to Google's BidiGenerateContent endpoint.
+ *
+ * Auth placement: Single x-goog-api-key header on the WebSocket upgrade (spec §0.3).
+ * Setup payload: Single proven JSON shape (spec §2).
+ * Continuous mic frame streaming with audioStreamEnd signaling (spec §0.5).
+ * Explicit timeouts: WS connect 20s, setupComplete 45s, first-audio stall 30s, session 8-min.
+ * Max 2 auto-reconnects with resumption handle before terminating with ERROR.
+ * Diagnostic tag: MIRA_LIVE_VOICE for every event.
+ */
 class GeminiLiveClient(
-    private val apiKey: String = "",
-    private val voiceName: String,
-    private val systemPrompt: String,
-    private val initialModel: String = "models/gemini-3.8-live",
-    private val language: String = "Bangla (Bengali)",
-    private val ephemeralToken: String? = null,
-    val relayUrl: String? = null,
-    val anonKey: String? = null,
-    val cfRelayUrl: String? = null,
+    val apiKey: String,
+    val voiceName: String = "Aoede",
+    val systemPrompt: String = "",
+    val model: String = LIVE_MODEL_DEFAULT,
+    val language: String = "Bangla (Bengali)",
     val storedResumptionHandle: String? = null,
-    val authModes: List<LiveAuthMode> = if (!ephemeralToken.isNullOrBlank()) {
-        listOf(LiveAuthMode.Ephemeral(ephemeralToken))
-    } else if (apiKey.isNotBlank()) {
-        listOf(LiveAuthMode.DirectKey(apiKey))
-    } else {
-        emptyList()
-    },
     private val listener: LiveEventsListener
 ) {
     interface LiveEventsListener {
-        fun onConnecting(model: String)
-        fun onConnected()
-        fun onSetupComplete()
-        fun onAudioData(pcmBytes: ByteArray)
-        fun onInterrupted()
-        fun onTurnComplete()
-        fun onTranscript(text: String, isUser: Boolean)
-        fun onStalled()
-        fun onError(message: String)
-        fun onClosed(reason: String)
+        fun onStateChanged(state: LiveClientState) {}
+        fun onConnecting(model: String) {}
+        fun onConnected() {}
+        fun onSetupComplete() {}
+        fun onAudioData(pcmBytes: ByteArray) {}
+        fun onInterrupted() {}
+        fun onTurnComplete() {}
+        fun onTranscript(text: String, isUser: Boolean) {}
+        fun onStalled() {}
+        fun onError(message: String) {}
+        fun onClosed(reason: String) {}
         fun onSessionResumptionUpdate(newHandle: String) {}
     }
 
-    private sealed class HeldFrame(val timestampMs: Long, val byteSize: Int) {
-        class Audio(val bytes: ByteArray, timestampMs: Long) : HeldFrame(timestampMs, bytes.size)
-        class Text(val text: String, timestampMs: Long) : HeldFrame(timestampMs, text.toByteArray(Charsets.UTF_8).size)
-    }
+    private val clientScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
-    // OkHttp client: 60s connect & write, 0 read, 20s ping
-    private val client: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(60, TimeUnit.SECONDS)
-        .writeTimeout(60, TimeUnit.SECONDS)
-        .readTimeout(0, TimeUnit.MILLISECONDS) // infinite for WS
+    // OkHttp client: Connect 20s, write 30s, read 0 (infinite for WS), ping 20s
+    private val httpClient: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(WS_CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(0, TimeUnit.MILLISECONDS)
         .pingInterval(20, TimeUnit.SECONDS)
         .build()
 
-    private val lock = Any()
+    private val _state = MutableStateFlow(LiveClientState.IDLE)
+    val state: StateFlow<LiveClientState> = _state.asStateFlow()
+
     private var webSocket: WebSocket? = null
-    private val isSetupComplete = AtomicBoolean(false)
     private val isRunning = AtomicBoolean(false)
+    private var sessionStartMs: Long = 0L
+    private var setupSentMs: Long = 0L
 
-    // Pre-setup held queue (capped at 128,000 bytes)
-    private val heldQueueLock = Any()
-    private val heldQueue = ArrayDeque<HeldFrame>()
-    private var heldQueueBytes = 0
-
-    // Handshake fallback model ladder.
-    private val sanitizedInitialModel = if (
-        initialModel.contains("native-audio") || initialModel.contains("live-preview")
-    ) {
-        "models/gemini-3.8-live"
-    } else {
-        initialModel
-    }
-    private val modelFallbackLadder = listOf(
-        sanitizedInitialModel,
-        "models/gemini-3.8-live"
-    ).distinct()
-
-    private val TOTAL_SAFETY_BUDGET_MS = 240_000L
-    private var sessionStartTimestampMs = 0L
-
-    private val MAX_SETUP_ATTEMPTS = 3
-    private var currentModeIndex = 0
-    private var currentVariant = 0
-    private var resolvedAuthModes: List<LiveAuthMode> = emptyList()
-    private val modesTriedRecord = mutableListOf<Pair<String, MutableList<String>>>()
-
-    var activeModeLabel: String = ""
-        private set
-
-    private var lastFailureReason: String? = null
-    private var v1FailureReason: String? = null
-
-    // Real diagnostic tracking
-    var lastVoiceDiagnostic: String = ""
-        private set
-
-    private var httpUpgradeCode: Int? = null
-    private var setupWasSent: Boolean = false
-    private var setupBytesSent: Int = 0
-    private var setupSendSuccess: Boolean = false
-    private var serverErrorFrame: String? = null
-    private var wsCloseOrFailure: String? = null
-
-    // Timing and chunk accounting
-    private var setupSentTimestampMs: Long = 0L
     private val audioChunksSentCount = AtomicLong(0L)
     private val audioBytesSentCount = AtomicLong(0L)
     private val incomingAudioChunksCount = AtomicLong(0L)
@@ -122,397 +95,550 @@ class GeminiLiveClient(
     val audioChunksSent: Long get() = audioChunksSentCount.get()
     val audioChunksReceived: Long get() = incomingAudioChunksCount.get()
 
-    // Setup timeout: 45 seconds to receive setupComplete after sending setup
-    private val SETUP_TIMEOUT_MS = 45_000L
-    private var setupTimeoutThread: Thread? = null
-
-    // Post-setup stall watchdog: checks every 5s if user sent audio > last server message and no reply > 30s
-    private val STALL_CHECK_INTERVAL_MS = 5_000L
-    private val STALL_TIMEOUT_MS = 30_000L
-    private val STALL_MAX_SILENCE_MS = 8 * 60 * 1_000L // 8 minutes
-
     @Volatile private var lastServerMessageMs: Long = 0L
     @Volatile private var lastUserAudioSentMs: Long = 0L
-    private val isStalledEpisode = AtomicBoolean(false)
-    private var stallWatchdogThread: Thread? = null
+    @Volatile private var reconnectAttempts: Int = 0
+    @Volatile var latestResumptionHandle: String? = storedResumptionHandle
+        private set
 
-    private fun recordAttempt(modeLabel: String, variantNum: Int) {
-        val variantLabel = "V$variantNum"
-        val existing = modesTriedRecord.find { it.first == modeLabel }
-        if (existing != null) {
-            if (!existing.second.contains(variantLabel)) {
-                existing.second.add(variantLabel)
-            }
-        } else {
-            modesTriedRecord.add(Pair(modeLabel, mutableListOf(variantLabel)))
-        }
-    }
+    private var connectTimeoutJob: Job? = null
+    private var setupTimeoutJob: Job? = null
+    private var stallWatchdogJob: Job? = null
+
+    val isSessionReady: Boolean
+        get() = _state.value == LiveClientState.LISTENING || _state.value == LiveClientState.SPEAKING
+
+    fun isSessionReady(): Boolean = isSessionReady
 
     fun startSession() {
-        resolvedAuthModes = if (authModes.isNotEmpty()) {
-            authModes
-        } else if (!ephemeralToken.isNullOrBlank()) {
-            listOf(LiveAuthMode.Ephemeral(ephemeralToken))
-        } else if (apiKey.isNotBlank()) {
-            listOf(LiveAuthMode.DirectKey(apiKey))
-        } else {
-            emptyList()
-        }
-
-        if (resolvedAuthModes.isEmpty()) {
-            listener.onError("Missing API key. Please configure in Setup.")
+        val normalizedKey = normalizeApiKey(apiKey)
+        if (normalizedKey.isBlank()) {
+            val err = "Missing API key. Please configure in Setup or Settings."
+            Log.e(TAG, "MIRA_LIVE_VOICE: $err")
+            transitionTo(LiveClientState.ERROR)
+            LiveVoiceDiagnostics.updateLastError(err)
+            LiveVoiceDiagnostics.updateStage("ERROR")
+            listener.onError(err)
             return
         }
 
-        val initialMode = resolvedAuthModes[0]
-        Log.i(TAG, "Starting Live session: model=$sanitizedInitialModel, voice=$voiceName, language=$language, initialMode=${initialMode.label}, totalModes=${resolvedAuthModes.size}")
-
-        synchronized(lock) {
-            if (isRunning.get()) {
-                Log.w(TAG, "startSession called while session already active — resetting previous session first")
-                endSessionLocked()
-            }
+        if (isRunning.getAndSet(true)) {
+            Log.w(TAG, "MIRA_LIVE_VOICE: startSession called while already running — ending previous session first")
+            endSessionInternal(sendAudioEnd = false)
             isRunning.set(true)
-            isSetupComplete.set(false)
-            clearHeldQueueLocked()
-            sessionStartTimestampMs = System.currentTimeMillis()
-            currentModeIndex = 0
-            currentVariant = 0
-            modesTriedRecord.clear()
-            lastFailureReason = null
-            v1FailureReason = null
-            lastVoiceDiagnostic = ""
-            setupSentTimestampMs = 0L
-            audioChunksSentCount.set(0L)
-            audioBytesSentCount.set(0L)
-            incomingAudioChunksCount.set(0L)
-            incomingAudioBytesCount.set(0L)
-            lastServerMessageMs = 0L
-            lastUserAudioSentMs = 0L
-            isStalledEpisode.set(false)
-            stopStallWatchdog()
-            connectWithCurrentAttemptLocked()
         }
+
+        sessionStartMs = System.currentTimeMillis()
+        audioChunksSentCount.set(0L)
+        audioBytesSentCount.set(0L)
+        incomingAudioChunksCount.set(0L)
+        incomingAudioBytesCount.set(0L)
+        lastServerMessageMs = 0L
+        lastUserAudioSentMs = 0L
+        reconnectAttempts = 0
+
+        LiveVoiceDiagnostics.reset()
+        LiveVoiceDiagnostics.updateStage("CONNECTING")
+        Log.i(TAG, "MIRA_LIVE_VOICE: Starting Live session (model=$model, voice=$voiceName, language=$language)")
+
+        connectWsInternal(normalizedKey)
     }
 
-    private fun connectWithCurrentAttemptLocked() {
-        val elapsedTotal = System.currentTimeMillis() - sessionStartTimestampMs
-        if (elapsedTotal >= TOTAL_SAFETY_BUDGET_MS) {
-            val diag = buildDiagnosticString("overall safety budget exceeded (${elapsedTotal / 1000}s >= ${TOTAL_SAFETY_BUDGET_MS / 1000}s)")
-            lastVoiceDiagnostic = diag
-            Log.e(TAG, diag)
-            listener.onError(diag)
-            return
-        }
-
-        if (currentModeIndex >= resolvedAuthModes.size) {
-            val diag = buildDiagnosticString("tried all ${resolvedAuthModes.size} auth modes without success")
-            lastVoiceDiagnostic = diag
-            Log.e(TAG, diag)
-            listener.onError(diag)
-            return
-        }
-
-        val currentMode = resolvedAuthModes[currentModeIndex]
-        activeModeLabel = currentMode.label
-        val maxVariantsForMode = if (currentModeIndex == 0) MAX_SETUP_ATTEMPTS else 1
-        currentVariant++
-
-        recordAttempt(currentMode.label, currentVariant)
-
-        // Reset per-attempt diagnostic tracking
-        httpUpgradeCode = null
-        setupWasSent = false
-        setupBytesSent = 0
-        setupSendSuccess = false
-        serverErrorFrame = null
-        wsCloseOrFailure = null
-        lastFailureReason = null
-
-        // Select model from ladder: attempt 1 & 2 use ladder primary; attempt 3 can use secondary if ladder has > 1
-        val model = if (modelFallbackLadder.size > 1 && currentVariant == 3) {
-            modelFallbackLadder[1]
-        } else {
-            modelFallbackLadder[0]
-        }
-
-        val request = when (currentMode) {
-            is LiveAuthMode.Ephemeral -> {
-                val wsUrl = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained?access_token=${currentMode.token}"
-                Log.i(TAG, "Connecting to Gemini Live WS [mode: ${currentMode.label}, variant V$currentVariant/$maxVariantsForMode] using ephemeral token, model: $model")
-                Request.Builder().url(wsUrl).build()
-            }
-            is LiveAuthMode.DirectKey -> {
-                val wsUrl = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${currentMode.key}"
-                Log.i(TAG, "Connecting to Gemini Live WS [mode: ${currentMode.label}, variant V$currentVariant/$maxVariantsForMode] using ?key= URL auth, model: $model")
-                Request.Builder().url(wsUrl).build()
-            }
-            is LiveAuthMode.Relay -> {
-                val targetUrl = currentMode.relayUrl.ifBlank { relayUrl ?: "" }
-                Log.i(TAG, "Connecting to Gemini Live WS [mode: ${currentMode.label}, variant V$currentVariant/$maxVariantsForMode] via Supabase relay ($targetUrl), model: $model")
-                val wsUrl = toWebSocketUrl(targetUrl)
-                val reqBuilder = Request.Builder().url(wsUrl)
-                if (!anonKey.isNullOrBlank()) {
-                    reqBuilder.header("apikey", anonKey)
-                    reqBuilder.header("Authorization", "Bearer $anonKey")
-                }
-                val key = currentMode.key.ifBlank { apiKey }
-                reqBuilder.header("x-mira-key", key)
-                reqBuilder.build()
-            }
-            is LiveAuthMode.CloudflareRelay -> {
-                val targetUrl = currentMode.workerUrl.ifBlank {
-                    cfRelayUrl ?: try { io.github.ryoaonetsuki.mira.BuildConfig.CLOUDFLARE_RELAY_URL } catch (_: Throwable) { "" }
-                }
-                Log.i(TAG, "Connecting to Gemini Live WS [mode: ${currentMode.label}, variant V$currentVariant/$maxVariantsForMode] via Cloudflare relay ($targetUrl), model: $model")
-                val wsUrl = toWebSocketUrl(targetUrl)
-                val key = currentMode.key.ifBlank { apiKey }
-                val reqBuilder = Request.Builder().url(wsUrl)
-                reqBuilder.header("x-mira-key", key)
-                reqBuilder.build()
-            }
-        }
-
+    private fun connectWsInternal(keyOverride: String? = null) {
+        val currentKey = keyOverride ?: normalizeApiKey(apiKey)
+        transitionTo(LiveClientState.CONNECTING)
         listener.onConnecting(model)
+        LiveVoiceDiagnostics.updateStage("CONNECTING")
 
-        webSocket = client.newWebSocket(request, object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) {
-                httpUpgradeCode = response.code
-                Log.i(TAG, "WebSocket connection opened successfully (HTTP ${response.code}) [mode: ${currentMode.label}, variant V$currentVariant/$maxVariantsForMode]")
-                synchronized(lock) {
-                    if (webSocket !== this@GeminiLiveClient.webSocket || !isRunning.get()) {
-                        Log.w(TAG, "onOpen received for stale or cancelled WebSocket — closing")
-                        webSocket.cancel()
+        Log.i(TAG, "MIRA_LIVE_VOICE: WS connecting to $LIVE_WS_URL (header auth, no key logged)")
+
+        // Connect timeout watchdog (20s)
+        connectTimeoutJob?.cancel()
+        connectTimeoutJob = clientScope.launch {
+            delay(WS_CONNECT_TIMEOUT_MS)
+            if (_state.value == LiveClientState.CONNECTING) {
+                val timeoutMsg = "Live voice: Connection timed out after 20s — tap to retry"
+                Log.e(TAG, "MIRA_LIVE_VOICE: $timeoutMsg")
+                handleError(timeoutMsg, code = null)
+            }
+        }
+
+        val request = Request.Builder()
+            .url(LIVE_WS_URL)
+            .addHeader("x-goog-api-key", currentKey)
+            .build()
+
+        webSocket = httpClient.newWebSocket(request, createWebSocketListener())
+    }
+
+    private fun createWebSocketListener(): WebSocketListener {
+        return object : WebSocketListener() {
+            override fun onOpen(ws: WebSocket, response: Response) {
+                connectTimeoutJob?.cancel()
+                val code = response.code
+                Log.i(TAG, "MIRA_LIVE_VOICE: WS opened (HTTP $code)")
+                LiveVoiceDiagnostics.updateWsCode(code)
+
+                transitionTo(LiveClientState.CONFIGURING)
+                LiveVoiceDiagnostics.updateStage("CONFIGURING")
+                listener.onConnected()
+
+                // Send ONE setup payload (spec §2)
+                val bcp47 = mapLanguageToBcp47(language)
+                val setupPayload = buildSetupPayload(
+                    model = model,
+                    voiceName = voiceName,
+                    languageCode = bcp47,
+                    systemInstructionText = systemPrompt,
+                    resumptionHandle = latestResumptionHandle
+                )
+
+                setupSentMs = System.currentTimeMillis()
+                val payloadString = setupPayload.toString()
+                val sent = ws.send(payloadString)
+                Log.i(TAG, "MIRA_LIVE_VOICE: Setup sent (length=${payloadString.length}, success=$sent)")
+
+                // SetupComplete timeout watchdog (45s)
+                setupTimeoutJob?.cancel()
+                setupTimeoutJob = clientScope.launch {
+                    delay(SETUP_COMPLETE_TIMEOUT_MS)
+                    if (_state.value == LiveClientState.CONFIGURING) {
+                        val setupTimeoutMsg = "Live voice: Setup timed out after 45s — tap to retry"
+                        Log.e(TAG, "MIRA_LIVE_VOICE: $setupTimeoutMsg")
+                        handleError(setupTimeoutMsg, code = null)
+                    }
+                }
+            }
+
+            override fun onMessage(ws: WebSocket, text: String) {
+                lastServerMessageMs = System.currentTimeMillis()
+                try {
+                    val root = JSONObject(text)
+
+                    // 1. Check for setupComplete
+                    if (root.has("setupComplete")) {
+                        setupTimeoutJob?.cancel()
+                        val setupMs = System.currentTimeMillis() - setupSentMs
+                        Log.i(TAG, "MIRA_LIVE_VOICE: Setup completed in ${setupMs}ms")
+                        LiveVoiceDiagnostics.updateSetupDuration(setupMs)
+                        LiveVoiceDiagnostics.updateStage("LISTENING")
+                        transitionTo(LiveClientState.LISTENING)
+                        listener.onSetupComplete()
+                        startStallWatchdog()
                         return
                     }
-                    listener.onConnected()
-                    sendSetupMessage(webSocket, model, currentVariant)
-                    startSetupTimeout(webSocket)
-                }
-            }
 
-            override fun onMessage(webSocket: WebSocket, text: String) {
-                handleIncomingMessage(text, webSocket)
-            }
-
-            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                Log.w(TAG, "WebSocket closing from server: code=$code, reason=$reason")
-                if (wsCloseOrFailure == null && reason.isNotBlank()) {
-                    wsCloseOrFailure = "$code $reason"
-                }
-                webSocket.close(1000, null)
-            }
-
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                Log.i(TAG, "WebSocket closed by server: code=$code, reason=$reason")
-                if (wsCloseOrFailure == null) {
-                    wsCloseOrFailure = if (reason.isNotBlank()) "$code $reason" else if (code != 1000) "code $code" else "-"
-                }
-                handleSocketTermination(
-                    ws = webSocket,
-                    isFailure = false,
-                    closeCode = code,
-                    closeReason = lastFailureReason ?: reason.ifBlank { "Session closed ($code)" }
-                )
-            }
-
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                if (response != null) {
-                    httpUpgradeCode = response.code
-                }
-                val failureDesc = buildString {
-                    append(t.message ?: t.javaClass.simpleName)
-                    if (response != null) append(" (HTTP ${response.code})")
-                }
-                Log.e(TAG, "WebSocket failure on [mode: ${currentMode.label}, variant V$currentVariant]: $failureDesc", t)
-                if (wsCloseOrFailure == null) {
-                    wsCloseOrFailure = if (lastFailureReason?.contains("timed out") == true) "-" else failureDesc
-                }
-                val errDetail = lastFailureReason ?: failureDesc
-                handleSocketTermination(
-                    ws = webSocket,
-                    isFailure = true,
-                    closeCode = response?.code ?: -1,
-                    closeReason = errDetail
-                )
-            }
-        })
-    }
-
-    private fun toWebSocketUrl(rawUrl: String): String {
-        return when {
-            rawUrl.startsWith("http://", ignoreCase = true) -> "ws://" + rawUrl.substring(7)
-            rawUrl.startsWith("https://", ignoreCase = true) -> "wss://" + rawUrl.substring(8)
-            else -> rawUrl
-        }
-    }
-
-    /**
-     * Single decision point for WebSocket termination (onClosed / onFailure).
-     * Drives auth-mode ladder and config-varied setup retries.
-     */
-    private fun handleSocketTermination(
-        ws: WebSocket,
-        isFailure: Boolean,
-        closeCode: Int,
-        closeReason: String
-    ) {
-        synchronized(lock) {
-            // Ignore termination from inactive or replaced sockets
-            if (ws !== webSocket) {
-                Log.d(TAG, "Ignoring termination from inactive WebSocket")
-                return
-            }
-            webSocket = null
-            cancelSetupTimeout()
-            stopStallWatchdog()
-
-            // Clear held queue on mode advance / socket termination to prevent stale replay
-            clearHeldQueueLocked()
-
-            // If session was stopped by the user, clean exit with no spurious error
-            if (!isRunning.get()) {
-                Log.d(TAG, "Session ended by user; skipping failure/fallback logic")
-                return
-            }
-
-            val wasSetup = isSetupComplete.get()
-            isSetupComplete.set(false)
-
-            // Setup never completed — try next setup variant or advance auth mode
-            if (!wasSetup) {
-                if (currentModeIndex == 0 && currentVariant == 1) {
-                    v1FailureReason = lastFailureReason ?: closeReason.ifBlank { "V1 connection terminated" }
-                }
-
-                val elapsedTotal = System.currentTimeMillis() - sessionStartTimestampMs
-                if (elapsedTotal >= TOTAL_SAFETY_BUDGET_MS) {
-                    val finalReason = lastFailureReason ?: closeReason.ifBlank { "safety budget exceeded" }
-                    val diag = buildDiagnosticString("safety budget exceeded (${elapsedTotal / 1000}s >= ${TOTAL_SAFETY_BUDGET_MS / 1000}s); last error: $finalReason")
-                    lastVoiceDiagnostic = diag
-                    Log.e(TAG, "Overall voice setup safety budget exceeded: $diag")
-                    listener.onError(diag)
-                    return
-                }
-
-                val maxVariants = if (currentModeIndex == 0) MAX_SETUP_ATTEMPTS else 1
-
-                if (currentVariant < maxVariants && isRunning.get()) {
-                    val nextVariant = currentVariant + 1
-                    val modeLabel = resolvedAuthModes[currentModeIndex].label
-                    Log.w(TAG, "Setup variant V$currentVariant in mode '$modeLabel' failed ($closeReason). Retrying with variant V$nextVariant...")
-                    connectWithCurrentAttemptLocked()
-                    return
-                } else if (currentModeIndex + 1 < resolvedAuthModes.size && isRunning.get()) {
-                    val finishedModeLabel = resolvedAuthModes[currentModeIndex].label
-                    currentModeIndex++
-                    currentVariant = 0
-                    val nextModeLabel = resolvedAuthModes[currentModeIndex].label
-                    Log.w(TAG, "All variants exhausted for mode '$finishedModeLabel' ($closeReason). Advancing to next auth mode '$nextModeLabel'...")
-                    connectWithCurrentAttemptLocked()
-                    return
-                } else {
-                    // All modes and variants exhausted — report the real diagnostic
-                    val finalReason = lastFailureReason ?: closeReason.ifBlank { "connection terminated" }
-                    val diag = buildDiagnosticString(finalReason)
-                    lastVoiceDiagnostic = diag
-                    Log.e(TAG, "All voice setup variants failed: $diag")
-                    listener.onError(diag)
-                    return
-                }
-            }
-
-            // Setup had completed previously (mid-session disconnect)
-            if (isFailure) {
-                listener.onError("Connection lost: $closeReason")
-            } else {
-                listener.onClosed(closeReason)
-            }
-        }
-    }
-
-    /**
-     * Starts a 45-second timeout. If setupComplete does not arrive within this window,
-     * aborts the socket via ws.cancel().
-     */
-    private fun startSetupTimeout(ws: WebSocket) {
-        cancelSetupTimeout()
-        setupTimeoutThread = Thread {
-            try {
-                Thread.sleep(SETUP_TIMEOUT_MS)
-                synchronized(lock) {
-                    if (ws === webSocket && !isSetupComplete.get() && isRunning.get()) {
-                        Log.w(TAG, "Setup timeout after ${SETUP_TIMEOUT_MS / 1000}s in mode '$activeModeLabel' variant V$currentVariant — cancelling socket for retry")
-                        lastFailureReason = "no setupComplete in ${SETUP_TIMEOUT_MS / 1000}s"
-                        ws.cancel()
+                    // 2. Check for goAway
+                    if (root.optBoolean("goAway", false)) {
+                        Log.i(TAG, "MIRA_LIVE_VOICE: Received server goAway — initiating session resumption")
+                        handleAutoReconnect("server goAway")
+                        return
                     }
-                }
-            } catch (e: InterruptedException) {
-                // Cancelled — setup completed normally
-            }
-        }.also { it.isDaemon = true; it.start() }
-    }
 
-    private fun cancelSetupTimeout() {
-        setupTimeoutThread?.interrupt()
-        setupTimeoutThread = null
-    }
+                    // 3. Check for sessionResumptionUpdate
+                    val resumptionUpdate = root.optJSONObject("sessionResumptionUpdate")
+                    if (resumptionUpdate != null) {
+                        val newHandle = resumptionUpdate.optString("newHandle", "")
+                        if (newHandle.isNotBlank()) {
+                            latestResumptionHandle = newHandle
+                            Log.i(TAG, "MIRA_LIVE_VOICE: Received new session resumption handle (length=${newHandle.length})")
+                            listener.onSessionResumptionUpdate(newHandle)
+                        }
+                    }
 
-    /**
-     * Post-setup stall watchdog daemon thread.
-     */
-    private fun startStallWatchdog(ws: WebSocket) {
-        stopStallWatchdog()
-        isStalledEpisode.set(false)
-        stallWatchdogThread = Thread {
-            try {
-                while (isRunning.get() && isSetupComplete.get() && ws === webSocket) {
-                    Thread.sleep(STALL_CHECK_INTERVAL_MS)
-                    val now = System.currentTimeMillis()
-                    val userAudioMs = lastUserAudioSentMs
-                    val serverMs = lastServerMessageMs
+                    // 4. Check for server error frame
+                    if (root.has("error")) {
+                        val errObj = root.optJSONObject("error")
+                        val errCode = errObj?.optInt("code", 0) ?: 0
+                        val rawMsg = errObj?.optString("message", "Unknown error") ?: "Unknown error"
+                        Log.e(TAG, "MIRA_LIVE_VOICE: Server error frame received: code=$errCode, message=$rawMsg")
+                        val plainError = when {
+                            errCode == 400 || errCode == 403 || errCode == 401 -> "Live voice: API key problem — check your key in Settings"
+                            errCode == 429 || errCode == 503 -> "Live voice: Google's voice servers are busy — tap to retry"
+                            else -> "Live voice: Google error ($errCode) — tap to retry"
+                        }
+                        handleError(plainError, code = errCode)
+                        return
+                    }
 
-                    if (userAudioMs > serverMs) {
-                        val silenceDuration = now - serverMs
-                        if (silenceDuration > STALL_MAX_SILENCE_MS) {
-                            synchronized(lock) {
-                                if (ws === webSocket && isRunning.get()) {
-                                    Log.e(TAG, "Live session stalled — no reply from the server for 8 minutes")
-                                    lastFailureReason = "Live session stalled — no reply from the server for 8 minutes"
-                                    ws.cancel()
+                    // 5. Check for serverContent
+                    val serverContent = root.optJSONObject("serverContent")
+                    if (serverContent != null) {
+                        // Interruption flag (Barge-in from server)
+                        val interrupted = serverContent.optBoolean("interrupted", false)
+                        if (interrupted) {
+                            Log.i(TAG, "MIRA_LIVE_VOICE: Server interrupted received — model turn cancelled")
+                            transitionTo(LiveClientState.INTERRUPTED)
+                            listener.onInterrupted()
+                            transitionTo(LiveClientState.LISTENING)
+                            LiveVoiceDiagnostics.updateStage("LISTENING")
+                        }
+
+                        // Model audio output
+                        val modelTurn = serverContent.optJSONObject("modelTurn")
+                        if (modelTurn != null) {
+                            val parts = modelTurn.optJSONArray("parts")
+                            if (parts != null) {
+                                for (i in 0 until parts.length()) {
+                                    val part = parts.optJSONObject(i) ?: continue
+                                    val inlineData = part.optJSONObject("inlineData")
+                                    if (inlineData != null) {
+                                        val dataBase64 = inlineData.optString("data", "")
+                                        if (dataBase64.isNotBlank()) {
+                                            val pcmBytes = Base64.decode(dataBase64, Base64.DEFAULT)
+                                            if (pcmBytes.isNotEmpty()) {
+                                                val chunkNum = incomingAudioChunksCount.incrementAndGet()
+                                                incomingAudioBytesCount.addAndGet(pcmBytes.size.toLong())
+                                                LiveVoiceDiagnostics.updateChunks(audioChunksSentCount.get(), chunkNum)
+                                                if (chunkNum == 1L) {
+                                                    Log.i(TAG, "MIRA_LIVE_VOICE: Received first audio chunk (${pcmBytes.size} bytes)")
+                                                }
+                                                if (_state.value != LiveClientState.SPEAKING) {
+                                                    transitionTo(LiveClientState.SPEAKING)
+                                                    LiveVoiceDiagnostics.updateStage("SPEAKING")
+                                                }
+                                                listener.onAudioData(pcmBytes)
+                                            }
+                                        }
+                                    }
                                 }
                             }
-                            break
-                        } else if (silenceDuration > STALL_TIMEOUT_MS) {
-                            if (isStalledEpisode.compareAndSet(false, true)) {
-                                Log.w(TAG, "Live session stalled: no server message for ${silenceDuration / 1000}s after user audio. Keeping session alive.")
-                                listener.onStalled()
+                        }
+
+                        // Turn complete
+                        if (serverContent.optBoolean("turnComplete", false)) {
+                            Log.i(TAG, "MIRA_LIVE_VOICE: Server turnComplete received")
+                            listener.onTurnComplete()
+                            if (_state.value == LiveClientState.SPEAKING || _state.value == LiveClientState.PROCESSING) {
+                                transitionTo(LiveClientState.LISTENING)
+                                LiveVoiceDiagnostics.updateStage("LISTENING")
+                            }
+                        }
+
+                        // Input Audio Transcription (User speech transcription)
+                        val inputTrans = serverContent.optJSONObject("inputAudioTranscription")
+                            ?: serverContent.optJSONObject("inputTranscription")
+                        if (inputTrans != null) {
+                            val text = inputTrans.optString("text", "").trim()
+                            if (text.isNotBlank()) {
+                                Log.i(TAG, "MIRA_LIVE_VOICE: User transcription: $text")
+                                listener.onTranscript(text, isUser = true)
+                            }
+                        }
+
+                        // Output Audio Transcription (Model speech transcription)
+                        val outputTrans = serverContent.optJSONObject("outputAudioTranscription")
+                            ?: serverContent.optJSONObject("outputTranscription")
+                        if (outputTrans != null) {
+                            val text = outputTrans.optString("text", "").trim()
+                            if (text.isNotBlank()) {
+                                Log.i(TAG, "MIRA_LIVE_VOICE: Model transcription: $text")
+                                listener.onTranscript(text, isUser = false)
                             }
                         }
                     }
+
+                } catch (e: Exception) {
+                    Log.e(TAG, "MIRA_LIVE_VOICE: Error parsing server frame: ${e.message}", e)
                 }
-            } catch (e: InterruptedException) {
-                // Watchdog cancelled / stopped
             }
-        }.also { it.isDaemon = true; it.start() }
+
+            override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
+                connectTimeoutJob?.cancel()
+                setupTimeoutJob?.cancel()
+                val code = response?.code
+                LiveVoiceDiagnostics.updateWsCode(code)
+                Log.e(TAG, "MIRA_LIVE_VOICE: WS failure (code=$code): ${t.message}")
+
+                if (_state.value == LiveClientState.STOPPED) return
+
+                val wasActiveSession = _state.value == LiveClientState.LISTENING ||
+                        _state.value == LiveClientState.SPEAKING ||
+                        _state.value == LiveClientState.PROCESSING
+
+                if (wasActiveSession && reconnectAttempts < MAX_AUTO_RECONNECTS) {
+                    handleAutoReconnect("WS failure: ${t.message}")
+                    return
+                }
+
+                val plainError = when {
+                    code == 400 || code == 401 || code == 403 -> "Live voice: API key problem — check your key in Settings"
+                    code == 429 || code == 503 -> "Live voice: Google's voice servers are busy — tap to retry"
+                    code != null -> "Live voice: Server error (HTTP $code) — tap to retry"
+                    else -> "Live voice: Connection failed — check your internet and tap to retry"
+                }
+                handleError(plainError, code = code)
+            }
+
+            override fun onClosed(ws: WebSocket, code: Int, reason: String) {
+                connectTimeoutJob?.cancel()
+                setupTimeoutJob?.cancel()
+                stallWatchdogJob?.cancel()
+                LiveVoiceDiagnostics.updateWsCode(code)
+                Log.i(TAG, "MIRA_LIVE_VOICE: WS closed (code=$code, reason=$reason)")
+
+                if (_state.value == LiveClientState.STOPPED) {
+                    listener.onClosed(reason)
+                    return
+                }
+
+                if (code == 1000) {
+                    transitionTo(LiveClientState.STOPPED)
+                    LiveVoiceDiagnostics.updateStage("STOPPED")
+                    listener.onClosed("Normal closure (1000)")
+                } else if (reconnectAttempts < MAX_AUTO_RECONNECTS) {
+                    handleAutoReconnect("WS closed (code=$code)")
+                } else {
+                    val plainError = "Live voice: Session closed unexpectedly (code $code) — tap to retry"
+                    handleError(plainError, code = code)
+                }
+            }
+        }
     }
 
-    private fun stopStallWatchdog() {
-        stallWatchdogThread?.interrupt()
-        stallWatchdogThread = null
+    private fun startStallWatchdog() {
+        stallWatchdogJob?.cancel()
+        stallWatchdogJob = clientScope.launch {
+            while (isActive && isRunning.get()) {
+                delay(STALL_CHECK_INTERVAL_MS)
+                val now = System.currentTimeMillis()
+
+                // Check 1: Session 8-minute give-up
+                if (sessionStartMs > 0 && (now - sessionStartMs) >= SESSION_GIVE_UP_MS) {
+                    Log.i(TAG, "MIRA_LIVE_VOICE: Session reached 8-minute safety limit — ending cleanly")
+                    endSession()
+                    break
+                }
+
+                // Check 2: First audio chunk stall timeout (30s)
+                if (lastUserAudioSentMs > 0 && lastServerMessageMs < lastUserAudioSentMs) {
+                    val silenceDuration = now - lastUserAudioSentMs
+                    if (silenceDuration >= FIRST_AUDIO_STALL_TIMEOUT_MS) {
+                        Log.w(TAG, "MIRA_LIVE_VOICE: Session stalled (>30s silence after user audio)")
+                        val stallMsg = "Live voice: Server did not answer — tap to retry"
+                        handleError(stallMsg, code = null)
+                        listener.onStalled()
+                        break
+                    }
+                }
+            }
+        }
+    }
+
+    private fun handleAutoReconnect(reason: String) {
+        if (reconnectAttempts >= MAX_AUTO_RECONNECTS || _state.value == LiveClientState.STOPPED) {
+            handleError("Live voice: Connection lost — tap to retry", code = null)
+            return
+        }
+
+        reconnectAttempts++
+        transitionTo(LiveClientState.RECONNECTING)
+        LiveVoiceDiagnostics.updateStage("RECONNECTING")
+        Log.i(TAG, "MIRA_LIVE_VOICE: Auto-reconnect started ($reconnectAttempts/$MAX_AUTO_RECONNECTS) reason=$reason, hasResumptionHandle=${!latestResumptionHandle.isNullOrBlank()}")
+
+        try {
+            webSocket?.close(1000, "Reconnecting")
+        } catch (_: Exception) {}
+        webSocket = null
+
+        clientScope.launch {
+            delay(1000L)
+            if (isRunning.get() && _state.value != LiveClientState.STOPPED) {
+                connectWsInternal()
+            }
+        }
+    }
+
+    private fun handleError(message: String, code: Int?) {
+        if (_state.value == LiveClientState.STOPPED) return
+        transitionTo(LiveClientState.ERROR)
+        LiveVoiceDiagnostics.updateLastError(message)
+        LiveVoiceDiagnostics.updateStage("ERROR")
+        if (code != null) LiveVoiceDiagnostics.updateWsCode(code)
+
+        cancelWatchdogs()
+        try {
+            webSocket?.close(1000, "Error termination")
+        } catch (_: Exception) {}
+        webSocket = null
+        isRunning.set(false)
+
+        listener.onError(message)
     }
 
     /**
-     * Builds and sends setup message:
-     * - V1: minimal
-     * - V2: full with automaticActivityDetection
-     * - V3: V1 + speechConfig.languageCode
+     * Streams a 16kHz PCM16 mono chunk (20–40ms) to the server.
+     * Frames are streamed continuously including silence.
      */
-    private fun sendSetupMessage(ws: WebSocket, model: String, attemptVariant: Int) {
+    fun sendAudioChunk(pcmBytes: ByteArray) {
+        val currentState = _state.value
+        if (currentState != LiveClientState.LISTENING &&
+            currentState != LiveClientState.CONFIGURING &&
+            currentState != LiveClientState.PROCESSING &&
+            currentState != LiveClientState.SPEAKING
+        ) return
+
+        val ws = webSocket ?: return
         try {
+            val b64 = Base64.encodeToString(pcmBytes, Base64.NO_WRAP)
+            val json = JSONObject().apply {
+                put("realtimeInput", JSONObject().apply {
+                    put("audio", JSONObject().apply {
+                        put("data", b64)
+                        put("mimeType", "audio/pcm;rate=16000")
+                    })
+                })
+            }
+            val sent = ws.send(json.toString())
+            if (sent) {
+                val sentCount = audioChunksSentCount.incrementAndGet()
+                audioBytesSentCount.addAndGet(pcmBytes.size.toLong())
+                lastUserAudioSentMs = System.currentTimeMillis()
+                LiveVoiceDiagnostics.updateChunks(sentCount, incomingAudioChunksCount.get())
+                if (sentCount == 1L) {
+                    Log.i(TAG, "MIRA_LIVE_VOICE: First mic chunk sent (${pcmBytes.size} bytes)")
+                } else if (sentCount % 100L == 0L) {
+                    Log.d(TAG, "MIRA_LIVE_VOICE: Sent $sentCount mic chunks (${audioBytesSentCount.get()} bytes)")
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "MIRA_LIVE_VOICE: Failed to send audio chunk: ${e.message}")
+        }
+    }
+
+    /**
+     * Sends {"realtimeInput": {"audioStreamEnd": true}} when the user stops speaking or mic stream pauses.
+     * CRITICAL per spec §0.5: Without this, the server never produces a turn reply.
+     */
+    fun sendAudioStreamEnd() {
+        val ws = webSocket ?: return
+        try {
+            val json = JSONObject().apply {
+                put("realtimeInput", JSONObject().apply {
+                    put("audioStreamEnd", true)
+                })
+            }
+            val sent = ws.send(json.toString())
+            Log.i(TAG, "MIRA_LIVE_VOICE: Sent audioStreamEnd: true (sent=$sent)")
+        } catch (e: Exception) {
+            Log.w(TAG, "MIRA_LIVE_VOICE: Failed to send audioStreamEnd: ${e.message}")
+        }
+    }
+
+    /**
+     * Sends a text turn to the session (used for live search result injection or connector commands).
+     */
+    fun sendTextMessage(text: String) {
+        val ws = webSocket ?: return
+        try {
+            val json = JSONObject().apply {
+                put("clientContent", JSONObject().apply {
+                    put("turns", JSONArray().apply {
+                        put(JSONObject().apply {
+                            put("role", "user")
+                            put("parts", JSONArray().apply {
+                                put(JSONObject().apply {
+                                    put("text", text)
+                                })
+                            })
+                        })
+                    })
+                    put("turnComplete", true)
+                })
+            }
+            val sent = ws.send(json.toString())
+            Log.i(TAG, "MIRA_LIVE_VOICE: Injected text message turn (sent=$sent)")
+        } catch (e: Exception) {
+            Log.e(TAG, "MIRA_LIVE_VOICE: Failed to send text message: ${e.message}")
+        }
+    }
+
+    fun endSession() {
+        endSessionInternal(sendAudioEnd = true)
+    }
+
+    private fun endSessionInternal(sendAudioEnd: Boolean) {
+        Log.i(TAG, "MIRA_LIVE_VOICE: Ending Live session cleanly")
+        isRunning.set(false)
+        cancelWatchdogs()
+
+        if (sendAudioEnd) {
+            try {
+                sendAudioStreamEnd()
+            } catch (_: Exception) {}
+        }
+
+        try {
+            webSocket?.close(1000, "User ended session")
+        } catch (_: Exception) {}
+        webSocket = null
+
+        transitionTo(LiveClientState.STOPPED)
+        LiveVoiceDiagnostics.updateStage("STOPPED")
+        listener.onClosed("User ended session (1000)")
+    }
+
+    private fun cancelWatchdogs() {
+        connectTimeoutJob?.cancel()
+        connectTimeoutJob = null
+        setupTimeoutJob?.cancel()
+        setupTimeoutJob = null
+        stallWatchdogJob?.cancel()
+        stallWatchdogJob = null
+    }
+
+    private fun transitionTo(newState: LiveClientState) {
+        _state.value = newState
+        try {
+            listener.onStateChanged(newState)
+        } catch (e: Exception) {
+            Log.e(TAG, "MIRA_LIVE_VOICE: Error in listener.onStateChanged: ${e.message}")
+        }
+    }
+
+    companion object {
+        const val TAG = "MIRA_LIVE_VOICE"
+        const val LIVE_WS_URL = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
+        const val LIVE_MODEL_DEFAULT = "models/gemini-3.8-live"
+
+        const val WS_CONNECT_TIMEOUT_MS = 20_000L
+        const val SETUP_COMPLETE_TIMEOUT_MS = 45_000L
+        const val FIRST_AUDIO_STALL_TIMEOUT_MS = 30_000L
+        const val SESSION_GIVE_UP_MS = 480_000L // 8 minutes
+        const val STALL_CHECK_INTERVAL_MS = 3_000L
+        const val MAX_AUTO_RECONNECTS = 2
+
+        /**
+         * Maps language display name to BCP-47 tag.
+         */
+        fun mapLanguageToBcp47(language: String): String {
+            val lower = language.lowercase(Locale.ROOT)
+            return when {
+                lower.contains("bangla") || lower.contains("bengali") || lower.contains("bn") -> "bn-BD"
+                lower.contains("hindi") || lower.contains("hi") -> "hi-IN"
+                lower.contains("japanese") || lower.contains("ja") -> "ja-JP"
+                lower.contains("spanish") || lower.contains("es") -> "es-ES"
+                lower.contains("french") || lower.contains("fr") -> "fr-FR"
+                lower.contains("german") || lower.contains("de") -> "de-DE"
+                lower.contains("arabic") || lower.contains("ar") -> "ar-SA"
+                lower.contains("english") || lower.contains("en") -> "en-US"
+                else -> "bn-BD"
+            }
+        }
+
+        /**
+         * Builds the exact single proven setup payload specified in ROUND 12 spec §2.
+         * Top-level responseModalities MUST NOT exist (server rejects 1008); it lives inside generationConfig.
+         */
+        fun buildSetupPayload(
+            model: String = LIVE_MODEL_DEFAULT,
+            voiceName: String = "Aoede",
+            languageCode: String = "bn-BD",
+            systemInstructionText: String = "",
+            resumptionHandle: String? = null
+        ): JSONObject {
             val setupObj = JSONObject()
-            val setupDetails = JSONObject()
-            setupDetails.put("model", model)
+            setupObj.put("model", model)
 
             val genConfig = JSONObject()
             val modalities = JSONArray()
@@ -521,435 +647,45 @@ class GeminiLiveClient(
 
             val speechConfig = JSONObject()
             val voiceConfig = JSONObject()
-            val prebuiltVoiceConfig = JSONObject()
-            prebuiltVoiceConfig.put("voiceName", voiceName.ifBlank { "Aoede" })
-            voiceConfig.put("prebuiltVoiceConfig", prebuiltVoiceConfig)
+            val prebuilt = JSONObject()
+            prebuilt.put("voiceName", voiceName)
+            voiceConfig.put("prebuiltVoiceConfig", prebuilt)
             speechConfig.put("voiceConfig", voiceConfig)
-
-            if (attemptVariant == 3) {
-                val bcp47 = mapLanguageToBcp47(language)
-                speechConfig.put("languageCode", bcp47)
-            }
-
+            speechConfig.put("languageCode", languageCode)
             genConfig.put("speechConfig", speechConfig)
-            setupDetails.put("generationConfig", genConfig)
+            setupObj.put("generationConfig", genConfig)
 
-            // V1, V2, V3 all have outputAudioTranscription: {} and inputAudioTranscription: {}
-            setupDetails.put("outputAudioTranscription", JSONObject())
-            setupDetails.put("inputAudioTranscription", JSONObject())
+            val realtimeInputConfig = JSONObject()
+            val autoDetection = JSONObject()
+            autoDetection.put("endOfSpeechSensitivity", "END_SENSITIVITY_HIGH")
+            autoDetection.put("silenceDurationMs", 800)
+            realtimeInputConfig.put("automaticActivityDetection", autoDetection)
+            setupObj.put("realtimeInputConfig", realtimeInputConfig)
 
-            // sessionResumption and contextWindowCompression in all setup variants (V1, V2, V3)
-            val resumptionObj = JSONObject()
-            if (!storedResumptionHandle.isNullOrBlank()) {
-                resumptionObj.put("handle", storedResumptionHandle)
-                Log.i(TAG, "Replaying sessionResumption handle in setup (length=${storedResumptionHandle.length})")
+            setupObj.put("inputAudioTranscription", JSONObject())
+            setupObj.put("outputAudioTranscription", JSONObject())
+
+            val sessionResumption = JSONObject()
+            if (!resumptionHandle.isNullOrBlank()) {
+                sessionResumption.put("handle", resumptionHandle)
             }
-            setupDetails.put("sessionResumption", resumptionObj)
-            setupDetails.put("contextWindowCompression", JSONObject().put("slidingWindow", JSONObject()))
+            setupObj.put("sessionResumption", sessionResumption)
 
-            // System instructions
-            if (systemPrompt.isNotBlank()) {
-                val sysInstruction = JSONObject()
-                val parts = JSONArray()
-                val partText = JSONObject()
-                partText.put("text", systemPrompt)
-                parts.put(partText)
-                sysInstruction.put("parts", parts)
-                setupDetails.put("systemInstruction", sysInstruction)
-            }
+            val compression = JSONObject()
+            compression.put("slidingWindow", JSONObject())
+            setupObj.put("contextWindowCompression", compression)
 
-            if (attemptVariant == 2) {
-                // V2: realtimeInputConfig with automaticActivityDetection
-                val realtimeInputConfig = JSONObject()
-                val autoDetect = JSONObject()
-                autoDetect.put("endOfSpeechSensitivity", "END_SENSITIVITY_HIGH")
-                autoDetect.put("silenceDurationMs", 800)
-                realtimeInputConfig.put("automaticActivityDetection", autoDetect)
-                setupDetails.put("realtimeInputConfig", realtimeInputConfig)
-            }
-
-            setupObj.put("setup", setupDetails)
-            val jsonString = setupObj.toString()
-            val bytes = jsonString.toByteArray(Charsets.UTF_8)
-            setupBytesSent = bytes.size
-            setupSentTimestampMs = System.currentTimeMillis()
-            setupSendSuccess = ws.send(jsonString)
-            setupWasSent = true
-
-            val variantLabel = when (attemptVariant) {
-                1 -> "V1 Maya-minimal"
-                2 -> "V2 Maya-full"
-                3 -> "V3 +language"
-                else -> "V$attemptVariant"
-            }
-            Log.i(TAG, "Sent setup variant $attemptVariant ($variantLabel) ($setupBytesSent bytes, sent=$setupSendSuccess)")
-            logSetupJsonChunks(jsonString)
-        } catch (e: Exception) {
-            Log.e(TAG, "Error building setup payload: ${e.message}", e)
-            listener.onError("Failed to build setup message: ${e.message}")
-        }
-    }
-
-    private fun logSetupJsonChunks(json: String) {
-        val maxLogLen = 2000
-        var i = 0
-        while (i < json.length) {
-            val end = minOf(i + maxLogLen, json.length)
-            Log.i(TAG, "Setup JSON [${i}..${end}]: ${json.substring(i, end)}")
-            i = end
-        }
-    }
-
-    private fun handleIncomingMessage(jsonText: String, ws: WebSocket) {
-        lastServerMessageMs = System.currentTimeMillis()
-        isStalledEpisode.set(false)
-        try {
-            val json = JSONObject(jsonText)
-
-            // 0. Server error frame — record reason and cancel socket to trigger retry
-            if (json.has("error")) {
-                val errorObj = json.getJSONObject("error")
-                val errCode = errorObj.optInt("code", -1)
-                val errMsg = errorObj.optString("message", "Unknown server error")
-                serverErrorFrame = if (errCode != -1) "code $errCode: $errMsg" else errMsg
-                Log.e(TAG, "Server sent error frame in mode '$activeModeLabel' variant V$currentVariant: $serverErrorFrame")
-                synchronized(lock) {
-                    if (ws === webSocket) {
-                        lastFailureReason = "server error ($serverErrorFrame)"
-                        cancelSetupTimeout()
-                        stopStallWatchdog()
-                        isSetupComplete.set(false)
-                        ws.cancel()
-                    }
-                }
-                return
-            }
-
-            // Capture session resumption handle update if sent by server
-            val resumptionUpdate = json.optJSONObject("sessionResumptionUpdate")
-                ?: json.optJSONObject("serverContent")?.optJSONObject("sessionResumptionUpdate")
-            if (resumptionUpdate != null && resumptionUpdate.has("newHandle")) {
-                val newHandle = resumptionUpdate.optString("newHandle", "")
-                if (newHandle.isNotBlank()) {
-                    Log.i(TAG, "Captured sessionResumptionUpdate.newHandle (length=${newHandle.length})")
-                    listener.onSessionResumptionUpdate(newHandle)
-                }
-            }
-
-            // 1. Setup complete check
-            if (json.has("setupComplete")) {
-                val elapsedMs = if (setupSentTimestampMs > 0L) System.currentTimeMillis() - setupSentTimestampMs else -1L
-                Log.i(TAG, ">>> SETUP COMPLETE received from Gemini Live in mode '$activeModeLabel' variant V$currentVariant in ${elapsedMs}ms! Starting audio transmission.")
-                if (currentVariant > 1 && v1FailureReason != null) {
-                    Log.i(TAG, ">>> Setup succeeded on variant V$currentVariant (V1 failed: $v1FailureReason)")
-                }
-                cancelSetupTimeout()
-                isSetupComplete.set(true)
-                lastServerMessageMs = System.currentTimeMillis()
-                lastFailureReason = null
-                startStallWatchdog(ws)
-
-                // Flush pre-setup held queue in order before new live audio
-                flushHeldQueueLocked()
-
-                listener.onSetupComplete()
-                return
-            }
-
-            // 2. Server content check
-            if (json.has("serverContent")) {
-                val serverContent = json.getJSONObject("serverContent")
-
-                // Barge-in / interruption
-                if (serverContent.optBoolean("interrupted", false)) {
-                    Log.i(TAG, ">>> BARGE-IN INTERRUPTION received from Gemini Live")
-                    listener.onInterrupted()
-                }
-
-                // Input audio transcription (user transcript)
-                if (serverContent.has("inputTranscription")) {
-                    val inputTx = serverContent.getJSONObject("inputTranscription")
-                    val text = inputTx.optString("text")
-                    if (text.isNotBlank()) {
-                        listener.onTranscript(text, true)
-                    }
-                }
-
-                // Output audio transcription (model transcript)
-                if (serverContent.has("outputTranscription")) {
-                    val outputTx = serverContent.getJSONObject("outputTranscription")
-                    val text = outputTx.optString("text")
-                    if (text.isNotBlank()) {
-                        listener.onTranscript(text, false)
-                    }
-                }
-
-                // Model turn (audio / text parts)
-                if (serverContent.has("modelTurn")) {
-                    val modelTurn = serverContent.getJSONObject("modelTurn")
-                    val parts = modelTurn.optJSONArray("parts")
-                    if (parts != null) {
-                        for (i in 0 until parts.length()) {
-                            val part = parts.getJSONObject(i)
-
-                            // Check for audio data (PCM)
-                            if (part.has("inlineData")) {
-                                val inlineData = part.getJSONObject("inlineData")
-                                val base64Data = inlineData.optString("data")
-                                if (base64Data.isNotBlank()) {
-                                    val audioBytes = Base64.decode(base64Data, Base64.DEFAULT)
-                                    val chunkNum = incomingAudioChunksCount.incrementAndGet()
-                                    val totalBytes = incomingAudioBytesCount.addAndGet(audioBytes.size.toLong())
-                                    if (chunkNum == 1L || chunkNum % 50L == 0L) {
-                                        Log.d(TAG, "Received incoming model audio chunk #$chunkNum (${audioBytes.size} bytes, total: $totalBytes bytes)")
-                                    }
-                                    listener.onAudioData(audioBytes)
-                                }
-                            }
-
-                            // Check for text transcript
-                            if (part.has("text")) {
-                                val text = part.optString("text")
-                                if (text.isNotBlank()) {
-                                    listener.onTranscript(text, false)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Turn complete
-                if (serverContent.optBoolean("turnComplete", false)) {
-                    Log.d(TAG, "Turn complete received")
-                    listener.onTurnComplete()
-                }
-            }
-
-            // 3. GoAway warning
-            if (json.has("goAway")) {
-                val goAway = json.optJSONObject("goAway")
-                val timeLeft = goAway?.optString("timeLeft") ?: ""
-                Log.w(TAG, "Server sent GoAway frame: session time limit approaching (timeLeft: $timeLeft)")
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error parsing incoming Gemini Live WS message: ${e.message}", e)
-        }
-    }
-
-    private fun buildDiagnosticString(reason: String): String {
-        val wsCodeStr = if (httpUpgradeCode != null) "WS $httpUpgradeCode" else "WS -"
-        val setupStr = if (setupWasSent) "setup $setupBytesSent bytes sent=$setupSendSuccess" else "setup not sent"
-        val errorFrameStr = if (serverErrorFrame != null) "server error $serverErrorFrame" else "no server error frame"
-        val closeStr = "close ${wsCloseOrFailure ?: "-"}"
-        val statsStr = "uplink=${audioChunksSentCount.get()} chunks (${audioBytesSentCount.get()}B), downlink=${incomingAudioChunksCount.get()} chunks (${incomingAudioBytesCount.get()}B)"
-        val toolDiagnostic = if (v1FailureReason != null) {
-            "; V1 failed ($v1FailureReason); retried with subsequent variants"
-        } else ""
-        val modesTriedSummary = modesTriedRecord.joinToString(" ") { (label, variants) ->
-            "$label(${variants.joinToString(",")})"
-        }
-        val modesDiagnostic = if (modesTriedSummary.isNotBlank()) "modes tried: $modesTriedSummary" else "no modes tried"
-        return "Live setup failed: $reason ($wsCodeStr, $setupStr, $errorFrameStr, $closeStr, $statsStr$toolDiagnostic) — $modesDiagnostic"
-    }
-
-    /**
-     * Sends microphone PCM16 audio (16kHz mono) to Gemini Live.
-     * If setup is not complete yet, queues up to HELD_QUEUE_CAP_BYTES.
-     */
-    fun sendAudioChunk(pcmBytes: ByteArray) {
-        if (!isSetupComplete.get() || webSocket == null) {
-            if (isRunning.get()) {
-                synchronized(heldQueueLock) {
-                    val now = System.currentTimeMillis()
-                    val chunkCopy = pcmBytes.copyOf()
-                    heldQueue.addLast(HeldFrame.Audio(chunkCopy, now))
-                    heldQueueBytes += chunkCopy.size
-                    while (heldQueueBytes > HELD_QUEUE_CAP_BYTES && heldQueue.isNotEmpty()) {
-                        val dropped = heldQueue.removeFirst()
-                        heldQueueBytes -= dropped.byteSize
-                    }
-                }
-            }
-            return
-        }
-        sendAudioChunkDirect(pcmBytes)
-    }
-
-    private fun sendAudioChunkDirect(pcmBytes: ByteArray) {
-        try {
-            val base64Data = Base64.encodeToString(pcmBytes, Base64.NO_WRAP)
-            val root = JSONObject()
-            val realtimeInput = JSONObject()
-            val audioObj = JSONObject()
-            audioObj.put("data", base64Data)
-            audioObj.put("mimeType", "audio/pcm;rate=16000")
-            realtimeInput.put("audio", audioObj)
-            root.put("realtimeInput", realtimeInput)
-
-            val sent = webSocket?.send(root.toString()) ?: false
-            if (sent) {
-                lastUserAudioSentMs = System.currentTimeMillis()
-                val chunkNum = audioChunksSentCount.incrementAndGet()
-                val totalBytes = audioBytesSentCount.addAndGet(pcmBytes.size.toLong())
-                if (chunkNum == 1L || chunkNum % 50L == 0L) {
-                    Log.d(TAG, "Sent audio chunk #$chunkNum (${pcmBytes.size} bytes, total: $totalBytes bytes)")
-                }
-            } else {
-                Log.w(TAG, "Failed to send audio chunk (${pcmBytes.size} bytes) via WebSocket")
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error sending audio chunk: ${e.message}")
-        }
-    }
-
-    /**
-     * Sends a client text turn to Gemini Live using clientContent.
-     * If setup is not complete yet, queues up to HELD_QUEUE_CAP_BYTES.
-     */
-    fun sendTextMessage(text: String) {
-        if (!isSetupComplete.get() || webSocket == null) {
-            if (isRunning.get()) {
-                synchronized(heldQueueLock) {
-                    val now = System.currentTimeMillis()
-                    val bytes = text.toByteArray(Charsets.UTF_8)
-                    heldQueue.addLast(HeldFrame.Text(text, now))
-                    heldQueueBytes += bytes.size
-                    while (heldQueueBytes > HELD_QUEUE_CAP_BYTES && heldQueue.isNotEmpty()) {
-                        val dropped = heldQueue.removeFirst()
-                        heldQueueBytes -= dropped.byteSize
-                    }
-                }
-            }
-            return
-        }
-        sendTextMessageDirect(text)
-    }
-
-    private fun sendTextMessageDirect(text: String) {
-        try {
-            val root = JSONObject()
-            val clientContent = JSONObject()
-            val turns = JSONArray()
-            val turn = JSONObject()
-            turn.put("role", "user")
-            val parts = JSONArray()
+            val sysInst = JSONObject()
+            val partsArr = JSONArray()
             val part = JSONObject()
-            part.put("text", text)
-            parts.put(part)
-            turn.put("parts", parts)
-            turns.put(turn)
-            clientContent.put("turns", turns)
-            clientContent.put("turnComplete", true)
-            root.put("clientContent", clientContent)
+            part.put("text", systemInstructionText)
+            partsArr.put(part)
+            sysInst.put("parts", partsArr)
+            setupObj.put("systemInstruction", sysInst)
 
-            webSocket?.send(root.toString())
-        } catch (e: Exception) {
-            Log.e(TAG, "Error sending text message: ${e.message}")
-        }
-    }
-
-    private fun flushHeldQueueLocked() {
-        val now = System.currentTimeMillis()
-        val minTimestamp = now - 20_000L
-        val framesToFlush = mutableListOf<HeldFrame>()
-        var flushedBytes = 0
-        var discardedCount = 0
-
-        synchronized(heldQueueLock) {
-            while (heldQueue.isNotEmpty()) {
-                val frame = heldQueue.removeFirst()
-                if (frame.timestampMs >= minTimestamp) {
-                    framesToFlush.add(frame)
-                    flushedBytes += frame.byteSize
-                } else {
-                    discardedCount++
-                }
-            }
-            heldQueueBytes = 0
-        }
-
-        if (framesToFlush.isNotEmpty() || discardedCount > 0) {
-            Log.i(TAG, "Flushing pre-setup held-queue: depth=${framesToFlush.size} frames, bytes=$flushedBytes, discarded=$discardedCount")
-            for (frame in framesToFlush) {
-                when (frame) {
-                    is HeldFrame.Audio -> sendAudioChunkDirect(frame.bytes)
-                    is HeldFrame.Text -> sendTextMessageDirect(frame.text)
-                }
-            }
-        }
-    }
-
-    private fun clearHeldQueueLocked() {
-        synchronized(heldQueueLock) {
-            heldQueue.clear()
-            heldQueueBytes = 0
-        }
-    }
-
-    fun isSessionReady(): Boolean = isRunning.get() && isSetupComplete.get() && webSocket != null
-
-    fun endSession() {
-        synchronized(lock) {
-            endSessionLocked()
-        }
-    }
-
-    private fun endSessionLocked() {
-        val sentChunks = audioChunksSentCount.get()
-        val sentBytes = audioBytesSentCount.get()
-        val recvChunks = incomingAudioChunksCount.get()
-        val recvBytes = incomingAudioBytesCount.get()
-        Log.i(TAG, "Live session ended by user stop (sent $sentChunks chunks / $sentBytes bytes, received $recvChunks chunks / $recvBytes bytes)")
-        isRunning.set(false)
-        isSetupComplete.set(false)
-        clearHeldQueueLocked()
-        cancelSetupTimeout()
-        stopStallWatchdog()
-        lastFailureReason = null
-        try {
-            webSocket?.close(1000, "User ended session")
-            webSocket = null
-        } catch (e: Exception) {
-            Log.e(TAG, "Error closing WebSocket: ${e.message}")
-        }
-    }
-
-    companion object {
-        private const val TAG = "MiraLive"
-        const val HELD_QUEUE_CAP_BYTES = 128_000
-
-        fun mapLanguageToBcp47(lang: String): String {
-            val l = lang.lowercase()
-            return when {
-                l.contains("bangla") || l.contains("bengali") || l.contains("bn") -> "bn-BD"
-                l.contains("english") || l.contains("en") -> "en-US"
-                l.contains("hindi") || l.contains("hi") -> "hi-IN"
-                l.contains("urdu") || l.contains("ur") -> "ur-PK"
-                l.contains("arabic") || l.contains("ar") -> "ar-SA"
-                l.contains("spanish") || l.contains("es") -> "es-ES"
-                l.contains("french") || l.contains("fr") -> "fr-FR"
-                l.contains("german") || l.contains("de") -> "de-DE"
-                l.contains("japanese") || l.contains("ja") -> "ja-JP"
-                l.contains("korean") || l.contains("ko") -> "ko-KR"
-                l.contains("portuguese") || l.contains("pt") -> "pt-BR"
-                l.contains("russian") || l.contains("ru") -> "ru-RU"
-                l.contains("turkish") || l.contains("tr") -> "tr-TR"
-                l.contains("indonesian") || l.contains("id") -> "id-ID"
-                l.contains("vietnamese") || l.contains("vi") -> "vi-VN"
-                l.contains("thai") || l.contains("th") -> "th-TH"
-                l.contains("tamil") || l.contains("ta") -> "ta-IN"
-                l.contains("telugu") || l.contains("te") -> "te-IN"
-                l.contains("marathi") || l.contains("mr") -> "mr-IN"
-                l.contains("gujarati") || l.contains("gu") -> "gu-IN"
-                l.contains("punjabi") || l.contains("pa") -> "pa-IN"
-                l.contains("malayalam") || l.contains("ml") -> "ml-IN"
-                l.contains("kannada") || l.contains("kn") -> "kn-IN"
-                l.contains("italian") || l.contains("it") -> "it-IT"
-                l.contains("dutch") || l.contains("nl") -> "nl-NL"
-                l.contains("polish") || l.contains("pl") -> "pl-PL"
-                l.contains("swedish") || l.contains("sv") -> "sv-SE"
-                else -> "en-US"
-            }
+            val root = JSONObject()
+            root.put("setup", setupObj)
+            return root
         }
     }
 }

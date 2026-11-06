@@ -10,6 +10,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
+import io.github.ryoaonetsuki.mira.ui.components.MiraSwitch
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -149,10 +150,9 @@ fun MemoriesScreen(
                                 color = palette.textSecondary
                             )
                         }
-                        Switch(
+                        MiraSwitch(
                             checked = autoMemory,
-                            onCheckedChange = { scope.launch { userPrefs.setAutoMemory(it) } },
-                            colors = SwitchDefaults.colors(checkedThumbColor = palette.primary)
+                            onCheckedChange = { scope.launch { userPrefs.setAutoMemory(it) } }
                         )
                     }
                 }

@@ -33,23 +33,7 @@ class GeminiTtsClient(private val context: Context) {
     private val anonKey: String
         get() = try { io.github.ryoaonetsuki.mira.BuildConfig.SUPABASE_ANON_KEY } catch (_: Throwable) { "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp2bmZ3bHF4ZGJvbW10b3p1Z3p0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM5MTM2NDksImV4cCI6MjEwOTQ4OTY0OX0.uqyERmXVe2GEP2oaU0xc7I9V1ry-43adAEg6jddYBpk" }
 
-    fun cleanMarkdownForSpeech(raw: String): String {
-        return raw
-            // Replace markdown links [text](url) with text
-            .replace(Regex("""\[([^\]]+)\]\([^)]+\)"""), "$1")
-            // Remove bold / italics asterisks and underscores
-            .replace(Regex("""\*{1,3}([^*]+)\*{1,3}"""), "$1")
-            .replace(Regex("""_{1,3}([^_]+)_{1,3}"""), "$1")
-            // Remove code blocks and inline code
-            .replace(Regex("""`{1,3}([^`]+)`{1,3}"""), "$1")
-            // Remove heading marks (#)
-            .replace(Regex("""(?m)^#+\s*"""), "")
-            // Remove remaining stray *, #, `
-            .replace("*", "")
-            .replace("#", "")
-            .replace("`", "")
-            .trim()
-    }
+    fun cleanMarkdownForSpeech(raw: String): String = Companion.cleanMarkdownForSpeech(raw)
 
     suspend fun speakText(
         apiKey: String,
@@ -218,5 +202,23 @@ class GeminiTtsClient(private val context: Context) {
 
     companion object {
         private const val TAG = "GeminiTtsClient"
+
+        fun cleanMarkdownForSpeech(raw: String): String {
+            return raw
+                // Replace markdown links [text](url) with text
+                .replace(Regex("""\[([^\]]+)\]\([^)]+\)"""), "$1")
+                // Remove bold / italics asterisks and underscores
+                .replace(Regex("""\*{1,3}([^*]+)\*{1,3}"""), "$1")
+                .replace(Regex("""_{1,3}([^_]+)_{1,3}"""), "$1")
+                // Remove code blocks and inline code
+                .replace(Regex("""`{1,3}([^`]+)`{1,3}"""), "$1")
+                // Remove heading marks (#)
+                .replace(Regex("""(?m)^#+\s*"""), "")
+                // Remove remaining stray *, #, `
+                .replace("*", "")
+                .replace("#", "")
+                .replace("`", "")
+                .trim()
+        }
     }
 }

@@ -1,5 +1,6 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
+import io.github.ryoaonetsuki.mira.ui.icons.Lucide
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -10,8 +11,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -48,12 +47,12 @@ fun VibesScreen(
     val favoriteSong by userPrefs.favoriteSongFlow.collectAsState(initial = "Starboy")
 
     val vibes = listOf(
-        VibePreset("Chill Lo-Fi", "Mellow beats to unwind and relax", Icons.Rounded.Headphones, "lofi hip hop radio beats to relax chill to", Color(0xFF22D3EE)),
-        VibePreset("Focus & Study", "Deep binaural and ambient flow state", Icons.Rounded.CenterFocusStrong, "deep focus ambient study music", Color(0xFF8B5CF6)),
-        VibePreset("Gym & Energy", "High BPM workout drive and pump", Icons.Rounded.FitnessCenter, "workout motivation high energy electronic gym music", Color(0xFFEF4444)),
-        VibePreset("Late Night Soul", "Moody RnB, jazz and atmospheric vibes", Icons.Rounded.NightsStay, "late night r&b and moody soul playlist", Color(0xFFA855F7)),
-        VibePreset("Acoustic Warmth", "Unplugged guitar, coffeehouse tunes", Icons.Rounded.Coffee, "acoustic guitar warm coffeehouse playlist", Color(0xFFF59E0B)),
-        VibePreset("Party & Dance", "Chart toppers, remixes and dancefloor hits", Icons.Rounded.Celebration, "party dance club hits playlist", Color(0xFF10B981))
+        VibePreset("Chill Lo-Fi", "Mellow beats to unwind and relax", Lucide.headphones, "lofi hip hop radio beats to relax chill to", Color(0xFF22D3EE)),
+        VibePreset("Focus & Study", "Deep binaural and ambient flow state", Lucide.focus, "deep focus ambient study music", Color(0xFF8B5CF6)),
+        VibePreset("Gym & Energy", "High BPM workout drive and pump", Lucide.dumbbell, "workout motivation high energy electronic gym music", Color(0xFFEF4444)),
+        VibePreset("Late Night Soul", "Moody RnB, jazz and atmospheric vibes", Lucide.moonStar, "late night r&b and moody soul playlist", Color(0xFFA855F7)),
+        VibePreset("Acoustic Warmth", "Unplugged guitar, coffeehouse tunes", Lucide.coffee, "acoustic guitar warm coffeehouse playlist", Color(0xFFF59E0B)),
+        VibePreset("Party & Dance", "Chart toppers, remixes and dancefloor hits", Lucide.partyPopper, "party dance club hits playlist", Color(0xFF10B981))
     )
 
     fun launchMusic(query: String) {
@@ -90,7 +89,7 @@ fun VibesScreen(
                 title = { Text("Vibes & Music", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(Lucide.arrowLeft, contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -121,7 +120,7 @@ fun VibesScreen(
                             .background(palette.primary.copy(alpha = 0.2f))
                     ) {
                         Icon(
-                            imageVector = Icons.Rounded.PlayArrow,
+                            imageVector = Lucide.play,
                             contentDescription = null,
                             tint = palette.primary,
                             modifier = Modifier.size(24.dp)
@@ -197,7 +196,7 @@ fun VibesScreen(
                                 )
                             }
                             Icon(
-                                imageVector = Icons.Rounded.ChevronRight,
+                                imageVector = Lucide.chevronRight,
                                 contentDescription = null,
                                 tint = palette.textSecondary
                             )

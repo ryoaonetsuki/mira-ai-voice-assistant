@@ -1,5 +1,6 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
+import io.github.ryoaonetsuki.mira.ui.icons.Lucide
 import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -7,8 +8,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -61,12 +60,12 @@ fun DocumentsScreen(
                 title = { Text("Documents", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(Lucide.arrowLeft, contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 actions = {
                     IconButton(onClick = { showCreateDialog = true }) {
-                        Icon(Icons.Rounded.Add, contentDescription = "New Document", tint = palette.primary)
+                        Icon(Lucide.plus, contentDescription = "New Document", tint = palette.primary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -117,7 +116,7 @@ fun DocumentsScreen(
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Icon(
-                                    imageVector = Icons.Rounded.Description,
+                                    imageVector = Lucide.fileText,
                                     contentDescription = null,
                                     tint = palette.primary,
                                     modifier = Modifier.size(28.dp)
@@ -155,7 +154,7 @@ fun DocumentsScreen(
                                         e.printStackTrace()
                                     }
                                 }) {
-                                    Icon(Icons.Rounded.Share, contentDescription = "Share", tint = palette.textSecondary)
+                                    Icon(Lucide.share2, contentDescription = "Share", tint = palette.textSecondary)
                                 }
 
                                 // Delete
@@ -163,7 +162,7 @@ fun DocumentsScreen(
                                     doc.file.delete()
                                     refreshDocs()
                                 }) {
-                                    Icon(Icons.Rounded.DeleteOutline, contentDescription = "Delete", tint = palette.textSecondary)
+                                    Icon(Lucide.trash, contentDescription = "Delete", tint = palette.textSecondary)
                                 }
                             }
                         }

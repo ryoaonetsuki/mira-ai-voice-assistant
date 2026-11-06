@@ -95,6 +95,9 @@ fun SetupScreen(
     var deepgramKeyInput by remember { mutableStateOf(securePrefs.getDeepgramApiKey() ?: "") }
     var isDeepgramKeyVisible by remember { mutableStateOf(false) }
 
+    var liveCapabilityMessage by remember { mutableStateOf<String?>(null) }
+    var isLiveCapable by remember { mutableStateOf(false) }
+
     LaunchedEffect(Unit) {
         isServerKeyAvailable = resolver.isServerKeyConfigured()
     }
@@ -103,108 +106,107 @@ fun SetupScreen(
         val normalizedGemini = normalizeApiKey(apiKeyInput)
         val trimmedGroq = groqKeyInput.trim()
 
-        var hasMissing = false
         if (normalizedGemini.isBlank()) {
             keyStatus = SetupKeyStatus.INVALID
             keyValidationMessage = "Gemini API key is required — please enter your Gemini key"
-            hasMissing = true
-        }
-        if (trimmedGroq.isBlank()) {
-            groqKeyStatus = SetupKeyStatus.INVALID
-            groqValidationMessage = "Groq API key is required — please enter your Groq key"
-            hasMissing = true
-        } else if (!SecurePreferences.isPlausibleGroqKey(trimmedGroq)) {
-            groqKeyStatus = SetupKeyStatus.INVALID
-            groqValidationMessage = "Groq key must start with 'gsk_' and be at least 20 characters"
-            hasMissing = true
+            return@testAndSaveKeys
         }
 
-        if (!hasMissing) {
-            if (!securePrefs.isSecureStorageAvailable()) {
-                keyStatus = SetupKeyStatus.INVALID
-                keyValidationMessage = "Secure storage unavailable on this device — keys were not saved"
-            } else {
-                isCheckingKey = true
+        if (!securePrefs.isSecureStorageAvailable()) {
+            keyStatus = SetupKeyStatus.INVALID
+            keyValidationMessage = "Secure storage unavailable on this device — keys were not saved"
+            return@testAndSaveKeys
+        }
+
+        isCheckingKey = true
+        keyStatus = SetupKeyStatus.CHECKING
+        keyValidationMessage = "Validating key with Google..."
+        liveCapabilityMessage = null
+
+        scope.launch {
+            // Fast 12s cap validation per constraints
+            val geminiOutcome = withTimeoutOrNull(12_000L) {
+                restClient.validateApiKeyAndChat(normalizedGemini)
+            } ?: KeyValidationOutcome.TransientServerBusy()
+
+            // In-app Live-capability check (spec §3.7)
+            val liveOutcome = restClient.checkLiveCapability(normalizedGemini)
+            isLiveCapable = liveOutcome.isCapable
+            liveCapabilityMessage = liveOutcome.message
+            io.github.ryoaonetsuki.mira.voice.LiveVoiceDiagnostics.updateLiveCapability(liveOutcome.message)
+
+            // Validate Groq ONLY if user provided a key (Groq is optional, spec §3.3)
+            if (trimmedGroq.isNotBlank()) {
                 isCheckingGroqKey = true
-                keyStatus = SetupKeyStatus.CHECKING
                 groqKeyStatus = SetupKeyStatus.CHECKING
-                keyValidationMessage = "Validating key with Google..."
-                groqValidationMessage = "Validating key with Groq..."
-
-                scope.launch {
-                    val geminiOutcome = withTimeoutOrNull(25_000L) {
-                        restClient.validateApiKeyAndChat(normalizedGemini)
-                    } ?: KeyValidationOutcome.TransientServerBusy()
-
-                    val groqOutcome = serverVoiceClient.validateGroqKey(trimmedGroq)
-
-                    isCheckingKey = false
-                    isCheckingGroqKey = false
-
-                    val isGeminiOk = geminiOutcome is KeyValidationOutcome.Valid || geminiOutcome is KeyValidationOutcome.TransientServerBusy
-                    val isGroqOk = groqOutcome is KeyValidationOutcome.Valid || groqOutcome is KeyValidationOutcome.TransientServerBusy
-
-                    when (geminiOutcome) {
-                        is KeyValidationOutcome.Valid -> {
-                            keyStatus = SetupKeyStatus.VALID
-                            keyValidationMessage = "Valid Gemini API Key! Stored encrypted on device."
-                        }
-                        is KeyValidationOutcome.TransientServerBusy -> {
-                            keyStatus = SetupKeyStatus.TRANSIENT
-                            keyValidationMessage = "Google's servers are busy right now — key saved, try again in a bit"
-                            Toast.makeText(
-                                context,
-                                "Google's servers are busy right now — key saved, try again in a bit",
-                                Toast.LENGTH_LONG
-                            ).show()
-                        }
-                        is KeyValidationOutcome.InvalidKey -> {
-                            keyStatus = SetupKeyStatus.INVALID
-                            keyValidationMessage = geminiOutcome.userFacingMessage
-                        }
+                groqValidationMessage = "Validating Groq key..."
+                val groqOutcome = serverVoiceClient.validateGroqKey(trimmedGroq)
+                isCheckingGroqKey = false
+                when (groqOutcome) {
+                    is KeyValidationOutcome.Valid -> {
+                        groqKeyStatus = SetupKeyStatus.VALID
+                        groqValidationMessage = "Valid Groq Key! Stored encrypted on device."
+                        securePrefs.setGroqApiKey(trimmedGroq)
                     }
-
-                    when (groqOutcome) {
-                        is KeyValidationOutcome.Valid -> {
-                            groqKeyStatus = SetupKeyStatus.VALID
-                            groqValidationMessage = "Valid Groq Key! Stored encrypted on device."
-                        }
-                        is KeyValidationOutcome.TransientServerBusy -> {
-                            groqKeyStatus = SetupKeyStatus.TRANSIENT
-                            groqValidationMessage = groqOutcome.message
-                        }
-                        is KeyValidationOutcome.InvalidKey -> {
-                            groqKeyStatus = SetupKeyStatus.INVALID
-                            groqValidationMessage = groqOutcome.userFacingMessage
-                        }
+                    is KeyValidationOutcome.TransientServerBusy -> {
+                        groqKeyStatus = SetupKeyStatus.TRANSIENT
+                        groqValidationMessage = groqOutcome.message
+                        securePrefs.setGroqApiKey(trimmedGroq)
                     }
-
-                    if (isGeminiOk && isGroqOk) {
-                        val savedGemini = securePrefs.setGeminiApiKey(normalizedGemini)
-                        val savedGroq = securePrefs.setGroqApiKey(trimmedGroq)
-
-                        val trimmedDeepgram = deepgramKeyInput.trim()
-                        if (trimmedDeepgram.isNotBlank()) {
-                            securePrefs.setDeepgramApiKey(trimmedDeepgram)
-                        }
-
-                        if (savedGemini && savedGroq) {
-                            currentStep = 2
-                        } else {
-                            keyStatus = SetupKeyStatus.INVALID
-                            keyValidationMessage = "Secure storage unavailable on this device — keys could not be saved"
-                        }
-                    } else {
-                        val failedKeys = mutableListOf<String>()
-                        if (!isGeminiOk) failedKeys.add("Gemini")
-                        if (!isGroqOk) failedKeys.add("Groq")
-                        Toast.makeText(
-                            context,
-                            "Cannot proceed: invalid ${failedKeys.joinToString(" and ")} key",
-                            Toast.LENGTH_SHORT
-                        ).show()
+                    is KeyValidationOutcome.InvalidKey -> {
+                        groqKeyStatus = SetupKeyStatus.INVALID
+                        groqValidationMessage = groqOutcome.userFacingMessage
                     }
                 }
+            } else {
+                securePrefs.clearGroqApiKey()
+            }
+
+            isCheckingKey = false
+
+            val isGeminiOk = geminiOutcome is KeyValidationOutcome.Valid || geminiOutcome is KeyValidationOutcome.TransientServerBusy
+
+            when (geminiOutcome) {
+                is KeyValidationOutcome.Valid -> {
+                    keyStatus = SetupKeyStatus.VALID
+                    keyValidationMessage = "Valid Gemini API Key! Stored encrypted on device."
+                }
+                is KeyValidationOutcome.TransientServerBusy -> {
+                    keyStatus = SetupKeyStatus.TRANSIENT
+                    keyValidationMessage = "Google's servers are busy right now — key saved, try again in a bit"
+                    Toast.makeText(
+                        context,
+                        "Google's servers are busy right now — key saved, try again in a bit",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+                is KeyValidationOutcome.InvalidKey -> {
+                    keyStatus = SetupKeyStatus.INVALID
+                    keyValidationMessage = geminiOutcome.userFacingMessage
+                }
+            }
+
+            // Save Deepgram key if provided
+            val trimmedDeepgram = deepgramKeyInput.trim()
+            if (trimmedDeepgram.isNotBlank()) {
+                securePrefs.setDeepgramApiKey(trimmedDeepgram)
+            }
+
+            // Only Gemini key is REQUIRED to proceed (spec §3.3, §3.6)
+            if (isGeminiOk) {
+                val savedGemini = securePrefs.setGeminiApiKey(normalizedGemini)
+                if (savedGemini) {
+                    currentStep = 2
+                } else {
+                    keyStatus = SetupKeyStatus.INVALID
+                    keyValidationMessage = "Secure storage unavailable on this device — keys could not be saved"
+                }
+            } else {
+                Toast.makeText(
+                    context,
+                    "Cannot proceed: invalid Gemini key",
+                    Toast.LENGTH_SHORT
+                ).show()
             }
         }
     }
@@ -441,6 +443,16 @@ fun SetupScreen(
                     )
                 }
 
+                if (liveCapabilityMessage != null) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = liveCapabilityMessage!!,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = if (isLiveCapable) Color(0xFF10B981) else Color(0xFFF59E0B)
+                    )
+                }
+
                 Spacer(modifier = Modifier.height(14.dp))
 
                 // Gemini Action Buttons
@@ -471,7 +483,7 @@ fun SetupScreen(
 
                 Spacer(modifier = Modifier.height(20.dp))
 
-                // FIELD 2: Groq API Key (REQUIRED)
+                // FIELD 2: Groq API Key (OPTIONAL for alternative voice)
                 OutlinedTextField(
                     value = groqKeyInput,
                     onValueChange = {
@@ -479,8 +491,8 @@ fun SetupScreen(
                         groqValidationMessage = null
                         groqKeyStatus = SetupKeyStatus.IDLE
                     },
-                    label = { Text("Groq API Key (Required for voice)") },
-                    placeholder = { Text("Paste your Groq key — starts with gsk_") },
+                    label = { Text("Groq API Key (Optional — alternative voice)") },
+                    placeholder = { Text("Paste your Groq key (optional) — starts with gsk_") },
                     visualTransformation = if (isGroqKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
                     trailingIcon = {
                         IconButton(onClick = { isGroqKeyVisible = !isGroqKeyVisible }) {
@@ -507,7 +519,7 @@ fun SetupScreen(
                 // Hint line under the Groq field
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = "Free, no card — your own quota. Voice uses your Groq key for speech-to-text and fast replies; your Gemini key does the talking.",
+                    text = "Optional for alternative voice. Native Gemini Live only requires a Gemini API key.",
                     fontSize = 12.sp,
                     color = palette.textSecondary,
                     lineHeight = 17.sp
@@ -631,34 +643,14 @@ fun SetupScreen(
                     ) {
                         Text("Mira server key available — Continue with server key →", color = palette.primary)
                     }
-                } else if (securePrefs.getGeminiApiKey() != null && securePrefs.getGroqApiKey() != null) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    TextButton(
-                        onClick = {
-                            val hasGemini = securePrefs.getGeminiApiKey() != null
-                            val hasGroq = securePrefs.getGroqApiKey() != null
-                            if (hasGemini && hasGroq) {
-                                currentStep = 2
-                            } else if (!hasGroq) {
-                                groqKeyStatus = SetupKeyStatus.INVALID
-                                groqValidationMessage = "Groq API key is required — please enter your Groq key"
-                            } else {
-                                keyStatus = SetupKeyStatus.INVALID
-                                keyValidationMessage = "Gemini API key is required — please enter your Gemini key"
-                            }
-                        },
-                        modifier = Modifier.align(Alignment.CenterHorizontally)
-                    ) {
-                        Text("I already have saved keys →", color = palette.textSecondary)
-                    }
                 } else if (securePrefs.getGeminiApiKey() != null) {
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "Gemini key is saved. Groq key is also required for voice — enter and test it above to continue.",
-                        fontSize = 12.sp,
-                        color = palette.textSecondary,
+                    TextButton(
+                        onClick = { currentStep = 2 },
                         modifier = Modifier.align(Alignment.CenterHorizontally)
-                    )
+                    ) {
+                        Text("Gemini key already saved — Continue to Step 2 →", color = palette.primary)
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))

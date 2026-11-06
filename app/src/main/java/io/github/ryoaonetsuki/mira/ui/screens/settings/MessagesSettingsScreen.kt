@@ -11,6 +11,7 @@ import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.*
+import io.github.ryoaonetsuki.mira.ui.components.MiraSwitch
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -76,10 +77,9 @@ fun MessagesSettingsScreen(
                             Text("Auto-Reply to WhatsApp", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
                             Text("Mira answers incoming chats when you are busy or screen is off", fontSize = 12.sp, color = palette.textSecondary)
                         }
-                        Switch(
+                        MiraSwitch(
                             checked = isAutoReplyEnabled,
-                            onCheckedChange = { scope.launch { userPrefs.setWhatsappAutoReply(it) } },
-                            colors = SwitchDefaults.colors(checkedThumbColor = palette.primary)
+                            onCheckedChange = { scope.launch { userPrefs.setWhatsappAutoReply(it) } }
                         )
                     }
                 }

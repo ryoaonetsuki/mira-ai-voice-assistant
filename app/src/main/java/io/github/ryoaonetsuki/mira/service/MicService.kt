@@ -43,6 +43,7 @@ class MicService : Service() {
     private var audioPlayer: AudioPlayer? = null
     private var liveClient: GeminiLiveClient? = null
     private val handledTranscripts = Collections.synchronizedSet(mutableSetOf<String>())
+    private var connectorJob: Job? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -99,7 +100,16 @@ class MicService : Service() {
     }
 
     private fun startLiveVoiceSession() {
-        handledTranscripts.clear()
+        if (_liveState.value != LiveState.IDLE && _liveState.value != LiveState.ERROR) {
+            Log.w(TAG, "startLiveVoiceSession called while state is ${_liveState.value} — ignoring duplicate start")
+            return
+        }
+        stopLiveVoiceSessionInternal()
+        _userTranscript.value = ""
+        _modelTranscript.value = ""
+        _errorMessage.value = null
+        _liveState.value = LiveState.CONNECTING
+
         serviceScope.launch {
             val userPrefs = UserPreferences(applicationContext)
             val resolver = io.github.ryoaonetsuki.mira.backend.ApiKeyResolver(applicationContext)
@@ -248,6 +258,8 @@ class MicService : Service() {
                         if (_liveState.value == LiveState.SPEAKING) {
                             _liveState.value = LiveState.LISTENING
                         }
+                        // Clear handled transcripts so same command can run again in next turn
+                        handledTranscripts.clear()
                     }
 
                     override fun onTranscript(text: String, isUser: Boolean) {
@@ -256,39 +268,50 @@ class MicService : Service() {
 
                             val cleanText = text.trim()
                             val words = cleanText.split("\\s+".toRegex()).filter { it.isNotBlank() }
-                            if (words.size >= 2 && !handledTranscripts.contains(cleanText.lowercase(Locale.ROOT))) {
-                                if (ConnectorIntentHandler.isConnectorCommand(cleanText)) {
-                                    handledTranscripts.add(cleanText.lowercase(Locale.ROOT))
-                                    serviceScope.launch(Dispatchers.IO) {
-                                        try {
-                                            val commandResult = ConnectorIntentHandler.handleCommand(applicationContext, cleanText)
-                                            if (commandResult != null) {
-                                                // 1. Deliver to Gemini Live session so Mira speaks it
-                                                liveClient?.sendTextMessage("User command result: $commandResult. Please inform the user clearly and concisely in voice.")
 
-                                                // 2. Deliver via modelTranscript flow
-                                                _modelTranscript.value = commandResult
+                            // Debounce connector command execution so intermediate speech updates
+                            // do not prematurely fire duplicate commands or cut off multi-word utterances.
+                            connectorJob?.cancel()
+                            if (words.size >= 2) {
+                                val lowerCmd = cleanText.lowercase(Locale.ROOT)
+                                if (!handledTranscripts.contains(lowerCmd) && ConnectorIntentHandler.isConnectorCommand(cleanText)) {
+                                    connectorJob = serviceScope.launch(Dispatchers.IO) {
+                                        delay(600)
+                                        if (handledTranscripts.add(lowerCmd)) {
+                                            try {
+                                                val commandResult = ConnectorIntentHandler.handleCommand(applicationContext, cleanText)
+                                                if (commandResult != null) {
+                                                    // 1. Deliver to Gemini Live session so Mira speaks it
+                                                    liveClient?.sendTextMessage("User command result: $commandResult. Please inform the user clearly and concisely in voice.")
 
-                                                // 3. Deliver via persistent notification
-                                                val db = MiraDatabase.getInstance(applicationContext)
-                                                db.notificationDao().insertNotification(
-                                                    NotificationEntity(
-                                                        title = "Connector Action",
-                                                        message = commandResult,
-                                                        type = "connector"
+                                                    // 2. Deliver via modelTranscript flow
+                                                    _modelTranscript.value = commandResult
+
+                                                    // 3. Deliver via persistent notification
+                                                    val db = MiraDatabase.getInstance(applicationContext)
+                                                    db.notificationDao().insertNotification(
+                                                        NotificationEntity(
+                                                            title = "Connector Action",
+                                                            message = commandResult,
+                                                            type = "connector"
+                                                        )
                                                     )
-                                                )
+                                                }
+                                            } catch (e: Exception) {
+                                                Log.e(TAG, "Error running voice connector command: ${e.message}", e)
                                             }
-                                        } catch (e: Exception) {
-                                            Log.e(TAG, "Error running voice connector command: ${e.message}", e)
                                         }
                                     }
                                 }
                             }
 
+                            // Emergency macro voice stop: requires matching whole words "stop", "thamo", or "থামো"
+                            // so that words like "stopwatch", "nonstop", or "laptop" do not falsely cancel running macros.
                             if (MacroRunner.isRunning.value) {
                                 val lower = text.trim().lowercase(Locale.ROOT)
-                                if (lower.contains("stop") || lower.contains("থামো") || lower.contains("thamo")) {
+                                val stopTokens = lower.split("\\s+".toRegex())
+                                val stopWords = setOf("stop", "thamo", "থামো")
+                                if (stopTokens.any { it in stopWords }) {
                                     MacroRunner.cancel("Stopped by voice: $text")
                                     serviceScope.launch(Dispatchers.IO) {
                                         try {
@@ -314,6 +337,7 @@ class MicService : Service() {
                     override fun onError(message: String) {
                         _liveState.value = LiveState.ERROR
                         _errorMessage.value = message
+                        connectorJob?.cancel()
                         audioPlayer?.stopImmediatelyAndFlush()
                         audioRecorder?.stopRecording()
                     }
@@ -322,6 +346,7 @@ class MicService : Service() {
                         if (_liveState.value != LiveState.ERROR) {
                             _liveState.value = LiveState.IDLE
                         }
+                        connectorJob?.cancel()
                         audioPlayer?.stopImmediatelyAndFlush()
                         audioRecorder?.stopRecording()
                     }
@@ -333,13 +358,20 @@ class MicService : Service() {
     }
 
     private fun stopLiveVoiceSession() {
+        stopLiveVoiceSessionInternal()
+        _liveState.value = LiveState.IDLE
+    }
+
+    private fun stopLiveVoiceSessionInternal() {
+        connectorJob?.cancel()
+        connectorJob = null
+        handledTranscripts.clear()
         audioRecorder?.stopRecording()
         audioRecorder = null
         audioPlayer?.release()
         audioPlayer = null
         liveClient?.endSession()
         liveClient = null
-        _liveState.value = LiveState.IDLE
         _micAmplitude.value = 0f
     }
 

@@ -99,7 +99,7 @@ fun SecretSettingsScreen(
                                 color = if (isFriendly) palette.primary else palette.textPrimary
                             )
                             Text(
-                                text = "Warm, encouraging, smart friend & everyday assistant.",
+                                text = "Warm, human-like companion, thoughtful friend & everyday confidante. Speaks with genuine emotion and warmth.",
                                 fontSize = 12.sp,
                                 color = palette.textSecondary
                             )
@@ -142,7 +142,7 @@ fun SecretSettingsScreen(
                                 color = if (isRomantic) Color(0xFFF43F5E) else palette.textPrimary
                             )
                             Text(
-                                text = "Affectionate, deeply attentive and caring romantic tone. (Age-gated 18+; strictly PG companion tone).",
+                                text = "Affectionate, deeply attentive and caring romantic companion. Speaks like a loving partner with heartfelt warmth. (Age-gated 18+; strictly PG companion tone).",
                                 fontSize = 12.sp,
                                 color = palette.textSecondary
                             )
@@ -177,7 +177,7 @@ fun SecretSettingsScreen(
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "These instructions are injected directly into Gemini Live and chat system instructions.",
+                        text = "These instructions are injected into Mira's instructions.",
                         fontSize = 12.sp,
                         color = palette.textSecondary
                     )

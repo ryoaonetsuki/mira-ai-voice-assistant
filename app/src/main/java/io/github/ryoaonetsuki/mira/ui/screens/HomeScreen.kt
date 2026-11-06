@@ -1,6 +1,11 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -25,6 +30,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
 import io.github.ryoaonetsuki.mira.data.preferences.UserPreferences
 import io.github.ryoaonetsuki.mira.network.WeatherClient
@@ -65,6 +71,14 @@ fun HomeScreen(
         weatherData = weatherClient.getCurrentWeather()
     }
 
+    // Voice error notification: short toast only, never permanent Home text
+    LaunchedEffect(liveState) {
+        if (liveState == LiveState.ERROR) {
+            val msg = errorMessage ?: "Voice session error"
+            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+        }
+    }
+
     // Time-of-day greeting
     val greeting = remember {
         val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
@@ -93,7 +107,8 @@ fun HomeScreen(
         QuickChip("Vent", Icons.Rounded.Favorite, "I need someone to listen and talk things through.")
     )
 
-    val isLive = liveState != LiveState.IDLE && liveState != LiveState.ERROR
+    val isLive = liveState == LiveState.CONNECTING || liveState == LiveState.LISTENING || liveState == LiveState.SPEAKING
+    val orbDisplayState = if (liveState == LiveState.ERROR) LiveState.IDLE else liveState
 
     Column(
         modifier = Modifier
@@ -129,69 +144,23 @@ fun HomeScreen(
                 }
             }
 
-            // Greeting & Status line
+            // Big greeting text (at least 30sp bold, clean with no error text)
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 8.dp)
+                    .padding(vertical = 12.dp)
             ) {
                 Text(
                     text = "$greeting, $userName",
-                    fontSize = 26.sp,
+                    fontSize = 32.sp,
                     fontWeight = FontWeight.Bold,
                     color = palette.textPrimary
                 )
-                Spacer(modifier = Modifier.height(4.dp))
-
-                // Error message display — shows real error and Retry button whenever in ERROR state
-                if (liveState == LiveState.ERROR) {
-                    Text(
-                        text = errorMessage ?: "Voice session error — check key",
-                        fontSize = 13.sp,
-                        color = Color(0xFFEF4444)
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    // Retry button
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = "Retry",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = palette.primary,
-                            modifier = Modifier.clickable {
-                                MicService.stopService(context)
-                                MicService.startService(context)
-                            }
-                        )
-                    }
-                } else {
-                    Text(
-                        text = when (liveState) {
-                            LiveState.IDLE -> "Mira is ready to assist you"
-                            LiveState.CONNECTING -> "Connecting to live voice..."
-                            LiveState.LISTENING -> "Listening to your voice..."
-                            LiveState.SPEAKING -> "Speaking..."
-                            LiveState.ERROR -> "Voice session error — check key"
-                        },
-                        fontSize = 13.sp,
-                        color = palette.textSecondary
-                    )
-                    if (userTranscript.isNotBlank() && liveState != LiveState.IDLE && liveState != LiveState.ERROR) {
-                        Spacer(modifier = Modifier.height(3.dp))
-                        Text(
-                            text = "Heard: $userTranscript",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = palette.primary,
-                            maxLines = 2
-                        )
-                    }
-                }
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
-            // Info Cards Row (Weather, Today, Mood)
+            // Info Cards Row (Weather, Today, Mood) — STAY
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -274,49 +243,43 @@ fun HomeScreen(
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            // The Animated Orb
+            // The Big Animated Orb (prominent, never sits in red error state)
             AnimatedOrb(
-                state = liveState,
-                amplitude = micAmp,
+                state = orbDisplayState,
+                amplitude = if (liveState == LiveState.ERROR) 0f else micAmp,
                 orbStyle = orbStyle
             )
 
-            Spacer(modifier = Modifier.height(22.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
-            // "Ask Mira anything…" input bar (above chips)
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(palette.surface)
-                    .clickable { onNavigate(Screen.Chat.route) }
-                    .padding(horizontal = 14.dp, vertical = 12.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.ChatBubbleOutline,
-                    contentDescription = null,
-                    tint = palette.textSecondary,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(10.dp))
+            // SMALL status line UNDER the orb only ('Connecting...' / 'Listening...' / 'Speaking...' / idle 'Tap the mic to talk')
+            val statusText = when (liveState) {
+                LiveState.CONNECTING -> "Connecting..."
+                LiveState.LISTENING -> "Listening..."
+                LiveState.SPEAKING -> "Speaking..."
+                LiveState.IDLE, LiveState.ERROR -> "Tap the mic to talk"
+            }
+            Text(
+                text = statusText,
+                fontSize = 13.sp,
+                color = palette.textSecondary
+            )
+
+            // 'Heard: ...' line under the status when transcript exists
+            if (userTranscript.isNotBlank() && (liveState == LiveState.LISTENING || liveState == LiveState.SPEAKING || liveState == LiveState.CONNECTING)) {
+                Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Ask Mira anything…",
-                    fontSize = 14.sp,
-                    color = palette.textSecondary,
-                    modifier = Modifier.weight(1f)
-                )
-                Icon(
-                    imageVector = Icons.Rounded.Send,
-                    contentDescription = "Send",
-                    tint = palette.primary,
-                    modifier = Modifier.size(18.dp)
+                    text = "Heard: $userTranscript",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = palette.primary,
+                    maxLines = 2
                 )
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(28.dp))
 
-            // Quick action chips — directly above the bottom nav bar
+            // Quick action chips row — directly above the bottom nav bar
             LazyRow(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -349,10 +312,10 @@ fun HomeScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(12.dp))
         }
 
-        // Bottom Navigation Bar
+        // Bottom Navigation Bar (Home | Scan | BIG centre Voice | Extensions | Chat)
         HomeBottomNavBar(
             isLive = isLive,
             context = context,
@@ -365,10 +328,24 @@ fun HomeScreen(
 @Composable
 private fun HomeBottomNavBar(
     isLive: Boolean,
-    context: android.content.Context,
+    context: Context,
     palette: io.github.ryoaonetsuki.mira.ui.theme.MiraPalette,
     onNavigate: (String) -> Unit
 ) {
+    val micPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            MicService.startService(context)
+        } else {
+            Toast.makeText(
+                context,
+                "Microphone permission is needed for voice",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+
     val micButtonGradient = if (isLive) {
         Brush.verticalGradient(listOf(Color(0xFFEF4444), Color(0xFFDC2626)))
     } else {
@@ -419,7 +396,15 @@ private fun HomeBottomNavBar(
                         if (isLive) {
                             MicService.stopService(context)
                         } else {
-                            MicService.startService(context)
+                            val hasMicPermission = ContextCompat.checkSelfPermission(
+                                context,
+                                Manifest.permission.RECORD_AUDIO
+                            ) == PackageManager.PERMISSION_GRANTED
+                            if (hasMicPermission) {
+                                MicService.startService(context)
+                            } else {
+                                micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                            }
                         }
                     }
             ) {

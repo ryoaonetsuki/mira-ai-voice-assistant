@@ -1,6 +1,10 @@
 package io.github.ryoaonetsuki.mira.ui.screens.settings
 
-import io.github.ryoaonetsuki.mira.ui.icons.Lucide
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.rounded.RecordVoiceOver
+import androidx.compose.material.icons.rounded.VerifiedUser
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -123,7 +127,7 @@ fun VoiceEngineScreen(
                 title = { Text("Voice Engine", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Lucide.arrowLeft, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -192,7 +196,7 @@ fun VoiceEngineScreen(
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
-                            imageVector = Lucide.speech,
+                            imageVector = Icons.Rounded.RecordVoiceOver,
                             contentDescription = null,
                             tint = palette.primary,
                             modifier = Modifier.size(26.dp)
@@ -211,7 +215,7 @@ fun VoiceEngineScreen(
                                 color = palette.textSecondary
                             )
                         }
-                        Icon(Lucide.chevronRight, contentDescription = null, tint = palette.textSecondary)
+                        Icon(Icons.Rounded.ChevronRight, contentDescription = null, tint = palette.textSecondary)
                     }
                 }
             }
@@ -280,13 +284,13 @@ fun VoiceEngineScreen(
                     onClick = { showGuardianDialog = true }
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Lucide.userCheck, contentDescription = null, tint = palette.primary, modifier = Modifier.size(26.dp))
+                        Icon(Icons.Rounded.VerifiedUser, contentDescription = null, tint = palette.primary, modifier = Modifier.size(26.dp))
                         Spacer(modifier = Modifier.width(14.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Voice Guardian", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
                             Text("Enrolled Voiceprint: $voiceprintLabel", fontSize = 12.sp, color = palette.textSecondary)
                         }
-                        Icon(Lucide.chevronRight, contentDescription = null, tint = palette.textSecondary)
+                        Icon(Icons.Rounded.ChevronRight, contentDescription = null, tint = palette.textSecondary)
                     }
                 }
             }

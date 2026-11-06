@@ -265,34 +265,5 @@ fun AnimatedOrb(
                 )
             }
         }
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        // State Text Indicator
-        val stateLabel = when (state) {
-            LiveState.IDLE -> "HOW CAN I HELP YOU?"
-            LiveState.CONNECTING -> "CONNECTING…"
-            LiveState.LISTENING -> "LISTENING…"
-            LiveState.SPEAKING -> "SPEAKING…"
-            LiveState.ERROR -> "CONNECTION FAILED"
-        }
-
-        Text(
-            text = "AI ASSISTANT",
-            fontSize = 11.sp,
-            fontWeight = FontWeight.SemiBold,
-            letterSpacing = 2.sp,
-            color = palette.textSecondary
-        )
-
-        Spacer(modifier = Modifier.height(4.dp))
-
-        Text(
-            text = stateLabel,
-            fontSize = 17.sp,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 1.sp,
-            color = if (state == LiveState.ERROR) Color(0xFFEF4444) else palette.primary
-        )
     }
 }

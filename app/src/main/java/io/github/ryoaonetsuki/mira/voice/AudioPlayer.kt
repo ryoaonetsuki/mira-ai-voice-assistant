@@ -20,6 +20,7 @@ class AudioPlayer(
     }
 
     private fun initAudioTrack() {
+        if (isPlaying.get() && audioTrack != null) return
         try {
             val sampleRate = SAMPLE_RATE
             val channelConfig = AudioFormat.CHANNEL_OUT_MONO
@@ -30,7 +31,7 @@ class AudioPlayer(
             audioTrack = AudioTrack.Builder()
                 .setAudioAttributes(
                     AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
+                        .setUsage(AudioAttributes.USAGE_ASSISTANT)
                         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                         .build()
                 )
@@ -47,7 +48,7 @@ class AudioPlayer(
 
             audioTrack?.play()
             startPlaybackLoop()
-            Log.d(TAG, "AudioTrack initialized at 24kHz mono")
+            Log.d(TAG, "AudioTrack initialized at 24kHz mono (USAGE_ASSISTANT)")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to init AudioTrack: ${e.message}", e)
         }
@@ -106,14 +107,28 @@ class AudioPlayer(
         try {
             playbackThread?.interrupt()
             playbackThread = null
-            audioTrack?.stop()
-            audioTrack?.release()
-            audioTrack = null
-            onSpeakingStateChanged(false)
-            Log.d(TAG, "AudioPlayer released")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error releasing AudioTrack: ${e.message}")
+        } catch (_: Exception) {}
+
+        val track = audioTrack
+        audioTrack = null
+
+        if (track != null) {
+            try {
+                if (track.playState == AudioTrack.PLAYSTATE_PLAYING) {
+                    track.stop()
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Error stopping AudioTrack: ${e.message}")
+            } finally {
+                try {
+                    track.release()
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error releasing AudioTrack: ${e.message}")
+                }
+            }
         }
+        onSpeakingStateChanged(false)
+        Log.d(TAG, "AudioPlayer released")
     }
 
     companion object {

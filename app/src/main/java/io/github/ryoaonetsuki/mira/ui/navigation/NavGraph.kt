@@ -224,14 +224,6 @@ fun MiraNavGraph(
                 VibesScreen(onBack = { navController.popBackStack() })
             }
 
-            composable(Screen.Markets.route) {
-                MarketsScreen(onBack = { navController.popBackStack() })
-            }
-
-            composable(Screen.Marketing.route) {
-                MarketingScreen(onBack = { navController.popBackStack() })
-            }
-
             composable(Screen.Extensions.route) {
                 ExtensionsScreen(onBack = { navController.popBackStack() })
             }

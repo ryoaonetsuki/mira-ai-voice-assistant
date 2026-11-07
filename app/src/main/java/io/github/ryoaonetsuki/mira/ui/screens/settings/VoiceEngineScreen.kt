@@ -88,14 +88,13 @@ fun VoiceEngineScreen(
         runCapabilityCheck()
     }
 
+    val voiceRouting by userPrefs.voiceRoutingFlow.collectAsState(initial = "RELAY")
     var groqKeyInput by remember { mutableStateOf(securePrefs.getGroqApiKey() ?: "") }
     var isGroqKeyVisible by remember { mutableStateOf(false) }
-    var deepgramKeyInput by remember { mutableStateOf(securePrefs.getDeepgramApiKey() ?: "") }
-    var isDeepgramKeyVisible by remember { mutableStateOf(false) }
-    var isDeepgramSaved by remember { mutableStateOf(securePrefs.getDeepgramApiKey() != null) }
     var showVoicePickerDialog by remember { mutableStateOf(false) }
-    var showGuardianDialog by remember { mutableStateOf(false) }
-    var voiceprintLabel by remember { mutableStateOf(securePrefs.getEnrolledFaceName() ?: "Owner (Alex)") }
+    var selectedDiagRoute by remember { mutableStateOf(io.github.ryoaonetsuki.mira.voice.DiagnosticRoute.RELAY) }
+    var selectedDiagVariant by remember { mutableStateOf(io.github.ryoaonetsuki.mira.voice.DiagnosticSetupVariant.STANDARD) }
+    var showFrameLogs by remember { mutableStateOf(false) }
 
     val ttsClient = remember { GeminiTtsClient(context) }
     var activeAudioPlayer by remember { mutableStateOf<AudioPlayer?>(null) }
@@ -378,14 +377,54 @@ fun VoiceEngineScreen(
                 }
             }
 
-            // Server Voice (Groq) — Gated behind alternativeVoiceEnabled
+            // Voice Connection Routing (Round 15)
             item {
                 MiraCard(modifier = Modifier.fillMaxWidth()) {
-                    Text("Server Voice (Groq)", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
+                    Text(
+                        text = "Voice Connection Routing",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = palette.textPrimary
+                    )
                     Spacer(modifier = Modifier.height(4.dp))
-                    if (!alternativeVoiceEnabled) {
-                        Text("Alternative voice is currently disabled. Mira uses Native Gemini Live directly as the primary voice engine without needing a Groq key.", fontSize = 12.sp, color = palette.textSecondary)
-                    } else {
+                    Text(
+                        text = "Primary routing uses Cloudflare Live Relay to bypass ISP/carrier blocks. Direct Google API is selectable as fallback.",
+                        fontSize = 12.sp,
+                        color = palette.textSecondary
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        FilterChip(
+                            selected = voiceRouting == "RELAY",
+                            onClick = { scope.launch { userPrefs.setVoiceRouting("RELAY") } },
+                            label = { Text("Cloudflare Relay (Primary)", fontSize = 11.sp) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = palette.primary,
+                                selectedLabelColor = Color.Black
+                            )
+                        )
+                        FilterChip(
+                            selected = voiceRouting == "DIRECT",
+                            onClick = { scope.launch { userPrefs.setVoiceRouting("DIRECT") } },
+                            label = { Text("Direct Google API", fontSize = 11.sp) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = palette.primary,
+                                selectedLabelColor = Color.Black
+                            )
+                        )
+                    }
+                }
+            }
+
+            // Server Voice (Groq) — Rendered ONLY when alternative voice is enabled
+            if (alternativeVoiceEnabled) {
+                item {
+                    MiraCard(modifier = Modifier.fillMaxWidth()) {
+                        Text("Server Voice (Groq)", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
+                        Spacer(modifier = Modifier.height(4.dp))
                         Text("Free at console.groq.com — no card, your own quota", fontSize = 12.sp, color = palette.textSecondary)
                         Spacer(modifier = Modifier.height(8.dp))
                         OutlinedTextField(
@@ -417,113 +456,6 @@ fun VoiceEngineScreen(
                 }
             }
 
-            // Deepgram Voice (Optional)
-            item {
-                MiraCard(modifier = Modifier.fillMaxWidth()) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(
-                            text = "Deepgram Voice (Optional)",
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = palette.textPrimary,
-                            modifier = Modifier.weight(1f)
-                        )
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(if (isDeepgramSaved) Color(0xFF10B981).copy(alpha = 0.2f) else palette.surfaceVariant)
-                                .padding(horizontal = 8.dp, vertical = 4.dp)
-                        ) {
-                            Text(
-                                text = if (isDeepgramSaved) "Saved" else "Not Saved",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (isDeepgramSaved) Color(0xFF10B981) else palette.textSecondary
-                            )
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Free $200 credit at console.deepgram.com — optional key addable for speech-to-text",
-                        fontSize = 12.sp,
-                        color = palette.textSecondary
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = deepgramKeyInput,
-                        onValueChange = { deepgramKeyInput = it },
-                        placeholder = { Text("Deepgram API Key (optional)") },
-                        visualTransformation = if (isDeepgramKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                        trailingIcon = {
-                            IconButton(onClick = { isDeepgramKeyVisible = !isDeepgramKeyVisible }) {
-                                Icon(
-                                    imageVector = if (isDeepgramKeyVisible) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
-                                    contentDescription = "Toggle Visibility",
-                                    tint = palette.textSecondary
-                                )
-                            }
-                        },
-                        singleLine = true,
-                        shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        OutlinedButton(
-                            onClick = {
-                                securePrefs.clearDeepgramApiKey()
-                                deepgramKeyInput = ""
-                                isDeepgramSaved = false
-                            },
-                            shape = RoundedCornerShape(12.dp),
-                            enabled = isDeepgramSaved || deepgramKeyInput.isNotBlank(),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("Clear")
-                        }
-                        MiraButton(
-                            text = "Save Key",
-                            onClick = {
-                                val trimmed = deepgramKeyInput.trim()
-                                if (trimmed.isNotBlank()) {
-                                    securePrefs.setDeepgramApiKey(trimmed)
-                                    isDeepgramSaved = true
-                                } else {
-                                    securePrefs.clearDeepgramApiKey()
-                                    isDeepgramSaved = false
-                                }
-                            },
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                }
-            }
-
-            // Voice Guardian Enrolment
-            item {
-                MiraCard(
-                    modifier = Modifier.fillMaxWidth(),
-                    onClick = { showGuardianDialog = true }
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Rounded.VerifiedUser, contentDescription = null, tint = palette.primary, modifier = Modifier.size(26.dp))
-                        Spacer(modifier = Modifier.width(14.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Voice Guardian", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
-                            Text("Enrolled Voiceprint: $voiceprintLabel", fontSize = 12.sp, color = palette.textSecondary)
-                        }
-                        Icon(Icons.Rounded.ChevronRight, contentDescription = null, tint = palette.textSecondary)
-                    }
-                }
-            }
-
             // Voice Diagnostics Card (spec §2, §3.4)
             item {
                 MiraCard(modifier = Modifier.fillMaxWidth()) {
@@ -544,13 +476,53 @@ fun VoiceEngineScreen(
                     HorizontalDivider(color = palette.surfaceVariant.copy(alpha = 0.5f))
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    Text("Isolated Live Diagnostic Test", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
+                    Text("Live Diagnostic Test & Variants (Round 15)", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
                     Text(
-                        text = "Tests WebSocket handshake, setup, text turn, and native 24kHz audio reply directly against Google without using the mic or relay.",
+                        text = "Runs an isolated 8-stage mic-free diagnostic test. Compare direct vs Cloudflare relay paths and test setup payload variants with full frame logging (45s timeout).",
                         fontSize = 11.sp,
                         color = palette.textSecondary,
                         lineHeight = 15.sp
                     )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Text("Network Route:", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = palette.primary)
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                    ) {
+                        for (r in io.github.ryoaonetsuki.mira.voice.DiagnosticRoute.values()) {
+                            FilterChip(
+                                selected = selectedDiagRoute == r,
+                                onClick = { selectedDiagRoute = r },
+                                label = { Text(r.label, fontSize = 11.sp) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = palette.primary,
+                                    selectedLabelColor = Color.Black
+                                )
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Text("Setup Variant:", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = palette.primary)
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                    ) {
+                        for (v in io.github.ryoaonetsuki.mira.voice.DiagnosticSetupVariant.values()) {
+                            FilterChip(
+                                selected = selectedDiagVariant == v,
+                                onClick = { selectedDiagVariant = v },
+                                label = { Text(v.label, fontSize = 10.sp) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = palette.primary,
+                                    selectedLabelColor = Color.Black
+                                )
+                            )
+                        }
+                    }
 
                     Spacer(modifier = Modifier.height(10.dp))
 
@@ -561,7 +533,12 @@ fun VoiceEngineScreen(
                                 io.github.ryoaonetsuki.mira.voice.LiveVoiceDiagnostics.finishDiagnostic("Failed: No Gemini API key saved — add one in Setup or Settings")
                             } else {
                                 scope.launch {
-                                    diagnosticRunner.runDiagnostic(key, liveModel)
+                                    diagnosticRunner.runDiagnostic(
+                                        apiKey = key,
+                                        model = liveModel,
+                                        route = selectedDiagRoute,
+                                        variant = selectedDiagVariant
+                                    )
                                 }
                             }
                         },
@@ -576,9 +553,9 @@ fun VoiceEngineScreen(
                                 strokeWidth = 2.dp
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Running Live Diagnostic...")
+                            Text("Running (${selectedDiagRoute.label})...")
                         } else {
-                            Text("Run Live diagnostic")
+                            Text("Run Live Diagnostic (${selectedDiagRoute.label})")
                         }
                     }
 
@@ -658,6 +635,45 @@ fun VoiceEngineScreen(
                                 color = if (isPass) Color(0xFF10B981) else Color(0xFFEF4444),
                                 modifier = Modifier.padding(10.dp)
                             )
+                        }
+                    }
+
+                    // Expandable Frame Logs
+                    if (diagnosticsData.frameLogs.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { showFrameLogs = !showFrameLogs }
+                                .padding(vertical = 4.dp)
+                        ) {
+                            Text(
+                                text = if (showFrameLogs) "Hide Frame Logs (${diagnosticsData.frameLogs.size})" else "View Frame Logs (${diagnosticsData.frameLogs.size})",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = palette.primary,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        if (showFrameLogs) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = palette.surfaceVariant.copy(alpha = 0.6f),
+                                modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
+                            ) {
+                                Column(modifier = Modifier.padding(8.dp)) {
+                                    diagnosticsData.frameLogs.takeLast(30).forEach { log ->
+                                        Text(
+                                            text = log,
+                                            fontSize = 10.sp,
+                                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                            color = palette.textSecondary,
+                                            lineHeight = 13.sp
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -832,43 +848,6 @@ fun VoiceEngineScreen(
                         stopPreview()
                         showVoicePickerDialog = false
                     }) { Text("Close") }
-                },
-                containerColor = palette.surface,
-                titleContentColor = palette.textPrimary,
-                textContentColor = palette.textSecondary
-            )
-        }
-
-        // Guardian Dialog
-        if (showGuardianDialog) {
-            AlertDialog(
-                onDismissRequest = { showGuardianDialog = false },
-                title = { Text("Voice Guardian Enrolment") },
-                text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(
-                            text = "Voice Guardian restricts sensitive actions so Mira responds only to your enrolled voiceprint.",
-                            fontSize = 13.sp,
-                            color = palette.textSecondary
-                        )
-                        OutlinedTextField(
-                            value = voiceprintLabel,
-                            onValueChange = { voiceprintLabel = it },
-                            label = { Text("Voiceprint Label") },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                },
-                confirmButton = {
-                    TextButton(onClick = {
-                        securePrefs.setEnrolledFaceName(voiceprintLabel)
-                        showGuardianDialog = false
-                    }) {
-                        Text("Save")
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showGuardianDialog = false }) { Text("Cancel") }
                 },
                 containerColor = palette.surface,
                 titleContentColor = palette.textPrimary,

@@ -1,9 +1,5 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.Refresh
-import androidx.compose.material.icons.rounded.SystemUpdate
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.background
@@ -16,9 +12,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.ryoaonetsuki.mira.R
 import io.github.ryoaonetsuki.mira.network.GitHubReleaseClient
 import io.github.ryoaonetsuki.mira.network.ReleaseInfo
 import io.github.ryoaonetsuki.mira.ui.components.MiraButton
@@ -64,7 +62,7 @@ fun UpdateScreen(
                 title = { Text("App Updates", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(painter = painterResource(id = R.drawable.ic_fluent_arrow_left_24_regular), contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -87,7 +85,7 @@ fun UpdateScreen(
                     .background(palette.primary.copy(alpha = 0.15f))
             ) {
                 Icon(
-                    imageVector = Icons.Rounded.SystemUpdate,
+                    painter = painterResource(id = R.drawable.ic_fluent_arrow_download_24_regular),
                     contentDescription = null,
                     tint = palette.primary,
                     modifier = Modifier.size(34.dp)
@@ -169,7 +167,7 @@ fun UpdateScreen(
                 onClick = { checkForUpdates() },
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Icon(Icons.Rounded.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                Icon(painter = painterResource(id = R.drawable.ic_fluent_arrow_clockwise_24_regular), contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
                 Text("Check Again")
             }

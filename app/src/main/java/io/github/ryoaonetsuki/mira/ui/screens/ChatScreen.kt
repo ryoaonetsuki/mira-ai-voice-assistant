@@ -81,6 +81,7 @@ import io.github.ryoaonetsuki.mira.network.normalizeApiKey
 import io.github.ryoaonetsuki.mira.projects.ProcessedChatResult
 import io.github.ryoaonetsuki.mira.projects.WebsiteProjectManager
 import io.github.ryoaonetsuki.mira.server.LocalProjectServer
+import io.github.ryoaonetsuki.mira.service.LiveState
 import io.github.ryoaonetsuki.mira.ui.components.AnimatedOrb
 import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
 import kotlinx.coroutines.CancellationException
@@ -957,7 +958,7 @@ fun ChatScreen(
                         .padding(horizontal = 24.dp)
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        AnimatedOrb(modifier = Modifier.size(80.dp))
+                        AnimatedOrb(state = LiveState.IDLE, amplitude = 0f, modifier = Modifier.size(80.dp))
                         Spacer(modifier = Modifier.height(20.dp))
                         Text(
                             text = "Hello, let's start chatting",

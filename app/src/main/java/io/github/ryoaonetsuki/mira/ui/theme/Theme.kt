@@ -26,7 +26,8 @@ fun MiraTheme(
             onPrimary = palette.background,
             onSecondary = palette.background,
             onBackground = palette.textPrimary,
-            onSurface = palette.textPrimary
+            onSurface = palette.textPrimary,
+            onSurfaceVariant = palette.textSecondary
         )
     } else {
         lightColorScheme(
@@ -38,7 +39,8 @@ fun MiraTheme(
             onPrimary = palette.background,
             onSecondary = palette.background,
             onBackground = palette.textPrimary,
-            onSurface = palette.textPrimary
+            onSurface = palette.textPrimary,
+            onSurfaceVariant = palette.textSecondary
         )
     }
 

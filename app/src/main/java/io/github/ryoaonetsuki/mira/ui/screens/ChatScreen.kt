@@ -1629,7 +1629,7 @@ fun ChatScreen(
                                                 onClick = {
                                                     MiraAppScope.scope.launch {
                                                         db.chatDao().deleteMessagesForConversation(conversation.id)
-                                                        db.chatDao().deleteConversation(conversation)
+                                                        db.chatDao().deleteConversation(conversation.id)
                                                         if (currentConversationId == conversation.id) {
                                                             val replacement = conversations.firstOrNull {
                                                                 it.id != conversation.id

@@ -1,22 +1,23 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import io.github.ryoaonetsuki.mira.ui.components.MiraSwitch
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.ryoaonetsuki.mira.R
 import io.github.ryoaonetsuki.mira.data.local.MiraDatabase
 import io.github.ryoaonetsuki.mira.data.local.entities.RuleEntity
 import io.github.ryoaonetsuki.mira.ui.components.MiraCard
@@ -43,12 +44,36 @@ fun RulesScreen(
                 title = { Text("Mira Rules", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(painter = painterResource(id = R.drawable.ic_fluent_arrow_left_24_regular), contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 actions = {
-                    IconButton(onClick = { showAddDialog = true }) {
-                        Icon(Icons.Rounded.Add, contentDescription = "Add Rule", tint = palette.primary)
+                    Surface(
+                        color = palette.primary.copy(alpha = 0.15f),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .padding(end = 8.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable { showAddDialog = true }
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_fluent_add_24_regular),
+                                contentDescription = null,
+                                tint = palette.primary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "New Rule",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = palette.primary
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -99,9 +124,9 @@ fun RulesScreen(
                             onClick = { showAddDialog = true },
                             colors = ButtonDefaults.buttonColors(containerColor = palette.primary)
                         ) {
-                            Icon(Icons.Rounded.Add, contentDescription = null)
+                            Icon(painter = painterResource(id = R.drawable.ic_fluent_add_24_regular), contentDescription = null)
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Add your first rule")
+                            Text("Add your first rule", color = Color.Black)
                         }
                     }
                 }
@@ -156,7 +181,7 @@ fun RulesScreen(
                                     modifier = Modifier.size(44.dp)
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Rounded.DeleteOutline,
+                                        painter = painterResource(id = R.drawable.ic_fluent_delete_24_regular),
                                         contentDescription = "Delete rule",
                                         tint = palette.textSecondary
                                     )

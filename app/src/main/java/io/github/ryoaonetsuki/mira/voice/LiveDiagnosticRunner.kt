@@ -26,7 +26,7 @@ enum class DiagnosticSetupVariant(val label: String) {
     STANDARD("Standard (Full Setup)"),
     MINIMAL_V3("Minimal (Round-12 V3)"),
     NO_RESUMPTION("No Resumption/Compression"),
-    NO_TOOLS("No Tools (Pure Speech)")
+    NO_TOOLS("No Tools (Explicit Empty Tools Array)")
 }
 
 data class DiagnosticRunOutcome(
@@ -133,6 +133,9 @@ class LiveDiagnosticRunner(
                     setupObj.put("outputAudioTranscription", JSONObject())
                     setupObj.put("sessionResumption", JSONObject())
                     setupObj.put("contextWindowCompression", JSONObject().apply { put("slidingWindow", JSONObject()) })
+                    if (variant == DiagnosticSetupVariant.NO_TOOLS) {
+                        setupObj.put("tools", JSONArray())
+                    }
                 }
             }
 

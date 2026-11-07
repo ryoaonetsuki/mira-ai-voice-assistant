@@ -5,10 +5,6 @@ import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.RecordVoiceOver
 import androidx.compose.material.icons.rounded.VerifiedUser
-import androidx.compose.material.icons.rounded.Visibility
-import androidx.compose.material.icons.rounded.VisibilityOff
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -57,7 +53,6 @@ fun VoiceEngineScreen(
     val selectedVoice by userPrefs.voiceNameFlow.collectAsState(initial = "Aoede")
     val fastListening by userPrefs.fastListeningFlow.collectAsState(initial = true)
     val echoGuard by userPrefs.echoGuardFlow.collectAsState(initial = true)
-    val alternativeVoiceEnabled by userPrefs.alternativeVoiceEnabledFlow.collectAsState(initial = false)
 
     val diagnosticsData by io.github.ryoaonetsuki.mira.voice.LiveVoiceDiagnostics.data.collectAsState()
     val restClient = remember { GeminiRestClient() }
@@ -89,8 +84,6 @@ fun VoiceEngineScreen(
     }
 
     val voiceRouting by userPrefs.voiceRoutingFlow.collectAsState(initial = "RELAY")
-    var groqKeyInput by remember { mutableStateOf(securePrefs.getGroqApiKey() ?: "") }
-    var isGroqKeyVisible by remember { mutableStateOf(false) }
     var showVoicePickerDialog by remember { mutableStateOf(false) }
     var selectedDiagRoute by remember { mutableStateOf(io.github.ryoaonetsuki.mira.voice.DiagnosticRoute.RELAY) }
     var selectedDiagVariant by remember { mutableStateOf(io.github.ryoaonetsuki.mira.voice.DiagnosticSetupVariant.STANDARD) }
@@ -349,34 +342,6 @@ fun VoiceEngineScreen(
                 }
             }
 
-            // Alternative Voice Toggle (Server Voice) — Gated default OFF (spec §3.6)
-            item {
-                MiraCard(modifier = Modifier.fillMaxWidth()) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("Alternative voice (Server Voice)", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .background(palette.surfaceVariant)
-                                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                                ) {
-                                    Text("Experimental", fontSize = 10.sp, color = palette.textSecondary, fontWeight = FontWeight.Bold)
-                                }
-                            }
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text("Legacy streaming voice via Cloudflare Worker. Keep OFF for Native Gemini Live.", fontSize = 12.sp, color = palette.textSecondary)
-                        }
-                        MiraSwitch(
-                            checked = alternativeVoiceEnabled,
-                            onCheckedChange = { scope.launch { userPrefs.setAlternativeVoiceEnabled(it) } }
-                        )
-                    }
-                }
-            }
-
             // Voice Connection Routing (Round 15)
             item {
                 MiraCard(modifier = Modifier.fillMaxWidth()) {
@@ -414,43 +379,6 @@ fun VoiceEngineScreen(
                                 selectedContainerColor = palette.primary,
                                 selectedLabelColor = Color.Black
                             )
-                        )
-                    }
-                }
-            }
-
-            // Server Voice (Groq) — Rendered ONLY when alternative voice is enabled
-            if (alternativeVoiceEnabled) {
-                item {
-                    MiraCard(modifier = Modifier.fillMaxWidth()) {
-                        Text("Server Voice (Groq)", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text("Free at console.groq.com — no card, your own quota", fontSize = 12.sp, color = palette.textSecondary)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = groqKeyInput,
-                            onValueChange = {
-                                groqKeyInput = it
-                                if (it.isBlank()) {
-                                    securePrefs.clearGroqApiKey()
-                                } else {
-                                    securePrefs.setGroqApiKey(it.trim())
-                                }
-                            },
-                            placeholder = { Text("Groq API Key (starts with gsk_)") },
-                            visualTransformation = if (isGroqKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                            trailingIcon = {
-                                IconButton(onClick = { isGroqKeyVisible = !isGroqKeyVisible }) {
-                                    Icon(
-                                        imageVector = if (isGroqKeyVisible) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
-                                        contentDescription = "Toggle Visibility",
-                                        tint = palette.textSecondary
-                                    )
-                                }
-                            },
-                            singleLine = true,
-                            shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier.fillMaxWidth()
                         )
                     }
                 }

@@ -16,11 +16,10 @@ import io.github.ryoaonetsuki.mira.data.local.entities.*
         MemoryEntity::class,
         RuleEntity::class,
         NotificationEntity::class,
-        WatchlistEntity::class,
         ScheduledPostEntity::class,
         SosContactEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class MiraDatabase : RoomDatabase() {
@@ -28,7 +27,6 @@ abstract class MiraDatabase : RoomDatabase() {
     abstract fun memoryDao(): MemoryDao
     abstract fun ruleDao(): RuleDao
     abstract fun notificationDao(): NotificationDao
-    abstract fun marketDao(): MarketDao
     abstract fun postDao(): PostDao
     abstract fun sosContactDao(): SosContactDao
 
@@ -42,6 +40,12 @@ abstract class MiraDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("DROP TABLE IF EXISTS market_watchlist")
+            }
+        }
+
         fun getInstance(context: Context): MiraDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -49,7 +53,7 @@ abstract class MiraDatabase : RoomDatabase() {
                     MiraDatabase::class.java,
                     "mira_database"
                 )
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .fallbackToDestructiveMigration()
                     .build()
                 INSTANCE = instance

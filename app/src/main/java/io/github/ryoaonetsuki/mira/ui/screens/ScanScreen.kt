@@ -18,7 +18,9 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
@@ -39,6 +41,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -115,7 +118,7 @@ fun ScanScreen(
 
     val shutterScale by animateFloatAsState(
         targetValue = if (isCapturing) 0.86f else 1.0f,
-        animationSpec = MiraMotion.spatialSpring(),
+        animationSpec = tween(durationMillis = 150, easing = FastOutSlowInEasing),
         label = "shutter-scale"
     )
 
@@ -689,7 +692,10 @@ fun ScanScreen(
                                 contentAlignment = Alignment.Center,
                                 modifier = Modifier
                                     .size(76.dp)
-                                    .scale(shutterScale)
+                                    .graphicsLayer {
+                                        scaleX = shutterScale
+                                        scaleY = shutterScale
+                                    }
                                     .border(3.5.dp, palette.primary, CircleShape)
                                     .padding(6.dp)
                                     .clip(CircleShape)

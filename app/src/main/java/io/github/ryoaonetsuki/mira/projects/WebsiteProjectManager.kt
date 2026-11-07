@@ -363,6 +363,11 @@ When the user asks you to build, create, or write a website, web app, code file,
                 }
             }
             Log.i(TAG, "Saved website project '$sanitized' (${files.size} files) to internal & external storage")
+            io.github.ryoaonetsuki.mira.notifications.TaskCompletionNotifier.notifyTaskComplete(
+                context = context,
+                targetName = sanitized,
+                isProject = true
+            )
         } catch (e: Exception) {
             Log.e(TAG, "Error saving website project files: ${e.message}", e)
         }
@@ -381,6 +386,11 @@ When the user asks you to build, create, or write a website, web app, code file,
             val extDir = context.getExternalFilesDir(null)?.let { File(it, "Mira/Files") }?.apply { if (!exists()) mkdirs() }
             extDir?.let { File(it, sanitized).writeText(content) }
             Log.i(TAG, "Saved code file '$sanitized' to internal & external storage (Mira/Files)")
+            io.github.ryoaonetsuki.mira.notifications.TaskCompletionNotifier.notifyTaskComplete(
+                context = context,
+                targetName = sanitized,
+                isProject = false
+            )
         } catch (e: Exception) {
             Log.e(TAG, "Error saving single code file: ${e.message}", e)
         }

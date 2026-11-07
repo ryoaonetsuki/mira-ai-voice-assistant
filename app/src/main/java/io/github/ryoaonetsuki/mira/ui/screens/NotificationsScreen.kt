@@ -1,13 +1,5 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.DeleteSweep
-import androidx.compose.material.icons.rounded.Info
-import androidx.compose.material.icons.rounded.Mic
-import androidx.compose.material.icons.rounded.Notifications
-import androidx.compose.material.icons.rounded.Security
-import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -20,9 +12,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.ryoaonetsuki.mira.R
 import io.github.ryoaonetsuki.mira.data.local.MiraDatabase
 import io.github.ryoaonetsuki.mira.ui.components.MiraCard
 import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
@@ -52,13 +46,13 @@ fun NotificationsScreen(
                 title = { Text("Notifications", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(painter = painterResource(id = R.drawable.ic_fluent_arrow_left_24_regular), contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 actions = {
                     if (notifications.isNotEmpty()) {
                         IconButton(onClick = { scope.launch { db.notificationDao().clearAllNotifications() } }) {
-                            Icon(Icons.Rounded.DeleteSweep, contentDescription = "Clear All", tint = palette.textSecondary)
+                            Icon(painter = painterResource(id = R.drawable.ic_fluent_broom_24_regular), contentDescription = "Clear All", tint = palette.textSecondary)
                         }
                     }
                 },
@@ -80,7 +74,7 @@ fun NotificationsScreen(
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Icon(
-                            imageVector = Icons.Rounded.Notifications,
+                            painter = painterResource(id = R.drawable.ic_fluent_alert_24_regular),
                             contentDescription = null,
                             tint = palette.surfaceVariant,
                             modifier = Modifier.size(54.dp)
@@ -95,11 +89,11 @@ fun NotificationsScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     items(notifications) { notif ->
-                        val icon = when (notif.type) {
-                            "voice" -> Icons.Rounded.Mic
-                            "security" -> Icons.Rounded.Security
-                            "update" -> Icons.Rounded.SystemUpdate
-                            else -> Icons.Rounded.Info
+                        val iconRes = when (notif.type) {
+                            "voice" -> R.drawable.ic_fluent_mic_24_regular
+                            "security" -> R.drawable.ic_fluent_shield_keyhole_24_regular
+                            "update" -> R.drawable.ic_fluent_arrow_download_24_regular
+                            else -> R.drawable.ic_fluent_info_24_regular
                         }
 
                         val timeStr = remember(notif.timestamp) {
@@ -120,7 +114,7 @@ fun NotificationsScreen(
                                         .background(palette.primary.copy(alpha = 0.15f))
                                 ) {
                                     Icon(
-                                        imageVector = icon,
+                                        painter = painterResource(id = iconRes),
                                         contentDescription = null,
                                         tint = palette.primary,
                                         modifier = Modifier.size(20.dp)

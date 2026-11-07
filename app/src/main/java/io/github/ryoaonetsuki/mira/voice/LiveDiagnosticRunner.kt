@@ -17,26 +17,35 @@ import org.json.JSONObject
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
+enum class DiagnosticRoute(val label: String) {
+    RELAY("Cloudflare Relay"),
+    DIRECT("Direct Google API")
+}
+
+enum class DiagnosticSetupVariant(val label: String) {
+    STANDARD("Standard (Full Setup)"),
+    MINIMAL_V3("Minimal (Round-12 V3)"),
+    NO_RESUMPTION("No Resumption/Compression"),
+    NO_TOOLS("No Tools (Pure Speech)")
+}
+
 data class DiagnosticRunOutcome(
     val isSuccess: Boolean,
     val outcomeMessage: String,
-    val stages: List<DiagnosticStageResult>
+    val stages: List<DiagnosticStageResult>,
+    val route: DiagnosticRoute = DiagnosticRoute.RELAY,
+    val variant: DiagnosticSetupVariant = DiagnosticSetupVariant.STANDARD,
+    val frameLogs: List<String> = emptyList()
 )
 
 /**
- * Isolated Gemini Live diagnostic runner (ROUND 14 spec §2).
- * Runs an isolated, mic-free, end-to-end diagnostic against Google's BidiGenerateContent endpoint:
- * 1. Key check
- * 2. WS connect (HTTP code)
- * 3. Setup sent
- * 4. setupComplete received (ms)
- * 5. Controlled TEXT turn (user asks in Bangla for one-word reply)
- * 6. First server response received
- * 7. First native AUDIO chunk received (bytes) + played if possible
- * 8. turnComplete.
- *
- * Stays completely isolated: does not start mic, does not use Server Voice/Groq/Whisper.
- * Stops at the exact failing stage with the exact error.
+ * Isolated Gemini Live diagnostic runner for ROUND 15.
+ * Supports:
+ * - Direct Google API vs Cloudflare Relay routes.
+ * - Diagnostic variants: Standard, Minimal V3, No Resumption/Compression, No Tools.
+ * - 45s setupComplete timeout.
+ * - Full frame logging with exact ms timestamps (never keys).
+ * - Stops at exact failing stage and reports status across all 8 stages.
  */
 class LiveDiagnosticRunner(
     private val context: Context? = null,
@@ -44,8 +53,8 @@ class LiveDiagnosticRunner(
     private val customWsFactory: WebSocket.Factory? = null
 ) {
     companion object {
-        private const val TAG = "MIRA_LIVE_DIAGNOSTIC"
-        private const val DEFAULT_TIMEOUT_MS = 15_000L
+        const val TAG = "MIRA_LIVE_DIAGNOSTIC"
+        const val DEFAULT_TIMEOUT_MS = 45_000L
 
         fun decodeBase64Safe(encoded: String): ByteArray {
             return try {
@@ -57,6 +66,77 @@ class LiveDiagnosticRunner(
                     ByteArray(0)
                 }
             }
+        }
+
+        fun buildVariantSetupPayload(
+            variant: DiagnosticSetupVariant,
+            model: String = GeminiLiveClient.LIVE_MODEL_DEFAULT,
+            voiceName: String = "Aoede",
+            languageCode: String = "bn-BD",
+            systemInstructionText: String = "You are Mira. Reply in Bengali with only one word: 'নমস্কার'."
+        ): JSONObject {
+            val setupObj = JSONObject()
+            setupObj.put("model", model)
+
+            val genConfig = JSONObject()
+            val modalities = JSONArray().apply { put("AUDIO") }
+            genConfig.put("responseModalities", modalities)
+
+            val speechConfig = JSONObject().apply {
+                val voiceConfig = JSONObject().apply {
+                    put("prebuiltVoiceConfig", JSONObject().apply { put("voiceName", voiceName) })
+                }
+                put("voiceConfig", voiceConfig)
+                put("languageCode", languageCode)
+            }
+            genConfig.put("speechConfig", speechConfig)
+            setupObj.put("generationConfig", genConfig)
+
+            val sysInst = JSONObject().apply {
+                val parts = JSONArray().apply {
+                    put(JSONObject().apply { put("text", systemInstructionText) })
+                }
+                put("parts", parts)
+            }
+            setupObj.put("systemInstruction", sysInst)
+
+            when (variant) {
+                DiagnosticSetupVariant.MINIMAL_V3 -> {
+                    // Minimal V3: model + generationConfig + speechConfig + languageCode only.
+                    // No sessionResumption, no contextWindowCompression, no realtimeInputConfig, no transcriptions.
+                }
+                DiagnosticSetupVariant.NO_RESUMPTION -> {
+                    // Setup without sessionResumption / contextWindowCompression
+                    val realtimeInputConfig = JSONObject().apply {
+                        val autoDetection = JSONObject().apply {
+                            put("endOfSpeechSensitivity", "END_SENSITIVITY_HIGH")
+                            put("silenceDurationMs", 800)
+                        }
+                        put("automaticActivityDetection", autoDetection)
+                    }
+                    setupObj.put("realtimeInputConfig", realtimeInputConfig)
+                    setupObj.put("inputAudioTranscription", JSONObject())
+                    setupObj.put("outputAudioTranscription", JSONObject())
+                }
+                DiagnosticSetupVariant.STANDARD,
+                DiagnosticSetupVariant.NO_TOOLS -> {
+                    // Full setup: confirm no tools field is sent anywhere
+                    val realtimeInputConfig = JSONObject().apply {
+                        val autoDetection = JSONObject().apply {
+                            put("endOfSpeechSensitivity", "END_SENSITIVITY_HIGH")
+                            put("silenceDurationMs", 800)
+                        }
+                        put("automaticActivityDetection", autoDetection)
+                    }
+                    setupObj.put("realtimeInputConfig", realtimeInputConfig)
+                    setupObj.put("inputAudioTranscription", JSONObject())
+                    setupObj.put("outputAudioTranscription", JSONObject())
+                    setupObj.put("sessionResumption", JSONObject())
+                    setupObj.put("contextWindowCompression", JSONObject().apply { put("slidingWindow", JSONObject()) })
+                }
+            }
+
+            return JSONObject().apply { put("setup", setupObj) }
         }
     }
 
@@ -80,10 +160,24 @@ class LiveDiagnosticRunner(
 
     suspend fun runDiagnostic(
         apiKey: String,
-        model: String = GeminiLiveClient.LIVE_MODEL_DEFAULT
+        model: String = GeminiLiveClient.LIVE_MODEL_DEFAULT,
+        route: DiagnosticRoute = DiagnosticRoute.RELAY,
+        variant: DiagnosticSetupVariant = DiagnosticSetupVariant.STANDARD
     ): DiagnosticRunOutcome = withContext(Dispatchers.IO) {
+        val diagStart = System.currentTimeMillis()
         val stages = initialStages().toMutableList()
-        LiveVoiceDiagnostics.initDiagnosticStages(stages)
+        val frameLogs = mutableListOf<String>()
+
+        fun logFrame(event: String) {
+            val elapsed = System.currentTimeMillis() - diagStart
+            val line = "[+$elapsed ms] $event"
+            frameLogs.add(line)
+            LiveVoiceDiagnostics.addFrameLog(line)
+            Log.i(TAG, line)
+        }
+
+        LiveVoiceDiagnostics.initDiagnosticStages(stages, route = route.name, variant = variant.name)
+        logFrame("DIAG_START route=${route.name} variant=${variant.name} model=$model")
 
         fun markStageRunning(num: Int) {
             val idx = num - 1
@@ -125,17 +219,21 @@ class LiveDiagnosticRunner(
             val err = "API key is missing or blank"
             markStageFailed(1, err, System.currentTimeMillis() - stage1Start)
             val outcome = "Failed at Stage 1: $err"
+            logFrame("FAIL_STAGE_1 $err")
             LiveVoiceDiagnostics.finishDiagnostic(outcome)
-            return@withContext DiagnosticRunOutcome(false, outcome, stages)
+            return@withContext DiagnosticRunOutcome(false, outcome, stages, route, variant, frameLogs)
         }
         if (!isPlausibleApiKey(normalizedKey)) {
             val err = "API key format appears invalid (length < 10 or unrecognized format)"
             markStageFailed(1, err, System.currentTimeMillis() - stage1Start)
             val outcome = "Failed at Stage 1: $err"
+            logFrame("FAIL_STAGE_1 $err")
             LiveVoiceDiagnostics.finishDiagnostic(outcome)
-            return@withContext DiagnosticRunOutcome(false, outcome, stages)
+            return@withContext DiagnosticRunOutcome(false, outcome, stages, route, variant, frameLogs)
         }
-        markStageSuccess(1, "Gemini API key is present and formatted", System.currentTimeMillis() - stage1Start)
+        val stage1Duration = System.currentTimeMillis() - stage1Start
+        markStageSuccess(1, "Gemini API key is present and formatted", stage1Duration)
+        logFrame("PASS_STAGE_1 valid format (${stage1Duration}ms)")
 
         // ---------------- STAGE 2: WS connect ----------------
         markStageRunning(2)
@@ -143,32 +241,39 @@ class LiveDiagnosticRunner(
         val eventChannel = Channel<WsEvent>(Channel.UNLIMITED)
 
         val wsFactory: WebSocket.Factory = customWsFactory ?: customClient ?: OkHttpClient.Builder()
-            .connectTimeout(15, TimeUnit.SECONDS)
+            .connectTimeout(20, TimeUnit.SECONDS)
             .readTimeout(0, TimeUnit.MILLISECONDS)
-            .writeTimeout(15, TimeUnit.SECONDS)
+            .writeTimeout(20, TimeUnit.SECONDS)
             .pingInterval(15, TimeUnit.SECONDS)
             .build()
 
-        val request = Request.Builder()
-            .url(GeminiLiveClient.LIVE_WS_URL)
-            .addHeader("x-goog-api-key", normalizedKey)
-            .build()
+        val request = if (route == DiagnosticRoute.RELAY) {
+            RelayLiveClient.buildRelayRequest(normalizedKey)
+        } else {
+            RelayLiveClient.buildDirectRequest(GeminiLiveClient.LIVE_WS_URL, normalizedKey)
+        }
+
+        logFrame("WS_CONNECT_INIT target=${request.url} header=${if (route == DiagnosticRoute.RELAY) RelayLiveClient.HEADER_MIRA_KEY else "x-goog-api-key"}")
 
         var activeWs: WebSocket? = null
         val wsListener = object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                logFrame("WS_OPEN code=${response.code}")
                 eventChannel.trySend(WsEvent.Open(response.code))
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                logFrame("WS_MSG_RECV text_len=${text.length}")
                 eventChannel.trySend(WsEvent.Message(text))
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                logFrame("WS_FAILURE code=${response?.code} err=${t.message}")
                 eventChannel.trySend(WsEvent.Failure(t, response?.code))
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                logFrame("WS_CLOSED code=$code reason=\"$reason\"")
                 eventChannel.trySend(WsEvent.Closed(code, reason))
             }
         }
@@ -179,11 +284,12 @@ class LiveDiagnosticRunner(
             val err = "Failed to initiate WebSocket connection: ${e.message}"
             markStageFailed(2, err, System.currentTimeMillis() - stage2Start)
             val outcome = "Failed at Stage 2: $err"
+            logFrame("FAIL_STAGE_2 $err")
             LiveVoiceDiagnostics.finishDiagnostic(outcome)
-            return@withContext DiagnosticRunOutcome(false, outcome, stages)
+            return@withContext DiagnosticRunOutcome(false, outcome, stages, route, variant, frameLogs)
         }
 
-        val openEvent = withTimeoutOrNull(DEFAULT_TIMEOUT_MS) {
+        val openEvent = withTimeoutOrNull(20_000L) {
             var ev = eventChannel.receive()
             while (ev is WsEvent.Closed) {
                 ev = eventChannel.receive()
@@ -192,18 +298,21 @@ class LiveDiagnosticRunner(
         }
 
         if (openEvent == null) {
-            val err = "WebSocket connection timed out after 15s"
+            val err = "WebSocket connection timed out after 20s"
             markStageFailed(2, err, System.currentTimeMillis() - stage2Start)
             activeWs.cancel()
             val outcome = "Failed at Stage 2: $err"
+            logFrame("FAIL_STAGE_2 $err")
             LiveVoiceDiagnostics.finishDiagnostic(outcome)
-            return@withContext DiagnosticRunOutcome(false, outcome, stages)
+            return@withContext DiagnosticRunOutcome(false, outcome, stages, route, variant, frameLogs)
         }
 
         when (openEvent) {
             is WsEvent.Open -> {
                 val dur = System.currentTimeMillis() - stage2Start
-                markStageSuccess(2, "Connected to BidiGenerateContent endpoint (HTTP ${openEvent.code})", dur)
+                val destDesc = if (route == DiagnosticRoute.RELAY) "Cloudflare Relay" else "Google Live Direct"
+                markStageSuccess(2, "Connected to $destDesc (HTTP ${openEvent.code})", dur)
+                logFrame("PASS_STAGE_2 connected in ${dur}ms")
             }
             is WsEvent.Failure -> {
                 val dur = System.currentTimeMillis() - stage2Start
@@ -212,8 +321,9 @@ class LiveDiagnosticRunner(
                 markStageFailed(2, err, dur)
                 activeWs.cancel()
                 val outcome = "Failed at Stage 2: $err"
+                logFrame("FAIL_STAGE_2 $err")
                 LiveVoiceDiagnostics.finishDiagnostic(outcome)
-                return@withContext DiagnosticRunOutcome(false, outcome, stages)
+                return@withContext DiagnosticRunOutcome(false, outcome, stages, route, variant, frameLogs)
             }
             else -> {
                 val dur = System.currentTimeMillis() - stage2Start
@@ -221,15 +331,17 @@ class LiveDiagnosticRunner(
                 markStageFailed(2, err, dur)
                 activeWs.cancel()
                 val outcome = "Failed at Stage 2: $err"
+                logFrame("FAIL_STAGE_2 $err")
                 LiveVoiceDiagnostics.finishDiagnostic(outcome)
-                return@withContext DiagnosticRunOutcome(false, outcome, stages)
+                return@withContext DiagnosticRunOutcome(false, outcome, stages, route, variant, frameLogs)
             }
         }
 
         // ---------------- STAGE 3: Setup sent ----------------
         markStageRunning(3)
         val stage3Start = System.currentTimeMillis()
-        val setupPayload = GeminiLiveClient.buildSetupPayload(
+        val setupPayload = buildVariantSetupPayload(
+            variant = variant,
             model = model,
             voiceName = "Aoede",
             languageCode = "bn-BD",
@@ -244,12 +356,14 @@ class LiveDiagnosticRunner(
             markStageFailed(3, err, stage3Duration)
             activeWs.close(1000, "Diagnostic failed")
             val outcome = "Failed at Stage 3: $err"
+            logFrame("FAIL_STAGE_3 $err")
             LiveVoiceDiagnostics.finishDiagnostic(outcome)
-            return@withContext DiagnosticRunOutcome(false, outcome, stages)
+            return@withContext DiagnosticRunOutcome(false, outcome, stages, route, variant, frameLogs)
         }
-        markStageSuccess(3, "Setup payload sent successfully (${payloadStr.length} bytes)", stage3Duration)
+        markStageSuccess(3, "Setup payload (${variant.label}) sent (${payloadStr.length} chars)", stage3Duration)
+        logFrame("PASS_STAGE_3 setup sent (${payloadStr.length} chars in ${stage3Duration}ms)")
 
-        // ---------------- STAGE 4: setupComplete received ----------------
+        // ---------------- STAGE 4: setupComplete received (45s timeout) ----------------
         markStageRunning(4)
         val stage4Start = System.currentTimeMillis()
         var setupCompleteReceived = false
@@ -275,11 +389,13 @@ class LiveDiagnosticRunner(
                             markStageFailed(4, err, System.currentTimeMillis() - stage4Start)
                             activeWs.close(1000, "Diagnostic failed")
                             val outcome = "Failed at Stage 4: $err"
+                            logFrame("FAIL_STAGE_4 server error: code=$errCode message=$errMsg")
                             LiveVoiceDiagnostics.finishDiagnostic(outcome)
-                            return@withContext DiagnosticRunOutcome(false, outcome, stages)
+                            return@withContext DiagnosticRunOutcome(false, outcome, stages, route, variant, frameLogs)
                         }
                         if (root.has("setupComplete")) {
                             setupCompleteReceived = true
+                            logFrame("SETUP_COMPLETE_RECV")
                             break
                         }
                     } catch (e: Exception) {
@@ -292,30 +408,34 @@ class LiveDiagnosticRunner(
                     markStageFailed(4, err, System.currentTimeMillis() - stage4Start)
                     activeWs.cancel()
                     val outcome = "Failed at Stage 4: $err"
+                    logFrame("FAIL_STAGE_4 connection failure: $codeStr${msgEvent.error.message}")
                     LiveVoiceDiagnostics.finishDiagnostic(outcome)
-                    return@withContext DiagnosticRunOutcome(false, outcome, stages)
+                    return@withContext DiagnosticRunOutcome(false, outcome, stages, route, variant, frameLogs)
                 }
                 is WsEvent.Closed -> {
                     val err = "WebSocket closed during setup (code ${msgEvent.code}: ${msgEvent.reason})"
                     markStageFailed(4, err, System.currentTimeMillis() - stage4Start)
                     val outcome = "Failed at Stage 4: $err"
+                    logFrame("FAIL_STAGE_4 server closed socket: code=${msgEvent.code} reason=\"${msgEvent.reason}\"")
                     LiveVoiceDiagnostics.finishDiagnostic(outcome)
-                    return@withContext DiagnosticRunOutcome(false, outcome, stages)
+                    return@withContext DiagnosticRunOutcome(false, outcome, stages, route, variant, frameLogs)
                 }
                 else -> {}
             }
         }
 
         if (!setupCompleteReceived) {
-            val err = "Timed out waiting for setupComplete from server (15s)"
+            val err = "Timed out waiting for setupComplete from server (45s)"
             markStageFailed(4, err, System.currentTimeMillis() - stage4Start)
             activeWs.close(1000, "Diagnostic timed out")
             val outcome = "Failed at Stage 4: $err"
+            logFrame("FAIL_STAGE_4 setupComplete timeout (45s reached without server response)")
             LiveVoiceDiagnostics.finishDiagnostic(outcome)
-            return@withContext DiagnosticRunOutcome(false, outcome, stages)
+            return@withContext DiagnosticRunOutcome(false, outcome, stages, route, variant, frameLogs)
         }
         val stage4Duration = System.currentTimeMillis() - stage4Start
         markStageSuccess(4, "setupComplete received in ${stage4Duration}ms", stage4Duration)
+        logFrame("PASS_STAGE_4 setupComplete confirmed in ${stage4Duration}ms")
 
         // ---------------- STAGE 5: Send controlled TEXT turn ----------------
         markStageRunning(5)
@@ -343,10 +463,12 @@ class LiveDiagnosticRunner(
             markStageFailed(5, err, stage5Duration)
             activeWs.close(1000, "Diagnostic failed")
             val outcome = "Failed at Stage 5: $err"
+            logFrame("FAIL_STAGE_5 text turn frame send failed")
             LiveVoiceDiagnostics.finishDiagnostic(outcome)
-            return@withContext DiagnosticRunOutcome(false, outcome, stages)
+            return@withContext DiagnosticRunOutcome(false, outcome, stages, route, variant, frameLogs)
         }
         markStageSuccess(5, "Controlled Bangla text turn sent ('নমস্কার, এক কথায় উত্তর দাও。')", stage5Duration)
+        logFrame("PASS_STAGE_5 text turn sent in ${stage5Duration}ms")
 
         // ---------------- STAGE 6: First server response received ----------------
         markStageRunning(6)
@@ -356,7 +478,7 @@ class LiveDiagnosticRunner(
         var turnCompleteReceived = false
         var modelTranscript = ""
 
-        val responseDeadline = System.currentTimeMillis() + DEFAULT_TIMEOUT_MS
+        val responseDeadline = System.currentTimeMillis() + 30_000L
 
         while (System.currentTimeMillis() < responseDeadline && !firstResponseReceived) {
             val remaining = (responseDeadline - System.currentTimeMillis()).coerceAtLeast(100L)
@@ -374,8 +496,9 @@ class LiveDiagnosticRunner(
                             markStageFailed(6, err, System.currentTimeMillis() - stage6Start)
                             activeWs.close(1000, "Diagnostic failed")
                             val outcome = "Failed at Stage 6: $err"
+                            logFrame("FAIL_STAGE_6 $err")
                             LiveVoiceDiagnostics.finishDiagnostic(outcome)
-                            return@withContext DiagnosticRunOutcome(false, outcome, stages)
+                            return@withContext DiagnosticRunOutcome(false, outcome, stages, route, variant, frameLogs)
                         }
 
                         val serverContent = root.optJSONObject("serverContent")
@@ -383,8 +506,8 @@ class LiveDiagnosticRunner(
                             firstResponseReceived = true
                             val stage6Duration = System.currentTimeMillis() - stage6Start
                             markStageSuccess(6, "First server response frame received", stage6Duration)
+                            logFrame("PASS_STAGE_6 first server content in ${stage6Duration}ms")
 
-                            // Check if modelTurn audio is already present in this message
                             val modelTurn = serverContent.optJSONObject("modelTurn")
                             val parts = modelTurn?.optJSONArray("parts")
                             if (parts != null) {
@@ -425,33 +548,36 @@ class LiveDiagnosticRunner(
                     markStageFailed(6, err, System.currentTimeMillis() - stage6Start)
                     activeWs.cancel()
                     val outcome = "Failed at Stage 6: $err"
+                    logFrame("FAIL_STAGE_6 $err")
                     LiveVoiceDiagnostics.finishDiagnostic(outcome)
-                    return@withContext DiagnosticRunOutcome(false, outcome, stages)
+                    return@withContext DiagnosticRunOutcome(false, outcome, stages, route, variant, frameLogs)
                 }
                 is WsEvent.Closed -> {
-                    val err = "WebSocket closed waiting for response (code ${msgEvent.code})"
+                    val err = "WebSocket closed waiting for response (code ${msgEvent.code}: ${msgEvent.reason})"
                     markStageFailed(6, err, System.currentTimeMillis() - stage6Start)
                     val outcome = "Failed at Stage 6: $err"
+                    logFrame("FAIL_STAGE_6 $err")
                     LiveVoiceDiagnostics.finishDiagnostic(outcome)
-                    return@withContext DiagnosticRunOutcome(false, outcome, stages)
+                    return@withContext DiagnosticRunOutcome(false, outcome, stages, route, variant, frameLogs)
                 }
                 else -> {}
             }
         }
 
         if (!firstResponseReceived) {
-            val err = "Timed out waiting for first server response (15s)"
+            val err = "Timed out waiting for first server response (30s)"
             markStageFailed(6, err, System.currentTimeMillis() - stage6Start)
             activeWs.close(1000, "Diagnostic timed out")
             val outcome = "Failed at Stage 6: $err"
+            logFrame("FAIL_STAGE_6 $err")
             LiveVoiceDiagnostics.finishDiagnostic(outcome)
-            return@withContext DiagnosticRunOutcome(false, outcome, stages)
+            return@withContext DiagnosticRunOutcome(false, outcome, stages, route, variant, frameLogs)
         }
 
         // ---------------- STAGE 7: First native AUDIO chunk received ----------------
         markStageRunning(7)
         val stage7Start = System.currentTimeMillis()
-        val audioDeadline = System.currentTimeMillis() + DEFAULT_TIMEOUT_MS
+        val audioDeadline = System.currentTimeMillis() + 30_000L
 
         while (firstAudioBytes == null && System.currentTimeMillis() < audioDeadline) {
             val remaining = (audioDeadline - System.currentTimeMillis()).coerceAtLeast(100L)
@@ -500,8 +626,9 @@ class LiveDiagnosticRunner(
                 markStageFailed(7, err, System.currentTimeMillis() - stage7Start)
                 activeWs.cancel()
                 val outcome = "Failed at Stage 7: $err"
+                logFrame("FAIL_STAGE_7 $err")
                 LiveVoiceDiagnostics.finishDiagnostic(outcome)
-                return@withContext DiagnosticRunOutcome(false, outcome, stages)
+                return@withContext DiagnosticRunOutcome(false, outcome, stages, route, variant, frameLogs)
             }
         }
 
@@ -510,12 +637,14 @@ class LiveDiagnosticRunner(
             markStageFailed(7, err, System.currentTimeMillis() - stage7Start)
             activeWs.close(1000, "Diagnostic failed")
             val outcome = "Failed at Stage 7: $err"
+            logFrame("FAIL_STAGE_7 $err")
             LiveVoiceDiagnostics.finishDiagnostic(outcome)
-            return@withContext DiagnosticRunOutcome(false, outcome, stages)
+            return@withContext DiagnosticRunOutcome(false, outcome, stages, route, variant, frameLogs)
         }
 
         val stage7Duration = System.currentTimeMillis() - stage7Start
         val audioSize = firstAudioBytes.size
+        logFrame("PASS_STAGE_7 received $audioSize bytes audio in ${stage7Duration}ms")
 
         // Play audio chunk if AudioTrack is available on this platform
         try {
@@ -529,7 +658,7 @@ class LiveDiagnosticRunner(
         // ---------------- STAGE 8: turnComplete ----------------
         markStageRunning(8)
         val stage8Start = System.currentTimeMillis()
-        val turnDeadline = System.currentTimeMillis() + DEFAULT_TIMEOUT_MS
+        val turnDeadline = System.currentTimeMillis() + 30_000L
 
         while (!turnCompleteReceived && System.currentTimeMillis() < turnDeadline) {
             val remaining = (turnDeadline - System.currentTimeMillis()).coerceAtLeast(100L)
@@ -559,15 +688,18 @@ class LiveDiagnosticRunner(
         if (turnCompleteReceived) {
             markStageSuccess(8, "turnComplete received: Full Live turn finished successfully", stage8Duration)
             val txNote = if (modelTranscript.isNotBlank()) " Model said: \"$modelTranscript\"" else ""
-            val outcome = "PASSED: Full native Gemini Live roundtrip verified (WS connect -> setupComplete -> text turn -> native audio reply).$txNote"
+            val routeDesc = if (route == DiagnosticRoute.RELAY) "via Cloudflare relay" else "direct Google API"
+            val outcome = "PASSED: Full native Gemini Live roundtrip verified ($routeDesc, ${variant.label}).$txNote"
+            logFrame("PASS_STAGE_8 completed in ${stage8Duration}ms outcome=$outcome")
             LiveVoiceDiagnostics.finishDiagnostic(outcome)
-            DiagnosticRunOutcome(true, outcome, stages)
+            DiagnosticRunOutcome(true, outcome, stages, route, variant, frameLogs)
         } else {
-            // Note: If audio was received and turn was functioning, we report warning or partial completion
             markStageSuccess(8, "First audio received; turn completed or closed", stage8Duration)
-            val outcome = "PASSED: Native Gemini Live voice verified (Audio output received successfully)"
+            val routeDesc = if (route == DiagnosticRoute.RELAY) "via Cloudflare relay" else "direct Google API"
+            val outcome = "PASSED: Native Gemini Live voice verified ($routeDesc, audio received)"
+            logFrame("PASS_STAGE_8 audio verified outcome=$outcome")
             LiveVoiceDiagnostics.finishDiagnostic(outcome)
-            DiagnosticRunOutcome(true, outcome, stages)
+            DiagnosticRunOutcome(true, outcome, stages, route, variant, frameLogs)
         }
     }
 

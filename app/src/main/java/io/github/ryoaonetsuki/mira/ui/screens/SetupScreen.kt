@@ -2,6 +2,7 @@ package io.github.ryoaonetsuki.mira.ui.screens
 
 import androidx.annotation.DrawableRes
 import androidx.compose.ui.res.painterResource
+import io.github.ryoaonetsuki.mira.R
 import android.Manifest
 import android.content.Context
 import android.content.Intent

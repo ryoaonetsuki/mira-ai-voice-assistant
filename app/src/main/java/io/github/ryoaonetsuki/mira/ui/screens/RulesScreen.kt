@@ -63,24 +63,47 @@ fun RulesScreen(
                 .padding(horizontal = 16.dp)
         ) {
             Text(
-                text = "Rules set for Mira. She follows these above her default persona style (e.g. 'Keep answers short', 'Call me Sir', 'Always respond in bullet points').",
-                fontSize = 13.sp,
+                text = "Instructions Mira always follows in every chat.",
+                fontSize = 15.sp,
                 color = palette.textSecondary,
-                lineHeight = 18.sp
+                lineHeight = 21.sp,
+                modifier = Modifier.padding(top = 4.dp)
             )
 
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(20.dp))
 
             if (rules.isEmpty()) {
                 Box(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier.weight(1f).fillMaxWidth()
                 ) {
-                    Text(
-                        text = "No custom rules set yet — Mira is using default persona guidance.",
-                        color = palette.textSecondary,
-                        fontSize = 14.sp
-                    )
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.padding(horizontal = 28.dp)
+                    ) {
+                        Text(
+                            text = "Make Mira yours",
+                            color = palette.textPrimary,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Add instructions for how Mira should respond. She’ll follow them in every chat.",
+                            color = palette.textSecondary,
+                            fontSize = 14.sp,
+                            lineHeight = 20.sp
+                        )
+                        Spacer(modifier = Modifier.height(20.dp))
+                        Button(
+                            onClick = { showAddDialog = true },
+                            colors = ButtonDefaults.buttonColors(containerColor = palette.primary)
+                        ) {
+                            Icon(Icons.Rounded.Add, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Add your first rule")
+                        }
+                    }
                 }
             } else {
                 LazyColumn(
@@ -91,14 +114,29 @@ fun RulesScreen(
                         MiraCard(modifier = Modifier.fillMaxWidth()) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 2.dp)
                             ) {
-                                Column(modifier = Modifier.weight(1f)) {
+                                Column(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .padding(end = 8.dp)
+                                ) {
                                     Text(
                                         text = item.rule,
-                                        fontSize = 14.sp,
+                                        fontSize = 15.sp,
+                                        lineHeight = 21.sp,
                                         fontWeight = FontWeight.Medium,
                                         color = if (item.isEnabled) palette.textPrimary else palette.textSecondary
+                                    )
+                                    Spacer(modifier = Modifier.height(7.dp))
+                                    Text(
+                                        text = if (item.isEnabled) "ACTIVE IN EVERY CHAT" else "PAUSED",
+                                        fontSize = 10.sp,
+                                        letterSpacing = 0.8.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = if (item.isEnabled) palette.primary else palette.textSecondary
                                     )
                                 }
 
@@ -111,16 +149,15 @@ fun RulesScreen(
                                     }
                                 )
 
-                                Spacer(modifier = Modifier.width(6.dp))
-
                                 IconButton(
                                     onClick = {
                                         scope.launch { db.ruleDao().deleteRule(item) }
-                                    }
+                                    },
+                                    modifier = Modifier.size(44.dp)
                                 ) {
                                     Icon(
                                         imageVector = Icons.Rounded.DeleteOutline,
-                                        contentDescription = "Delete",
+                                        contentDescription = "Delete rule",
                                         tint = palette.textSecondary
                                     )
                                 }

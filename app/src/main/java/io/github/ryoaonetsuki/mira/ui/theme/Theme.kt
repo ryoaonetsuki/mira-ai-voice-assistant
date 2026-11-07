@@ -9,6 +9,15 @@ import androidx.compose.runtime.staticCompositionLocalOf
 
 val LocalMiraPalette = staticCompositionLocalOf { Palettes.Midnight }
 
+object MiraTheme {
+    val palette: MiraPalette
+        @Composable
+        get() = LocalMiraPalette.current
+
+    val motion: MiraMotion
+        get() = MiraMotion
+}
+
 @Composable
 fun MiraTheme(
     paletteName: String = "Midnight",

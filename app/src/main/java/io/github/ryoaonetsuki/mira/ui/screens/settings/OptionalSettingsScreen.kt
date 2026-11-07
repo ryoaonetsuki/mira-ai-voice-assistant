@@ -1,7 +1,7 @@
 package io.github.ryoaonetsuki.mira.ui.screens.settings
 
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.ui.res.painterResource
+import io.github.ryoaonetsuki.mira.R
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -31,7 +31,7 @@ fun OptionalSettingsScreen(
                 title = { Text("Optional Integrations", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(painter = painterResource(id = R.drawable.ic_fluent_arrow_left_24_regular), contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)

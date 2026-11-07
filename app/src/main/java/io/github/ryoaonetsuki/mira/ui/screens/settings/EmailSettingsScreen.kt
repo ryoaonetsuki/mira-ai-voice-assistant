@@ -1,8 +1,7 @@
 package io.github.ryoaonetsuki.mira.ui.screens.settings
 
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.Send
+import androidx.compose.ui.res.painterResource
+import io.github.ryoaonetsuki.mira.R
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.background
@@ -64,7 +63,7 @@ fun EmailSettingsScreen(
                 title = { Text("Email Integration", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(painter = painterResource(id = R.drawable.ic_fluent_arrow_left_24_regular), contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -177,7 +176,7 @@ fun EmailSettingsScreen(
                             colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Icon(Icons.Rounded.Send, contentDescription = null, tint = androidx.compose.ui.graphics.Color.Black)
+                            Icon(painter = painterResource(id = R.drawable.ic_fluent_send_24_regular), contentDescription = null, tint = androidx.compose.ui.graphics.Color.Black)
                             Spacer(modifier = Modifier.width(8.dp))
                             Text("Open in Mail App & Send", color = androidx.compose.ui.graphics.Color.Black)
                         }

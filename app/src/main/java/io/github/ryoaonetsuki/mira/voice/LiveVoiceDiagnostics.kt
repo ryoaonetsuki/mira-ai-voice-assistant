@@ -32,7 +32,10 @@ data class VoiceDiagnosticsData(
     val isDiagnosticRunning: Boolean = false,
     val diagnosticStages: List<DiagnosticStageResult> = emptyList(),
     val diagnosticLastRunAt: Long? = null,
-    val diagnosticOutcome: String? = null
+    val diagnosticOutcome: String? = null,
+    val activeRoute: String = "RELAY",
+    val activeVariant: String = "STANDARD",
+    val frameLogs: List<String> = emptyList()
 )
 
 object LiveVoiceDiagnostics {
@@ -67,13 +70,25 @@ object LiveVoiceDiagnostics {
         _data.value = _data.value.copy(isDiagnosticRunning = running)
     }
 
-    fun initDiagnosticStages(stages: List<DiagnosticStageResult>) {
+    fun initDiagnosticStages(
+        stages: List<DiagnosticStageResult>,
+        route: String = "RELAY",
+        variant: String = "STANDARD"
+    ) {
         _data.value = _data.value.copy(
             isDiagnosticRunning = true,
             diagnosticStages = stages,
-            diagnosticOutcome = "Running Live diagnostic...",
-            diagnosticLastRunAt = System.currentTimeMillis()
+            diagnosticOutcome = "Running Live diagnostic ($route / $variant)...",
+            diagnosticLastRunAt = System.currentTimeMillis(),
+            activeRoute = route,
+            activeVariant = variant,
+            frameLogs = emptyList()
         )
+    }
+
+    fun addFrameLog(log: String) {
+        val current = _data.value.frameLogs
+        _data.value = _data.value.copy(frameLogs = current + log)
     }
 
     fun updateDiagnosticStage(

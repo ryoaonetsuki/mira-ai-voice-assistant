@@ -1,21 +1,25 @@
 package io.github.ryoaonetsuki.mira.ui.screens.settings
 
-import androidx.compose.ui.res.painterResource
-import io.github.ryoaonetsuki.mira.R
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.ryoaonetsuki.mira.R
 import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
 import io.github.ryoaonetsuki.mira.network.ConnectorClient
 import io.github.ryoaonetsuki.mira.ui.components.MiraButton
@@ -33,7 +37,8 @@ data class ConnectorConfig(
     val description: String,
     val whatMiraCanDo: String,
     val setupSteps: String,
-    val requiresToken: Boolean = true
+    val requiresToken: Boolean = true,
+    val iconRes: Int = R.drawable.ic_fluent_link_24_regular
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -47,114 +52,129 @@ fun ConnectorsSettingsScreen(
     val securePrefs = remember { SecurePreferences(context) }
     val client = remember { ConnectorClient() }
 
-    val connectors = listOf(
-        ConnectorConfig(
-            id = "github",
-            name = "GitHub",
-            hint = "Personal Access Token (ghp_...)",
-            description = "Read repos, view commits, and manage repositories",
-            whatMiraCanDo = "List your top repositories with private/public visibility",
-            setupSteps = "Create a Personal Access Token (classic) on GitHub with 'repo' scope at github.com/settings/tokens, then paste it here."
-        ),
-        ConnectorConfig(
-            id = "gitlab",
-            name = "GitLab",
-            hint = "Personal Access Token (glpat-...)",
-            description = "Access projects and code repositories on GitLab",
-            whatMiraCanDo = "List your GitLab projects with visibility status",
-            setupSteps = "In GitLab User Settings -> Access Tokens, create a personal access token with 'read_api' scope and paste it here."
-        ),
-        ConnectorConfig(
-            id = "todoist",
-            name = "Todoist",
-            hint = "API Token",
-            description = "Sync tasks, daily habits, and reminders",
-            whatMiraCanDo = "List pending tasks and create new tasks directly",
-            setupSteps = "In Todoist, go to Settings -> Integrations -> Developer and copy your API token."
-        ),
-        ConnectorConfig(
-            id = "notion",
-            name = "Notion",
-            hint = "Internal Integration Secret (secret_...)",
-            description = "Search workspace notes and databases",
-            whatMiraCanDo = "Search pages and databases across your Notion workspace",
-            setupSteps = "Create an internal integration at notion.so/my-integrations and share your workspace pages with that integration."
-        ),
-        ConnectorConfig(
-            id = "linear",
-            name = "Linear",
-            hint = "Personal API Key (lin_api_...)",
-            description = "Track engineering issues and projects",
-            whatMiraCanDo = "List issues assigned to you with their status",
-            setupSteps = "In Linear, go to Settings -> Account -> Security & Access -> Personal API Keys and paste your key."
-        ),
-        ConnectorConfig(
-            id = "vercel",
-            name = "Vercel",
-            hint = "Personal Access Token",
-            description = "Monitor deployments and project statuses",
-            whatMiraCanDo = "List active projects and deployment statuses",
-            setupSteps = "In Vercel Account Settings -> Tokens, generate a Personal Access Token and paste it here."
-        ),
-        ConnectorConfig(
-            id = "drive",
-            name = "Google Drive",
-            hint = "OAuth Access Token (ya29...)",
-            description = "Read documents and inspect stored files",
-            whatMiraCanDo = "List recent files and document types from your Drive",
-            setupSteps = "Open Google OAuth Playground (https://developers.google.com/oauthplayground). Under Drive API v3, select 'https://www.googleapis.com/auth/drive.readonly'. Authorize and exchange code for tokens, then paste the Access Token here. (Note: expires in ~1 hour; re-paste when needed)."
-        ),
-        ConnectorConfig(
-            id = "youtube",
-            name = "YouTube",
-            hint = "YouTube Data API Key",
-            description = "Search video content, channels, and playlists",
-            whatMiraCanDo = "Search YouTube videos with channel and title information",
-            setupSteps = "In Google Cloud Console, enable 'YouTube Data API v3', create an API key under Credentials, and paste it here."
-        ),
-        ConnectorConfig(
-            id = "telegram",
-            name = "Telegram",
-            hint = "BotFather Bot Token (123456:ABC-DEF...)",
-            description = "Send instant messages and alerts via your bot",
-            whatMiraCanDo = "Send messages and notifications to your detected Telegram chat",
-            setupSteps = "Create a bot using @BotFather on Telegram, paste token here, send a message to your bot in Telegram, then tap 'Detect chat'."
-        ),
-        ConnectorConfig(
-            id = "maps",
-            name = "Google Maps / Places",
-            hint = "Places API Key",
-            description = "Search locations, venues, and addresses",
-            whatMiraCanDo = "Find places and lookup formatted addresses",
-            setupSteps = "In Google Cloud Console, enable 'Places API', create an API key under Credentials, and paste it here."
-        ),
-        ConnectorConfig(
-            id = "yahoo_finance",
-            name = "Yahoo Finance",
-            hint = "No key needed",
-            description = "Live stock prices and market quotes",
-            whatMiraCanDo = "Get real-time quotes, prices, and daily ranges for ticker symbols",
-            setupSteps = "No API key needed. Public financial data endpoint.",
-            requiresToken = false
-        ),
-        ConnectorConfig(
-            id = "open_meteo",
-            name = "Open-Meteo",
-            hint = "No key needed",
-            description = "Global weather forecasts and conditions",
-            whatMiraCanDo = "Report current temperature, weather conditions, wind, and humidity",
-            setupSteps = "No API key needed. Free open-source weather API.",
-            requiresToken = false
-        ),
-        ConnectorConfig(
-            id = "gmail",
-            name = "Gmail",
-            hint = "OAuth Access Token (ya29...)",
-            description = "Read inbox messages and send emails",
-            whatMiraCanDo = "Check recent inbox emails and send new messages",
-            setupSteps = "Open Google OAuth Playground (https://developers.google.com/oauthplayground). Select scope 'https://mail.google.com/' (read + send). Authorize and exchange code for tokens, then paste the Access Token here. (Note: expires in ~1 hour; re-paste when needed)."
+    val connectors = remember {
+        listOf(
+            ConnectorConfig(
+                id = "github",
+                name = "GitHub",
+                hint = "Personal Access Token (ghp_...)",
+                description = "Read repos, view commits, and manage repositories",
+                whatMiraCanDo = "List your top repositories with private/public visibility",
+                setupSteps = "Create a Personal Access Token (classic) on GitHub with 'repo' scope at github.com/settings/tokens, then paste it here.",
+                iconRes = R.drawable.ic_fluent_code_24_regular
+            ),
+            ConnectorConfig(
+                id = "gitlab",
+                name = "GitLab",
+                hint = "Personal Access Token (glpat-...)",
+                description = "Access projects and code repositories on GitLab",
+                whatMiraCanDo = "List your GitLab projects with visibility status",
+                setupSteps = "In GitLab User Settings -> Access Tokens, create a personal access token with 'read_api' scope and paste it here.",
+                iconRes = R.drawable.ic_fluent_laptop_24_regular
+            ),
+            ConnectorConfig(
+                id = "todoist",
+                name = "Todoist",
+                hint = "API Token",
+                description = "Sync tasks, daily habits, and reminders",
+                whatMiraCanDo = "List pending tasks and create new tasks directly",
+                setupSteps = "In Todoist, go to Settings -> Integrations -> Developer and copy your API token.",
+                iconRes = R.drawable.ic_fluent_task_list_square_ltr_24_regular
+            ),
+            ConnectorConfig(
+                id = "notion",
+                name = "Notion",
+                hint = "Internal Integration Secret (secret_...)",
+                description = "Search workspace notes and databases",
+                whatMiraCanDo = "Search pages and databases across your Notion workspace",
+                setupSteps = "Create an internal integration at notion.so/my-integrations and share your workspace pages with that integration.",
+                iconRes = R.drawable.ic_fluent_document_search_24_regular
+            ),
+            ConnectorConfig(
+                id = "linear",
+                name = "Linear",
+                hint = "Personal API Key (lin_api_...)",
+                description = "Track engineering issues and projects",
+                whatMiraCanDo = "List issues assigned to you with their status",
+                setupSteps = "In Linear, go to Settings -> Account -> Security & Access -> Personal API Keys and paste your key.",
+                iconRes = R.drawable.ic_fluent_target_arrow_24_regular
+            ),
+            ConnectorConfig(
+                id = "vercel",
+                name = "Vercel",
+                hint = "Personal Access Token",
+                description = "Monitor deployments and project statuses",
+                whatMiraCanDo = "List active projects and deployment statuses",
+                setupSteps = "In Vercel Account Settings -> Tokens, generate a Personal Access Token and paste it here.",
+                iconRes = R.drawable.ic_fluent_globe_24_regular
+            ),
+            ConnectorConfig(
+                id = "drive",
+                name = "Google Drive",
+                hint = "OAuth Access Token (ya29...)",
+                description = "Read documents and inspect stored files",
+                whatMiraCanDo = "List recent files and document types from your Drive",
+                setupSteps = "Open Google OAuth Playground (https://developers.google.com/oauthplayground). Under Drive API v3, select 'https://www.googleapis.com/auth/drive.readonly'. Authorize and exchange code for tokens, then paste the Access Token here.",
+                iconRes = R.drawable.ic_fluent_folder_open_24_regular
+            ),
+            ConnectorConfig(
+                id = "youtube",
+                name = "YouTube",
+                hint = "YouTube Data API Key",
+                description = "Search video content, channels, and playlists",
+                whatMiraCanDo = "Search YouTube videos with channel and title information",
+                setupSteps = "In Google Cloud Console, enable 'YouTube Data API v3', create an API key under Credentials, and paste it here.",
+                iconRes = R.drawable.ic_fluent_play_24_regular
+            ),
+            ConnectorConfig(
+                id = "telegram",
+                name = "Telegram",
+                hint = "BotFather Bot Token (123456:ABC-DEF...)",
+                description = "Send instant messages and alerts via your bot",
+                whatMiraCanDo = "Send messages and notifications to your detected Telegram chat",
+                setupSteps = "Create a bot using @BotFather on Telegram, paste token here, send a message to your bot in Telegram, then tap 'Detect chat'.",
+                iconRes = R.drawable.ic_fluent_send_24_regular
+            ),
+            ConnectorConfig(
+                id = "maps",
+                name = "Google Maps / Places",
+                hint = "Places API Key",
+                description = "Search locations, venues, and addresses",
+                whatMiraCanDo = "Find places and lookup formatted addresses",
+                setupSteps = "In Google Cloud Console, enable 'Places API', create an API key under Credentials, and paste it here.",
+                iconRes = R.drawable.ic_fluent_options_24_regular
+            ),
+            ConnectorConfig(
+                id = "yahoo_finance",
+                name = "Yahoo Finance",
+                hint = "No key needed",
+                description = "Live stock prices and market quotes",
+                whatMiraCanDo = "Get real-time quotes, prices, and daily ranges for ticker symbols",
+                setupSteps = "No API key needed. Public financial data endpoint.",
+                requiresToken = false,
+                iconRes = R.drawable.ic_fluent_sound_wave_circle_24_regular
+            ),
+            ConnectorConfig(
+                id = "open_meteo",
+                name = "Open-Meteo",
+                hint = "No key needed",
+                description = "Global weather forecasts and conditions",
+                whatMiraCanDo = "Report current temperature, weather conditions, wind, and humidity",
+                setupSteps = "No API key needed. Free open-source weather API.",
+                requiresToken = false,
+                iconRes = R.drawable.ic_fluent_weather_sunny_24_regular
+            ),
+            ConnectorConfig(
+                id = "gmail",
+                name = "Gmail",
+                hint = "OAuth Access Token (ya29...)",
+                description = "Read inbox messages and send emails",
+                whatMiraCanDo = "Check recent inbox emails and send new messages",
+                setupSteps = "Open Google OAuth Playground (https://developers.google.com/oauthplayground). Select scope 'https://mail.google.com/'. Authorize and exchange code for tokens, then paste the Access Token here.",
+                iconRes = R.drawable.ic_fluent_mail_24_regular
+            )
         )
-    )
+    }
 
     var searchQuery by remember { mutableStateOf("") }
     var activeDialogConnector by remember { mutableStateOf<ConnectorConfig?>(null) }
@@ -167,7 +187,6 @@ fun ConnectorsSettingsScreen(
     var isDetectingChat by remember { mutableStateOf(false) }
     var telegramDetectMsg by remember { mutableStateOf<String?>(null) }
 
-    // Map of connectorId -> status
     val statusMap = remember { mutableStateMapOf<String, String>() }
     var telegramChatId by remember { mutableStateOf(securePrefs.getTelegramChatId()) }
 
@@ -195,10 +214,21 @@ fun ConnectorsSettingsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Connectors", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
+                title = {
+                    Text(
+                        text = "Connectors",
+                        fontSize = 19.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = palette.textPrimary
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(painter = painterResource(id = R.drawable.ic_fluent_arrow_left_24_regular), contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_fluent_arrow_left_24_regular),
+                            contentDescription = "Back",
+                            tint = palette.textPrimary
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -215,7 +245,8 @@ fun ConnectorsSettingsScreen(
             Text(
                 text = "Connect external services. Credentials are encrypted on this device and tested directly against official APIs.",
                 fontSize = 13.sp,
-                color = palette.textSecondary
+                color = palette.textSecondary,
+                lineHeight = 18.sp
             )
 
             Spacer(modifier = Modifier.height(10.dp))
@@ -224,8 +255,35 @@ fun ConnectorsSettingsScreen(
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
-                placeholder = { Text("Search connectors") },
+                placeholder = { Text("Search connectors by name or tool capability") },
+                leadingIcon = {
+                    Icon(
+                        painter = painterResource(id = R.drawable.ic_fluent_search_24_regular),
+                        contentDescription = "Search",
+                        tint = palette.textSecondary
+                    )
+                },
+                trailingIcon = {
+                    if (searchQuery.isNotBlank()) {
+                        IconButton(onClick = { searchQuery = "" }) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_fluent_dismiss_24_regular),
+                                contentDescription = "Clear search",
+                                tint = palette.textSecondary
+                            )
+                        }
+                    }
+                },
                 singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = palette.primary,
+                    unfocusedBorderColor = palette.borderSubtle,
+                    focusedTextColor = palette.textPrimary,
+                    unfocusedTextColor = palette.textPrimary,
+                    focusedContainerColor = palette.surface,
+                    unfocusedContainerColor = palette.surface
+                ),
                 modifier = Modifier.fillMaxWidth()
             )
 
@@ -234,21 +292,22 @@ fun ConnectorsSettingsScreen(
             if (telegramDetectMsg != null) {
                 Surface(
                     color = palette.surface,
-                    shape = RoundedCornerShape(8.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, palette.primary.copy(alpha = 0.35f)),
                     modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
                 ) {
                     Row(
-                        modifier = Modifier.padding(10.dp),
+                        modifier = Modifier.padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
                             text = telegramDetectMsg!!,
-                            fontSize = 12.sp,
+                            fontSize = 12.5.sp,
                             color = palette.primary,
                             modifier = Modifier.weight(1f)
                         )
                         TextButton(onClick = { telegramDetectMsg = null }) {
-                            Text("OK", fontSize = 12.sp)
+                            Text("OK", fontSize = 12.sp, color = palette.primary)
                         }
                     }
                 }
@@ -263,14 +322,14 @@ fun ConnectorsSettingsScreen(
                     item {
                         Text(
                             text = "Connected (${connectedList.size})",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.5.sp,
+                            fontWeight = FontWeight.SemiBold,
                             color = palette.primary,
                             modifier = Modifier.padding(vertical = 4.dp)
                         )
                     }
 
-                    items(connectedList) { item ->
+                    items(connectedList, key = { it.id }) { item ->
                         val lastUsed = securePrefs.getConnectorLastUsed(item.id)
                         val lastUsedStr = if (lastUsed <= 0L) {
                             "Never"
@@ -284,6 +343,24 @@ fun ConnectorsSettingsScreen(
                                     verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
+                                    Box(
+                                        contentAlignment = Alignment.Center,
+                                        modifier = Modifier
+                                            .size(38.dp)
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(palette.primary.copy(alpha = 0.15f))
+                                            .border(1.dp, palette.primary.copy(alpha = 0.35f), RoundedCornerShape(10.dp))
+                                    ) {
+                                        Icon(
+                                            painter = painterResource(id = item.iconRes),
+                                            contentDescription = item.name,
+                                            tint = palette.primary,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+
+                                    Spacer(modifier = Modifier.width(12.dp))
+
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(
                                             text = item.name,
@@ -301,24 +378,34 @@ fun ConnectorsSettingsScreen(
                                     OutlinedButton(
                                         onClick = { connectorToDisconnect = item },
                                         shape = RoundedCornerShape(10.dp),
+                                        border = BorderStroke(1.dp, Color(0xFFEF4444).copy(alpha = 0.4f)),
                                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                                     ) {
-                                        Text("Disconnect", fontSize = 11.sp, color = Color(0xFFEF4444))
+                                        Text("Disconnect", fontSize = 11.5.sp, color = Color(0xFFEF4444))
                                     }
+                                }
+
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(7.dp)
+                                            .clip(CircleShape)
+                                            .background(Color(0xFF10B981))
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "Connected • Last used $lastUsedStr",
+                                        fontSize = 11.5.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = Color(0xFF10B981)
+                                    )
                                 }
 
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
-                                    text = "Connected · last used $lastUsedStr",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFF10B981)
-                                )
-
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
                                     text = "WHAT MIRA CAN DO: ${item.whatMiraCanDo}",
-                                    fontSize = 11.sp,
+                                    fontSize = 11.5.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     color = palette.primary
                                 )
@@ -377,20 +464,38 @@ fun ConnectorsSettingsScreen(
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
                             text = "Available (${availableList.size})",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.5.sp,
+                            fontWeight = FontWeight.SemiBold,
                             color = palette.textSecondary,
                             modifier = Modifier.padding(vertical = 4.dp)
                         )
                     }
 
-                    items(availableList) { item ->
+                    items(availableList, key = { it.id }) { item ->
                         MiraCard(modifier = Modifier.fillMaxWidth()) {
                             Column(modifier = Modifier.fillMaxWidth()) {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
+                                    Box(
+                                        contentAlignment = Alignment.Center,
+                                        modifier = Modifier
+                                            .size(38.dp)
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(palette.surfaceVariant.copy(alpha = 0.6f))
+                                            .border(1.dp, palette.borderSubtle, RoundedCornerShape(10.dp))
+                                    ) {
+                                        Icon(
+                                            painter = painterResource(id = item.iconRes),
+                                            contentDescription = item.name,
+                                            tint = palette.textSecondary,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+
+                                    Spacer(modifier = Modifier.width(12.dp))
+
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(
                                             text = item.name,
@@ -429,14 +534,17 @@ fun ConnectorsSettingsScreen(
                                             }
                                         },
                                         shape = RoundedCornerShape(10.dp),
-                                        colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
-                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = palette.primary,
+                                            contentColor = if (palette.isDark) palette.background else Color.White
+                                        ),
+                                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
                                     ) {
-                                        Text("Connect", fontSize = 12.sp, color = Color.Black)
+                                        Text("Connect", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                                     }
                                 }
 
-                                Spacer(modifier = Modifier.height(4.dp))
+                                Spacer(modifier = Modifier.height(6.dp))
                                 Text(
                                     text = if (!item.requiresToken) "○ No key needed" else "○ Not configured",
                                     fontSize = 11.sp,
@@ -447,20 +555,20 @@ fun ConnectorsSettingsScreen(
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
                                     text = "WHAT MIRA CAN DO: ${item.whatMiraCanDo}",
-                                    fontSize = 11.sp,
+                                    fontSize = 11.5.sp,
                                     fontWeight = FontWeight.SemiBold,
-                                    color = palette.textSecondary
+                                    color = palette.textSecondary.copy(alpha = 0.85f)
                                 )
                             }
                         }
                     }
                 }
 
-                // Privacy Note at the bottom
+                // Privacy Note at bottom
                 item {
-                    Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "Connector credentials stay on this phone, encrypted. Mira never sends them anywhere, and disconnecting deletes them.",
+                        text = "Connector credentials stay on this phone, encrypted. Mira never sends them anywhere, and disconnecting deletes them immediately.",
                         fontSize = 12.sp,
                         color = palette.textSecondary,
                         modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp)
@@ -475,14 +583,15 @@ fun ConnectorsSettingsScreen(
             val c = activeDialogConnector!!
             AlertDialog(
                 onDismissRequest = { activeDialogConnector = null },
-                title = { Text("Connect ${c.name}") },
+                title = { Text("Connect ${c.name}", fontWeight = FontWeight.Bold) },
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text(c.description, fontSize = 13.sp, color = palette.textPrimary)
                         Text(
                             text = c.setupSteps,
                             fontSize = 12.sp,
-                            color = palette.textSecondary
+                            color = palette.textSecondary,
+                            lineHeight = 17.sp
                         )
 
                         OutlinedTextField(
@@ -494,6 +603,7 @@ fun ConnectorsSettingsScreen(
                             label = { Text("API Token / Key") },
                             placeholder = { Text(c.hint) },
                             singleLine = true,
+                            shape = RoundedCornerShape(12.dp),
                             modifier = Modifier.fillMaxWidth()
                         )
                         if (verificationMsg != null) {
@@ -548,7 +658,9 @@ fun ConnectorsSettingsScreen(
                     )
                 },
                 dismissButton = {
-                    TextButton(onClick = { activeDialogConnector = null }) { Text("Cancel") }
+                    TextButton(onClick = { activeDialogConnector = null }) {
+                        Text("Cancel", color = palette.textSecondary)
+                    }
                 },
                 containerColor = palette.surface,
                 titleContentColor = palette.textPrimary,
@@ -561,7 +673,7 @@ fun ConnectorsSettingsScreen(
             val c = connectorToDisconnect!!
             AlertDialog(
                 onDismissRequest = { connectorToDisconnect = null },
-                title = { Text("Disconnect ${c.name}?") },
+                title = { Text("Disconnect ${c.name}?", fontWeight = FontWeight.Bold) },
                 text = {
                     Text(
                         text = "Removes the credential from this phone. The token stays alive in your ${c.name} account until you revoke it there.",
@@ -585,7 +697,7 @@ fun ConnectorsSettingsScreen(
                 },
                 dismissButton = {
                     TextButton(onClick = { connectorToDisconnect = null }) {
-                        Text("Cancel")
+                        Text("Cancel", color = palette.textSecondary)
                     }
                 },
                 containerColor = palette.surface,

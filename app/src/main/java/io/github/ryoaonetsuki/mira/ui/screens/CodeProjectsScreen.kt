@@ -168,6 +168,7 @@ fun CodeProjectsScreen(
                         )
                     },
                     minLines = 3,
+                    maxLines = 6,
                     shape = RoundedCornerShape(12.dp),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedContainerColor = palette.surfaceVariant,
@@ -177,7 +178,9 @@ fun CodeProjectsScreen(
                         focusedBorderColor = palette.primary,
                         unfocusedBorderColor = palette.borderSubtle
                     ),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 140.dp)
                 )
 
                 Spacer(modifier = Modifier.height(14.dp))

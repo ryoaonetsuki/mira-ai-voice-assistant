@@ -5,6 +5,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
 
 /**
  * App-wide branded Switch with explicit, high-contrast colours in both states.
@@ -20,6 +21,8 @@ fun MiraSwitch(
     modifier: Modifier = Modifier,
     enabled: Boolean = true
 ) {
+    val palette = LocalMiraPalette.current
+
     Switch(
         checked = checked,
         onCheckedChange = onCheckedChange,
@@ -28,7 +31,7 @@ fun MiraSwitch(
         colors = SwitchDefaults.colors(
             // ON state: white thumb, cyan track, transparent border
             checkedThumbColor = Color.White,
-            checkedTrackColor = Color(0xFF22D3EE),
+            checkedTrackColor = palette.primary,
             checkedBorderColor = Color.Transparent,
             checkedIconColor = Color.White,
             // OFF state: white thumb, mid-grey track
@@ -38,7 +41,7 @@ fun MiraSwitch(
             uncheckedIconColor = Color.White,
             // Disabled states keep shape clear
             disabledCheckedThumbColor = Color.White.copy(alpha = 0.5f),
-            disabledCheckedTrackColor = Color(0xFF22D3EE).copy(alpha = 0.4f),
+            disabledCheckedTrackColor = palette.primary.copy(alpha = 0.4f),
             disabledUncheckedThumbColor = Color.White.copy(alpha = 0.4f),
             disabledUncheckedTrackColor = Color(0xFF6B7280).copy(alpha = 0.3f)
         )

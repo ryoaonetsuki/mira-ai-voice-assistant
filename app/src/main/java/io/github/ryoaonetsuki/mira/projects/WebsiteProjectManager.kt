@@ -22,8 +22,14 @@ data class ProcessedChatResult(
 object WebsiteProjectManager {
     private const val TAG = "WebsiteProjectManager"
 
+    const val CHAT_CODE_INSTRUCTION = """CODE GENERATION GUIDELINE:
+When the user asks to write, explain, or review code:
+1. Provide the complete code directly in clean markdown code blocks (e.g. ```kotlin, ```python, ```html, ```javascript).
+2. Explain the key parts concisely in the user's language (default Bangla).
+3. Do NOT hide the code behind download links or file delimiters unless the user explicitly asks to build a multi-file project or save/download files."""
+
     const val FILE_BUILDING_INSTRUCTION = """FILE & PROJECT CREATION SPECIFICATION:
-When the user asks you to build, create, or write a website, web app, code file, or script:
+When the user explicitly asks you to build, create, or save a website project, web app, or code files for download:
 0. RESEARCH FIRST, THEN THINK, THEN BUILD: Before writing any code, use the live web research supplied with this request to study how the best modern sites of this kind actually look in 2026 (layout, colour palette, typography, sections, real content, interactions). Think step-by-step: plan the pages, the visual system and the content first. Then build a genuinely good, premium, multi-page design — never a weak generic template, never placeholder text, never lorem ipsum. Every page must look designed, not assembled.
 1. OVERVIEW: Start with a clean README-style overview (markdown heading e.g. '### Project Title' or '### Filename', short paragraph description, bullet points of key features or pages created).
 2. FRIENDLY MESSAGE + ONE LINK: Next, write a warm, natural 1-2 line human message introducing the download/open link — NEVER provide a bare link. Vary your wording naturally in the user's language (default Bangla).
@@ -38,7 +44,7 @@ When the user asks you to build, create, or write a website, web app, code file,
    Immediately following your friendly message, provide ONE link on its own line:
    - For a website: [Open Website](mira://project/<project_name>)
    - For a single code file: [Open Code: <filename>](mira://file/<filename>)
-3. FILE CONTENTS: Do NOT dump raw code into your conversational overview. Put all file contents at the very end enclosed in file delimiter blocks:
+3. FILE CONTENTS: Put all file contents at the very end enclosed in file delimiter blocks:
    <<<FILE:filename.ext>>>
    ...exact source code...
    <<<ENDFILE>>>
@@ -48,19 +54,32 @@ When the user asks you to build, create, or write a website, web app, code file,
     const val MULTI_PAGE_INSTRUCTION = FILE_BUILDING_INSTRUCTION
 
     /**
-     * Checks if the given text contains file creation markers or HTML/code blocks.
+     * Determines whether the user request is explicitly asking to build a multi-file website project
+     * or export/download files, rather than asking for code in chat.
+     */
+    fun isExplicitProjectOrDownloadRequest(prompt: String): Boolean {
+        val p = prompt.lowercase()
+        val projectKeywords = listOf(
+            "build a website", "create a website", "make a website", "build website", "create website",
+            "build a web app", "create a web app", "multi-page", "multipage", "full website",
+            "web project", "save project", "download project", "download code", "export project",
+            "save to file", "download this file", "save as file",
+            "ওয়েবসাইট তৈরি", "প্রজেক্ট তৈরি", "ডাউনলোড লিঙ্ক", "ফাইল সেভ"
+        )
+        return projectKeywords.any { p.contains(it) }
+    }
+
+    /**
+     * Checks if the given text contains explicit file creation markers.
      */
     fun hasFileOrProjectContent(content: String): Boolean {
         val fileMarker = Regex("(?:<<<FILE:|(?<!\\w)//\\s*FILE:|#\\s*FILE:|<!--\\s*FILE:|/\\*\\s*FILE:)")
-        return fileMarker.containsMatchIn(content) ||
-                content.contains("<!DOCTYPE html", ignoreCase = true) ||
-                content.contains("<html", ignoreCase = true) ||
-                (content.contains("```html", ignoreCase = true) && content.contains("</html>", ignoreCase = true))
+        return fileMarker.containsMatchIn(content)
     }
 
     /**
      * For live streaming: extracts whatever overview text has arrived so far,
-     * and flags whether file building has started (so chat shows "Creating your file..." instead of code).
+     * and flags whether explicit file delimiter building has started.
      */
     fun extractStreamingDisplay(accumulated: String, isBangla: Boolean = false): Pair<String, Boolean> {
         val cutoff = findFileCutoffIndex(accumulated)
@@ -68,22 +87,11 @@ When the user asks you to build, create, or write a website, web app, code file,
             val overview = accumulated.substring(0, cutoff).trim()
             return Pair(overview, true)
         }
-
-        // Also check if a code fence starts and contains several lines
-        val codeFenceIdx = accumulated.indexOf("```")
-        if (codeFenceIdx != -1) {
-            val after = accumulated.substring(codeFenceIdx)
-            if (after.lines().size > 3) {
-                val overview = accumulated.substring(0, codeFenceIdx).trim()
-                return Pair(overview, true)
-            }
-        }
-
         return Pair(accumulated, false)
     }
 
     /**
-     * Finds the earliest cutoff where file contents or code start.
+     * Finds the earliest cutoff where explicit file delimiter blocks start.
      */
     fun findFileCutoffIndex(content: String): Int {
         val markers = listOf(
@@ -91,9 +99,7 @@ When the user asks you to build, create, or write a website, web app, code file,
             "// FILE:",
             "# FILE:",
             "<!-- FILE:",
-            "/* FILE:",
-            "<!DOCTYPE html",
-            "```html"
+            "/* FILE:"
         )
         var earliestIndex = -1
         for (m in markers) {
@@ -212,6 +218,26 @@ When the user asks you to build, create, or write a website, web app, code file,
     }
 
     /**
+     * Extracts the first code block (language and code) from text, if present.
+     */
+    fun extractFirstCodeBlock(content: String): Pair<String, String>? {
+        val codeBlockRegex = Regex("```([a-zA-Z0-9_-]*)\\s*\\n([\\s\\S]*?)```")
+        val match = codeBlockRegex.find(content) ?: return null
+        val lang = match.groupValues[1].ifBlank { "text" }
+        val code = match.groupValues[2].trim()
+        return Pair(lang, code)
+    }
+
+    /**
+     * Checks if the content has a previewable code snippet (e.g. html, js, css, python).
+     */
+    fun isPreviewable(content: String): Boolean {
+        val first = extractFirstCodeBlock(content) ?: return false
+        val lang = first.first.lowercase()
+        return lang in listOf("html", "htm", "javascript", "js", "css", "svg", "xml", "json", "python", "py", "kotlin", "kt")
+    }
+
+    /**
      * Parses the full LLM reply, extracts the files, saves them to both internal and
      * phone-accessible external storage (Mira/Projects/<name> or Mira/Files/), and returns
      * the clean chat text (overview + friendly message + ONE LINK) with ZERO dumped code.
@@ -224,38 +250,6 @@ When the user asks you to build, create, or write a website, web app, code file,
         val isBangla = language.contains("Bangla", ignoreCase = true) || language.contains("Bengali", ignoreCase = true)
 
         if (!hasFileOrProjectContent(raw)) {
-            // Check if there is a substantial code block that should be saved as a code file
-            val codeBlockRegex = Regex("```([a-zA-Z0-9_-]*)\\s*\\n([\\s\\S]*?)```")
-            val codeMatch = codeBlockRegex.find(raw)
-            if (codeMatch != null && codeMatch.groupValues[2].lines().size > 4) {
-                val lang = codeMatch.groupValues[1].ifBlank { "txt" }
-                val code = codeMatch.groupValues[2].trim()
-                val ext = extensionForLanguage(lang)
-                val fileName = "code_${System.currentTimeMillis().toString().takeLast(6)}.$ext"
-                val overview = raw.substring(0, codeMatch.range.first).trim().ifBlank {
-                    if (isBangla) "### সোর্স কোড ফাইল\nআপনার অনুরোধ অনুযায়ী কোড তৈরি করা হয়েছে।"
-                    else "### Source Code File\nI've generated the requested code for you."
-                }
-
-                saveSingleCodeFile(context, fileName, code)
-
-                val friendlyMsg = if (isBangla) {
-                    "আপনার কোড ফাইলটি তৈরি হয়ে গেছে — এখানে ওপেন করে দেখুন:"
-                } else {
-                    "Here's your code file, open it and see how it looks:"
-                }
-
-                val link = "[Open Code: $fileName](mira://file/$fileName)"
-                val cleanText = "$overview\n\n$friendlyMsg\n$link"
-
-                return ProcessedChatResult(
-                    displayText = cleanText,
-                    isWebsite = false,
-                    isCode = true,
-                    fileName = fileName
-                )
-            }
-
             return ProcessedChatResult(
                 displayText = raw,
                 isWebsite = false,

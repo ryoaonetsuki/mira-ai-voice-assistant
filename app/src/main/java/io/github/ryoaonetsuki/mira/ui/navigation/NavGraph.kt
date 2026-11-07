@@ -206,13 +206,6 @@ fun MiraNavGraph(
                 RulesScreen(onBack = { navController.popBackStack() })
             }
 
-            composable(Screen.Documents.route) {
-                DocumentsScreen(onBack = { navController.popBackStack() })
-            }
-
-            composable(Screen.Photos.route) {
-                PhotosScreen(onBack = { navController.popBackStack() })
-            }
 
             composable(Screen.CodeProjects.route) {
                 CodeProjectsScreen(
@@ -243,18 +236,6 @@ fun MiraNavGraph(
                 ExtensionsScreen(onBack = { navController.popBackStack() })
             }
 
-            composable(Screen.ImageGen.route) {
-                ImageGenScreen(onBack = { navController.popBackStack() })
-            }
-
-            composable(Screen.WebSearch.route) {
-                WebSearchScreen(
-                    onBack = { navController.popBackStack() },
-                    onOpenUrl = { url ->
-                        navController.navigate("browser?url=${java.net.URLEncoder.encode(url, "UTF-8")}")
-                    }
-                )
-            }
 
             composable(Screen.Browser.route) {
                 BrowserScreen(onBack = { navController.popBackStack() })

@@ -1,9 +1,7 @@
 package io.github.ryoaonetsuki.mira.ui.screens.settings
 
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.Download
-import androidx.compose.material.icons.rounded.Upload
+import androidx.compose.ui.res.painterResource
+import io.github.ryoaonetsuki.mira.R
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -137,7 +135,7 @@ fun BackupSettingsScreen(
                 title = { Text("Backup & Restore", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(painter = painterResource(id = R.drawable.ic_fluent_arrow_left_24_regular), contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -174,7 +172,7 @@ fun BackupSettingsScreen(
                         colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Icon(Icons.Rounded.Download, contentDescription = null, tint = Color.Black)
+                        Icon(painter = painterResource(id = R.drawable.ic_fluent_arrow_download_24_regular), contentDescription = null, tint = Color.Black)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Export to File (JSON)", color = Color.Black)
                     }
@@ -198,7 +196,7 @@ fun BackupSettingsScreen(
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Icon(Icons.Rounded.Upload, contentDescription = null)
+                        Icon(painter = painterResource(id = R.drawable.ic_fluent_arrow_upload_24_regular), contentDescription = null)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Choose Backup File")
                     }

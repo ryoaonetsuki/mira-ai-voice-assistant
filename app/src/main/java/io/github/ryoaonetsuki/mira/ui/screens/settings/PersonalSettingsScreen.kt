@@ -1,20 +1,23 @@
 package io.github.ryoaonetsuki.mira.ui.screens.settings
 
-import androidx.compose.ui.res.painterResource
-import io.github.ryoaonetsuki.mira.R
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.ryoaonetsuki.mira.R
 import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
 import io.github.ryoaonetsuki.mira.data.preferences.UserPreferences
 import io.github.ryoaonetsuki.mira.network.GeminiRestClient
@@ -83,10 +86,21 @@ fun PersonalSettingsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Personal Profile", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
+                title = {
+                    Text(
+                        text = "Personal Profile",
+                        fontSize = 19.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = palette.textPrimary
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(painter = painterResource(id = R.drawable.ic_fluent_arrow_left_24_regular), contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_fluent_arrow_left_24_regular),
+                            contentDescription = "Back",
+                            tint = palette.textPrimary
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -99,42 +113,123 @@ fun PersonalSettingsScreen(
                 .fillMaxSize()
                 .padding(padding)
                 .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             item {
-                Text("Your Details", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.primary)
-            }
-
-            // Name
-            item {
-                OutlinedTextField(
-                    value = nameInput,
-                    onValueChange = {
-                        nameInput = it
-                        scope.launch { userPrefs.setUserName(it.trim()) }
-                    },
-                    label = { Text("Your Name") },
-                    placeholder = { Text("Your name") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "Your Identity",
+                    fontSize = 13.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = palette.primary
                 )
-            }
 
-            item {
-                Spacer(modifier = Modifier.height(4.dp))
-                Text("API Key", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.primary)
+                Spacer(modifier = Modifier.height(6.dp))
+
+                MiraCard(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .background(palette.primary.copy(alpha = 0.15f))
+                        ) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_fluent_person_24_regular),
+                                contentDescription = null,
+                                tint = palette.primary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Preferred Name",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = palette.textPrimary
+                            )
+                            Text(
+                                text = "How Mira addresses you in speech and chat",
+                                fontSize = 12.sp,
+                                color = palette.textSecondary
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    OutlinedTextField(
+                        value = nameInput,
+                        onValueChange = {
+                            nameInput = it
+                            scope.launch { userPrefs.setUserName(it.trim()) }
+                        },
+                        label = { Text("Your Name") },
+                        placeholder = { Text("Enter your name") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(12.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = palette.primary,
+                            unfocusedBorderColor = palette.borderSubtle
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             }
 
             // API Key Card
             item {
+                Text(
+                    text = "API Key Management",
+                    fontSize = 13.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = palette.primary
+                )
+
+                Spacer(modifier = Modifier.height(6.dp))
+
                 MiraCard(modifier = Modifier.fillMaxWidth()) {
-                    Text(
-                        text = "Current Status: $activeModeText",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = palette.primary
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .background(palette.secondary.copy(alpha = 0.15f))
+                        ) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_fluent_key_24_regular),
+                                contentDescription = null,
+                                tint = palette.secondary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Gemini Key Status",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = palette.textPrimary
+                            )
+                            Text(
+                                text = activeModeText,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = palette.primary
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
 
                     OutlinedTextField(
                         value = apiKeyInput,
@@ -143,37 +238,50 @@ fun PersonalSettingsScreen(
                             testResultMsg = null
                             validationState = PersonalKeyValidationState.IDLE
                         },
-                        label = { Text("API Key") },
-                        placeholder = { Text("Paste your API key — new keys start with AQ.") },
+                        label = { Text("Gemini API Key") },
+                        placeholder = { Text("Paste key starting with AQ...") },
                         singleLine = true,
+                        shape = RoundedCornerShape(12.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = palette.primary,
+                            unfocusedBorderColor = palette.borderSubtle
+                        ),
                         modifier = Modifier.fillMaxWidth()
                     )
 
-                    // Hint line
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "New keys start with AQ. — that is correct, paste the whole key.",
-                        fontSize = 12.sp,
+                        text = "New keys from Google AI Studio start with AQ. — paste the whole key.",
+                        fontSize = 11.5.sp,
                         color = palette.textSecondary,
-                        lineHeight = 17.sp
+                        lineHeight = 16.sp
                     )
 
                     if (testResultMsg != null) {
-                        Spacer(modifier = Modifier.height(6.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
                         val msgColor = when (validationState) {
                             PersonalKeyValidationState.VALID -> Color(0xFF10B981)
                             PersonalKeyValidationState.TRANSIENT -> Color(0xFFF59E0B)
                             PersonalKeyValidationState.INVALID -> Color(0xFFEF4444)
                             PersonalKeyValidationState.CHECKING, PersonalKeyValidationState.IDLE -> palette.textSecondary
                         }
-                        Text(
-                            text = testResultMsg!!,
-                            fontSize = 12.sp,
-                            color = msgColor
-                        )
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = msgColor.copy(alpha = 0.12f),
+                            border = BorderStroke(1.dp, msgColor.copy(alpha = 0.35f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = testResultMsg!!,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = msgColor,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                            )
+                        }
                     }
 
-                    Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(14.dp))
 
                     MiraButton(
                         text = "Test & Save Key",
@@ -190,8 +298,6 @@ fun PersonalSettingsScreen(
                                 validationState = PersonalKeyValidationState.CHECKING
                                 testResultMsg = "Validating key with Google..."
                                 scope.launch {
-                                    // ROUND 6 safety net: same 25s cap as Setup — a plausible
-                                    // key is saved on timeout instead of spinning forever.
                                     val outcome = withTimeoutOrNull(25_000L) {
                                         restClient.validateApiKeyAndChat(normalized)
                                     } ?: KeyValidationOutcome.TransientServerBusy()
@@ -231,7 +337,7 @@ fun PersonalSettingsScreen(
                     )
 
                     if (apiKeyInput.isNotBlank() || securePrefs.getGeminiApiKey() != null) {
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
                         OutlinedButton(
                             onClick = {
                                 securePrefs.clearGeminiApiKey()
@@ -240,23 +346,34 @@ fun PersonalSettingsScreen(
                                 validationState = PersonalKeyValidationState.VALID
                                 refreshStatus()
                             },
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, palette.borderSubtle),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("Use server key instead")
+                            Text("Use server key instead", color = palette.textSecondary)
                         }
                     }
                 }
             }
 
+            // Music Preferences Card
             item {
-                Spacer(modifier = Modifier.height(4.dp))
-                Text("Music Preferences", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.primary)
-            }
+                Text(
+                    text = "Music & Media",
+                    fontSize = 13.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = palette.primary
+                )
 
-            // Music App & Song
-            item {
+                Spacer(modifier = Modifier.height(6.dp))
+
                 MiraCard(modifier = Modifier.fillMaxWidth()) {
-                    Text("Preferred Music App", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
+                    Text(
+                        text = "Preferred Music App",
+                        fontSize = 14.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = palette.textPrimary
+                    )
                     Spacer(modifier = Modifier.height(8.dp))
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -264,19 +381,26 @@ fun PersonalSettingsScreen(
                     ) {
                         val apps = listOf("Spotify", "YouTube Music", "YouTube")
                         for (app in apps) {
+                            val isSelected = savedMusicApp == app
                             FilterChip(
-                                selected = savedMusicApp == app,
+                                selected = isSelected,
                                 onClick = { scope.launch { userPrefs.setMusicApp(app) } },
-                                label = { Text(app) },
+                                label = { Text(app, fontSize = 12.sp) },
                                 colors = FilterChipDefaults.filterChipColors(
                                     selectedContainerColor = palette.primary,
-                                    selectedLabelColor = Color.Black
+                                    selectedLabelColor = if (palette.isDark) palette.background else Color.White
+                                ),
+                                border = FilterChipDefaults.filterChipBorder(
+                                    enabled = true,
+                                    selected = isSelected,
+                                    borderColor = palette.borderSubtle,
+                                    selectedBorderColor = palette.primary
                                 )
                             )
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(14.dp))
 
                     OutlinedTextField(
                         value = favoriteSongInput,
@@ -287,9 +411,18 @@ fun PersonalSettingsScreen(
                         label = { Text("Favorite Song / Track") },
                         placeholder = { Text("e.g. Starboy") },
                         singleLine = true,
+                        shape = RoundedCornerShape(12.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = palette.primary,
+                            unfocusedBorderColor = palette.borderSubtle
+                        ),
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
+            }
+
+            item {
+                Spacer(modifier = Modifier.height(20.dp))
             }
         }
     }

@@ -195,7 +195,10 @@ fun MiraNavGraph(
             }
 
             composable(Screen.Scan.route) {
-                ScanScreen(onBack = { navController.popBackStack() })
+                ScanScreen(
+                    onBack = { navController.popBackStack() },
+                    onNavigateToChat = { navController.navigate(Screen.Chat.route) }
+                )
             }
 
             composable(Screen.Memories.route) {

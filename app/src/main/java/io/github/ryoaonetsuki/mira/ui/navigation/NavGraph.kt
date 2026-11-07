@@ -17,6 +17,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import androidx.navigation.navDeepLink
 import io.github.ryoaonetsuki.mira.data.local.MiraDatabase
 import io.github.ryoaonetsuki.mira.ui.components.AppDrawer
 import io.github.ryoaonetsuki.mira.ui.components.AppTopBar
@@ -27,7 +28,9 @@ import kotlinx.coroutines.launch
 
 @Composable
 fun MiraNavGraph(
-    navController: NavHostController = rememberNavController()
+    navController: NavHostController = rememberNavController(),
+    navigationIntent: android.content.Intent? = null,
+    onNavigationIntentHandled: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val palette = LocalMiraPalette.current
@@ -40,55 +43,19 @@ fun MiraNavGraph(
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route ?: Screen.Splash.route
 
-    val isHomeRoute = currentRoute == Screen.Home.route
-
-    if (isHomeRoute) {
-        // Home gets its own Scaffold with top bar + drawer.
-        // HomeScreen renders its own bottom navigation bar internally.
-        ModalNavigationDrawer(
-            drawerState = drawerState,
-            drawerContent = {
-                AppDrawer(
-                    currentRoute = currentRoute,
-                    onNavigate = { route ->
-                        navController.navigate(route) {
-                            launchSingleTop = true
-                        }
-                    },
-                    onCloseDrawer = {
-                        scope.launch { drawerState.close() }
-                    }
-                )
-            }
-        ) {
-            Scaffold(
-                topBar = {
-                    AppTopBar(
-                        unreadNotifsCount = unreadNotifsCount,
-                        onMenuClick = {
-                            scope.launch { drawerState.open() }
-                        },
-                        onNotificationsClick = {
-                            navController.navigate(Screen.Notifications.route)
-                        },
-                        onAvatarClick = {
-                            navController.navigate(Screen.About.route)
-                        }
-                    )
-                },
-                containerColor = palette.background
-            ) { padding ->
-                // Apply Scaffold padding to HomeScreen so cards sit cleanly below AppTopBar (spec §7)
-                HomeScreen(
-                    modifier = Modifier.padding(padding),
-                    onNavigate = { route ->
-                        navController.navigate(route)
-                    }
-                )
+    // Keep the graph mounted on Home so notification deep links always resolve.
+    // Navigation handles the Activity's launch intent automatically on cold start.
+    LaunchedEffect(navigationIntent) {
+        navigationIntent?.let { intent ->
+            try {
+                navController.handleDeepLink(intent)
+            } finally {
+                onNavigationIntentHandled()
             }
         }
-    } else {
-        NavHost(
+    }
+
+    NavHost(
             navController = navController,
             startDestination = Screen.Splash.route,
             modifier = Modifier
@@ -126,14 +93,100 @@ fun MiraNavGraph(
             }
 
             composable(Screen.Home.route) {
-                // Handled in parent branch when route matches
-                HomeScreen(
-                    onNavigate = { route -> navController.navigate(route) }
+                ModalNavigationDrawer(
+                    drawerState = drawerState,
+                    drawerContent = {
+                        AppDrawer(
+                            currentRoute = currentRoute,
+                            onNavigate = { route ->
+                                navController.navigate(route) {
+                                    launchSingleTop = true
+                                }
+                            },
+                            onCloseDrawer = {
+                                scope.launch { drawerState.close() }
+                            }
+                        )
+                    }
+                ) {
+                    Scaffold(
+                        topBar = {
+                            AppTopBar(
+                                unreadNotifsCount = unreadNotifsCount,
+                                onMenuClick = {
+                                    scope.launch { drawerState.open() }
+                                },
+                                onNotificationsClick = {
+                                    navController.navigate(Screen.Notifications.route)
+                                },
+                                onAvatarClick = {
+                                    navController.navigate(Screen.About.route)
+                                }
+                            )
+                        },
+                        containerColor = palette.background
+                    ) { padding ->
+                        HomeScreen(
+                            modifier = Modifier.padding(padding),
+                            onNavigate = { route -> navController.navigate(route) }
+                        )
+                    }
+                }
+            }
+
+            composable(
+                route = "finished-project/{id}",
+                arguments = listOf(navArgument("id") { type = NavType.StringType }),
+                deepLinks = listOf(
+                    navDeepLink { uriPattern = "mira://project/{id}" }
+                )
+            ) { backStackEntry ->
+                val id = backStackEntry.arguments?.getString("id").orEmpty()
+                ChatScreen(
+                    initialOpenLink = android.net.Uri.Builder()
+                        .scheme("mira")
+                        .authority("project")
+                        .appendPath(id)
+                        .build()
+                        .toString(),
+                    onBack = { navController.popBackStack() },
+                    onOpenBrowser = { url ->
+                        navController.navigate("browser?url=${java.net.URLEncoder.encode(url, "UTF-8")}")
+                    }
                 )
             }
 
-            composable(Screen.Chat.route) {
+            composable(
+                route = "finished-file/{name}",
+                arguments = listOf(navArgument("name") { type = NavType.StringType }),
+                deepLinks = listOf(
+                    navDeepLink { uriPattern = "mira://file/{name}" }
+                )
+            ) { backStackEntry ->
+                val name = backStackEntry.arguments?.getString("name").orEmpty()
                 ChatScreen(
+                    initialOpenLink = android.net.Uri.Builder()
+                        .scheme("mira")
+                        .authority("file")
+                        .appendPath(name)
+                        .build()
+                        .toString(),
+                    onBack = { navController.popBackStack() }
+                )
+            }
+
+            composable(
+                route = "${Screen.Chat.route}?prompt={prompt}",
+                arguments = listOf(
+                    navArgument("prompt") {
+                        type = NavType.StringType
+                        nullable = true
+                        defaultValue = null
+                    }
+                )
+            ) { backStackEntry ->
+                ChatScreen(
+                    initialPrompt = backStackEntry.arguments?.getString("prompt"),
                     onBack = { navController.popBackStack() },
                     onOpenBrowser = { url ->
                         navController.navigate("browser?url=${java.net.URLEncoder.encode(url, "UTF-8")}")
@@ -281,6 +334,5 @@ fun MiraNavGraph(
             composable(Screen.About.route) {
                 AboutScreen(onBack = { navController.popBackStack() })
             }
-        }
     }
 }

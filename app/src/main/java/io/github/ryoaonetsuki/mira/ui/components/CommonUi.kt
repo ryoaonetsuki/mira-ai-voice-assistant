@@ -27,18 +27,33 @@ import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
 fun MiraCard(
     modifier: Modifier = Modifier,
     cornerRadius: Dp = 16.dp,
+    containerColor: Color? = null,
+    borderColor: Color? = null,
+    borderWidth: Dp = 1.dp,
+    contentPadding: PaddingValues = PaddingValues(16.dp),
     onClick: (() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
     val palette = LocalMiraPalette.current
-    val clickableModifier = if (onClick != null) modifier.clickable { onClick() } else modifier
+    val shape = RoundedCornerShape(cornerRadius)
+    val cardBackground = containerColor ?: palette.surface
+    val cardBorder = borderColor ?: palette.borderSubtle
+
+    val cardModifier = if (onClick != null) {
+        modifier
+            .clip(shape)
+            .background(cardBackground)
+            .border(borderWidth, cardBorder, shape)
+            .clickable(onClick = onClick)
+    } else {
+        modifier
+            .clip(shape)
+            .background(cardBackground)
+            .border(borderWidth, cardBorder, shape)
+    }
 
     Column(
-        modifier = clickableModifier
-            .clip(RoundedCornerShape(cornerRadius))
-            .background(palette.surface)
-            .border(1.dp, palette.surfaceVariant.copy(alpha = 0.5f), RoundedCornerShape(cornerRadius))
-            .padding(16.dp),
+        modifier = cardModifier.padding(contentPadding),
         content = content
     )
 }
@@ -52,29 +67,60 @@ fun MiraButton(
     isLoading: Boolean = false
 ) {
     val palette = LocalMiraPalette.current
-    val gradient = Brush.horizontalGradient(
-        colors = if (enabled) listOf(palette.primary, palette.secondary) else listOf(Color.Gray, Color.DarkGray)
-    )
+    val isInteractive = enabled && !isLoading
+    val shape = RoundedCornerShape(14.dp)
+
+    val gradient = if (isInteractive) {
+        Brush.horizontalGradient(
+            colors = listOf(palette.primary, palette.secondary)
+        )
+    } else {
+        Brush.horizontalGradient(
+            colors = listOf(
+                palette.surfaceVariant.copy(alpha = 0.7f),
+                palette.surfaceVariant.copy(alpha = 0.5f)
+            )
+        )
+    }
+
+    val contentColor = when {
+        !isInteractive -> palette.textSecondary.copy(alpha = 0.6f)
+        palette.isDark -> palette.background
+        else -> Color.White
+    }
 
     Button(
         onClick = onClick,
-        enabled = enabled && !isLoading,
-        shape = RoundedCornerShape(14.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
+        enabled = isInteractive,
+        shape = shape,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = Color.Transparent,
+            disabledContainerColor = Color.Transparent,
+            contentColor = contentColor,
+            disabledContentColor = contentColor
+        ),
         contentPadding = PaddingValues(),
         modifier = modifier
-            .clip(RoundedCornerShape(14.dp))
+            .clip(shape)
             .background(gradient)
+            .then(
+                if (!isInteractive) {
+                    Modifier.border(1.dp, palette.borderSubtle.copy(alpha = 0.4f), shape)
+                } else {
+                    Modifier.border(1.dp, palette.primary.copy(alpha = 0.25f), shape)
+                }
+            )
     ) {
         Box(
             contentAlignment = Alignment.Center,
             modifier = Modifier
+                .defaultMinSize(minHeight = 48.dp)
                 .padding(vertical = 12.dp, horizontal = 24.dp)
         ) {
             if (isLoading) {
                 CircularProgressIndicator(
-                    color = Color.Black,
-                    strokeWidth = 2.dp,
+                    color = contentColor,
+                    strokeWidth = 2.5.dp,
                     modifier = Modifier.size(20.dp)
                 )
             } else {
@@ -82,7 +128,7 @@ fun MiraButton(
                     text = text,
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Bold,
-                    color = if (palette.isDark) Color.Black else Color.White
+                    color = contentColor
                 )
             }
         }

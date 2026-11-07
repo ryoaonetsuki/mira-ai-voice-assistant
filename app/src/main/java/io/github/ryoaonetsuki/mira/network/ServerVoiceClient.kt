@@ -116,8 +116,14 @@ class ServerVoiceClient(
                         }
                         "error" -> {
                             val msg = json.optString("message", "Server voice error")
-                            Log.w(TAG, "Server voice error frame: $msg")
-                            listener.onError(msg)
+                            val detail = json.optString("detail", "")
+                            val finalMsg = if (detail.isNotBlank() && !msg.contains(detail)) {
+                                "$msg [$detail]"
+                            } else {
+                                msg
+                            }
+                            Log.w(TAG, "Server voice error frame: $finalMsg")
+                            listener.onError(finalMsg)
                         }
                     }
                 } catch (e: Exception) {

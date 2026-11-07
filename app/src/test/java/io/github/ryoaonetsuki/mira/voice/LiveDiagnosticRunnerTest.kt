@@ -135,7 +135,7 @@ class LiveDiagnosticRunnerTest {
 
         // Assert intercepted request used Relay URL and header
         assertNotNull(interceptedRequest)
-        assertEquals("wss://mira-gemini-live-relay.salman-dev.workers.dev/live", interceptedRequest?.url.toString())
+        assertEquals("https://mira-gemini-live-relay.salman-dev.workers.dev/live", interceptedRequest?.url.toString())
         assertEquals("AIzaSyTestKey123456789", interceptedRequest?.header(RelayLiveClient.HEADER_MIRA_KEY))
 
         // Assert all 8 stages are SUCCESS
@@ -181,7 +181,7 @@ class LiveDiagnosticRunnerTest {
 
         assertTrue(outcome.isSuccess)
         assertNotNull(interceptedRequest)
-        assertEquals(GeminiLiveClient.LIVE_WS_URL, interceptedRequest?.url.toString())
+        assertEquals(GeminiLiveClient.LIVE_WS_URL.replace("wss://", "https://"), interceptedRequest?.url.toString())
         assertEquals("AIzaSyTestKeyDirect123456", interceptedRequest?.header("x-goog-api-key"))
     }
 

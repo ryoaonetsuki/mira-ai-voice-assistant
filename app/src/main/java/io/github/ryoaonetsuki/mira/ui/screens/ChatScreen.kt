@@ -35,6 +35,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -101,7 +102,9 @@ data class ViewingCode(
 @Composable
 fun ChatScreen(
     onBack: () -> Unit,
-    onOpenBrowser: ((String) -> Unit)? = null
+    onOpenBrowser: ((String) -> Unit)? = null,
+    initialPrompt: String? = null,
+    initialOpenLink: String? = null
 ) {
     val context = LocalContext.current
     val palette = LocalMiraPalette.current
@@ -113,8 +116,14 @@ fun ChatScreen(
     val resolver = remember { ApiKeyResolver(context) }
 
     var currentConversationId by remember { mutableStateOf("default_chat") }
-    var inputMessage by remember { mutableStateOf("") }
+    var inputMessage by remember { mutableStateOf(initialPrompt.orEmpty()) }
     var stagedAttachment by remember { mutableStateOf<StagedAttachment?>(null) }
+
+    LaunchedEffect(initialPrompt) {
+        if (!initialPrompt.isNullOrBlank()) {
+            inputMessage = initialPrompt
+        }
+    }
     var isSending by remember { mutableStateOf(false) }
     var streamingMessageText by remember { mutableStateOf<String?>(null) }
     var isBuildingFileNow by remember { mutableStateOf(false) }
@@ -190,6 +199,19 @@ fun ChatScreen(
     }
 
     fun handleLinkClick(url: String) {
+        // Deep links are external input: only allow a single safe item name.
+        if (url.startsWith("mira://")) {
+            val uri = android.net.Uri.parse(url)
+            val name = uri.pathSegments.singleOrNull()
+            if (uri.host !in setOf("project", "file") ||
+                name == null ||
+                !name.matches(Regex("[a-zA-Z0-9_.-]+")) ||
+                name == "." || name == ".."
+            ) {
+                Toast.makeText(context, "Invalid saved item link", Toast.LENGTH_SHORT).show()
+                return
+            }
+        }
         when {
             url.startsWith("mira://project/") -> {
                 val projectName = url.removePrefix("mira://project/").trim()
@@ -298,6 +320,16 @@ fun ChatScreen(
             url.startsWith("http://") || url.startsWith("https://") -> {
                 onOpenBrowser?.invoke(url)
             }
+        }
+    }
+
+    var openedInitialLink by rememberSaveable(initialOpenLink) {
+        mutableStateOf(false)
+    }
+    LaunchedEffect(initialOpenLink) {
+        if (!openedInitialLink && !initialOpenLink.isNullOrBlank()) {
+            openedInitialLink = true
+            handleLinkClick(initialOpenLink)
         }
     }
 

@@ -13,7 +13,6 @@ sealed class Screen(val route: String) {
     object CodeProjects : Screen("code_projects")
     object Whiteboard : Screen("whiteboard")
     object Vibes : Screen("vibes")
-    object Licence : Screen("licence")
     object Extensions : Screen("extensions")
     object Browser : Screen("browser")
     object Notifications : Screen("notifications")
@@ -31,7 +30,6 @@ sealed class Screen(val route: String) {
     object SettingsMessages : Screen("settings_messages")
     object SettingsSocial : Screen("settings_social")
     object SettingsOptional : Screen("settings_optional")
-    object SettingsSkills : Screen("settings_skills")
     object SettingsBackup : Screen("settings_backup")
     object About : Screen("about")
 }

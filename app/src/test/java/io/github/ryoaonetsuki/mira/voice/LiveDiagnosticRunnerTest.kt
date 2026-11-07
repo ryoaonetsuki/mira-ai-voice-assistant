@@ -93,11 +93,12 @@ class LiveDiagnosticRunnerTest {
     }
 
     @Test
-    fun testAllStages_EndToEndSuccess() = runBlocking {
+    fun testAllStages_EndToEndSuccess_Relay() = runBlocking {
+        var interceptedRequest: Request? = null
         val customWsFactory = object : WebSocket.Factory {
             override fun newWebSocket(request: Request, listener: WebSocketListener): WebSocket {
-                lateinit var ws: MockWebSocket
-                ws = MockWebSocket(request, listener)
+                interceptedRequest = request
+                val ws = MockWebSocket(request, listener)
 
                 // Trigger onOpen (HTTP 101)
                 listener.onOpen(ws, dummyResponse(101, request))
@@ -127,10 +128,15 @@ class LiveDiagnosticRunnerTest {
         }
 
         val runner = LiveDiagnosticRunner(customWsFactory = customWsFactory)
-        val outcome = runner.runDiagnostic("AIzaSyTestKey123456789")
+        val outcome = runner.runDiagnostic("AIzaSyTestKey123456789", route = DiagnosticRoute.RELAY)
 
         assertTrue("Diagnostic must succeed: ${outcome.outcomeMessage}", outcome.isSuccess)
         assertTrue("Outcome message must start with PASSED", outcome.outcomeMessage.startsWith("PASSED"))
+
+        // Assert intercepted request used Relay URL and header
+        assertNotNull(interceptedRequest)
+        assertEquals("wss://mira-gemini-live-relay.salman-dev.workers.dev/live", interceptedRequest?.url.toString())
+        assertEquals("AIzaSyTestKey123456789", interceptedRequest?.header(RelayLiveClient.HEADER_MIRA_KEY))
 
         // Assert all 8 stages are SUCCESS
         assertEquals(8, outcome.stages.size)
@@ -138,21 +144,106 @@ class LiveDiagnosticRunnerTest {
             assertEquals("Stage ${stage.stageNumber} (${stage.name}) must be SUCCESS", StageStatus.SUCCESS, stage.status)
             assertNotNull("Stage ${stage.stageNumber} must have detail", stage.detail)
         }
+
+        // Assert frame logs recorded
+        assertTrue("Frame logs must not be empty", outcome.frameLogs.isNotEmpty())
     }
 
     @Test
-    fun testStage4_ServerReturnsErrorFrame() = runBlocking {
+    fun testAllStages_DirectRoute() = runBlocking {
+        var interceptedRequest: Request? = null
         val customWsFactory = object : WebSocket.Factory {
             override fun newWebSocket(request: Request, listener: WebSocketListener): WebSocket {
-                lateinit var ws: MockWebSocket
-                ws = MockWebSocket(request, listener)
+                interceptedRequest = request
+                val ws = MockWebSocket(request, listener)
                 listener.onOpen(ws, dummyResponse(101, request))
 
                 return object : WebSocket by ws {
                     override fun send(text: String): Boolean {
                         ws.sentMessages.add(text)
                         if (text.contains("\"setup\"")) {
-                            // Server error frame
+                            listener.onMessage(ws, "{\"setupComplete\": {}}")
+                        }
+                        if (text.contains("\"clientContent\"")) {
+                            listener.onMessage(
+                                ws,
+                                "{\"serverContent\": {\"modelTurn\": {\"parts\": [{\"inlineData\": {\"data\": \"YXVkaW8=\", \"mimeType\": \"audio/pcm\"}}]}, \"turnComplete\": true}}"
+                            )
+                        }
+                        return true
+                    }
+                }
+            }
+        }
+
+        val runner = LiveDiagnosticRunner(customWsFactory = customWsFactory)
+        val outcome = runner.runDiagnostic("AIzaSyTestKeyDirect123456", route = DiagnosticRoute.DIRECT)
+
+        assertTrue(outcome.isSuccess)
+        assertNotNull(interceptedRequest)
+        assertEquals(GeminiLiveClient.LIVE_WS_URL, interceptedRequest?.url.toString())
+        assertEquals("AIzaSyTestKeyDirect123456", interceptedRequest?.header("x-goog-api-key"))
+    }
+
+    @Test
+    fun testDiagnosticVariants_PayloadShapes() {
+        // Minimal V3: model + generationConfig + speechConfig + languageCode only
+        val v3Payload = LiveDiagnosticRunner.buildVariantSetupPayload(
+            variant = DiagnosticSetupVariant.MINIMAL_V3,
+            model = "models/gemini-3.8-live",
+            voiceName = "Aoede",
+            languageCode = "bn-BD"
+        )
+        val v3Setup = v3Payload.getJSONObject("setup")
+        assertEquals("models/gemini-3.8-live", v3Setup.getString("model"))
+        assertTrue(v3Setup.has("generationConfig"))
+        assertFalse("Minimal V3 must not have sessionResumption", v3Setup.has("sessionResumption"))
+        assertFalse("Minimal V3 must not have contextWindowCompression", v3Setup.has("contextWindowCompression"))
+        assertFalse("Minimal V3 must not have realtimeInputConfig", v3Setup.has("realtimeInputConfig"))
+        assertFalse("Minimal V3 must not have tools", v3Setup.has("tools"))
+
+        // No Resumption
+        val noResPayload = LiveDiagnosticRunner.buildVariantSetupPayload(
+            variant = DiagnosticSetupVariant.NO_RESUMPTION,
+            model = "models/gemini-3.8-live"
+        )
+        val noResSetup = noResPayload.getJSONObject("setup")
+        assertFalse("No Resumption variant must not have sessionResumption", noResSetup.has("sessionResumption"))
+        assertFalse("No Resumption variant must not have contextWindowCompression", noResSetup.has("contextWindowCompression"))
+        assertTrue("No Resumption variant must have realtimeInputConfig", noResSetup.has("realtimeInputConfig"))
+        assertFalse("No Resumption variant must not have tools", noResSetup.has("tools"))
+
+        // Standard
+        val stdPayload = LiveDiagnosticRunner.buildVariantSetupPayload(
+            variant = DiagnosticSetupVariant.STANDARD,
+            model = "models/gemini-3.8-live"
+        )
+        val stdSetup = stdPayload.getJSONObject("setup")
+        assertTrue("Standard must have sessionResumption", stdSetup.has("sessionResumption"))
+        assertTrue("Standard must have contextWindowCompression", stdSetup.has("contextWindowCompression"))
+        assertTrue("Standard must have realtimeInputConfig", stdSetup.has("realtimeInputConfig"))
+        assertFalse("Standard must not have tools", stdSetup.has("tools"))
+
+        // No Tools
+        val noToolsPayload = LiveDiagnosticRunner.buildVariantSetupPayload(
+            variant = DiagnosticSetupVariant.NO_TOOLS,
+            model = "models/gemini-3.8-live"
+        )
+        val noToolsSetup = noToolsPayload.getJSONObject("setup")
+        assertFalse("No Tools variant must not have tools", noToolsSetup.has("tools"))
+    }
+
+    @Test
+    fun testStage4_ServerReturnsErrorFrame() = runBlocking {
+        val customWsFactory = object : WebSocket.Factory {
+            override fun newWebSocket(request: Request, listener: WebSocketListener): WebSocket {
+                val ws = MockWebSocket(request, listener)
+                listener.onOpen(ws, dummyResponse(101, request))
+
+                return object : WebSocket by ws {
+                    override fun send(text: String): Boolean {
+                        ws.sentMessages.add(text)
+                        if (text.contains("\"setup\"")) {
                             listener.onMessage(ws, "{\"error\": {\"code\": 400, \"message\": \"Setup rejected by server\"}}")
                         }
                         return true

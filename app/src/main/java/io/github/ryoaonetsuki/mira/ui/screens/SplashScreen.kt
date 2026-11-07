@@ -5,6 +5,7 @@ import android.os.Environment
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -14,6 +15,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -51,15 +53,25 @@ fun SplashScreen(
     val context = LocalContext.current
     val palette = LocalMiraPalette.current
 
-    val infiniteTransition = rememberInfiniteTransition(label = "SplashScale")
+    val infiniteTransition = rememberInfiniteTransition(label = "SplashBreathing")
     val scale by infiniteTransition.animateFloat(
-        initialValue = 0.95f,
-        targetValue = 1.05f,
+        initialValue = 0.96f,
+        targetValue = 1.04f,
         animationSpec = infiniteRepeatable(
-            animation = tween(1400, easing = FastOutSlowInEasing),
+            animation = tween(1600, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
         label = "LogoPulse"
+    )
+
+    val glowAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.25f,
+        targetValue = 0.65f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1600, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "GlowPulse"
     )
 
     var blockingTitle by remember { mutableStateOf<String?>(null) }
@@ -157,36 +169,75 @@ fun SplashScreen(
             verticalArrangement = Arrangement.Center,
             modifier = Modifier.padding(24.dp)
         ) {
-            Image(
-                painter = painterResource(id = R.drawable.logo_chosen),
-                contentDescription = "Mira Logo",
-                modifier = Modifier
-                    .size(140.dp)
-                    .scale(scale)
-                    .clip(CircleShape)
-            )
+            // Logo Container with Breathing Volumetric Ambient Glow
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier.size(190.dp)
+            ) {
+                // Volumetric outer halo
+                Box(
+                    modifier = Modifier
+                        .size(180.dp)
+                        .scale(scale)
+                        .clip(CircleShape)
+                        .background(
+                            Brush.radialGradient(
+                                colors = listOf(
+                                    palette.primary.copy(alpha = glowAlpha * 0.45f),
+                                    palette.secondary.copy(alpha = glowAlpha * 0.2f),
+                                    Color.Transparent
+                                )
+                            )
+                        )
+                )
 
-            Spacer(modifier = Modifier.height(28.dp))
+                // Logo image
+                Image(
+                    painter = painterResource(id = R.drawable.logo_chosen),
+                    contentDescription = "Mira Logo",
+                    modifier = Modifier
+                        .size(136.dp)
+                        .scale(scale)
+                        .clip(CircleShape)
+                        .border(
+                            width = 2.dp,
+                            color = palette.primary.copy(alpha = 0.4f),
+                            shape = CircleShape
+                        )
+                )
+            }
 
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // App Title in headlineLarge scale
             Text(
                 text = "Mira AI",
-                fontSize = 32.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 2.sp,
+                style = MaterialTheme.typography.headlineLarge,
                 color = palette.textPrimary
             )
 
             Spacer(modifier = Modifier.height(6.dp))
 
+            // Subtitle
             Text(
                 text = "Voice • Brain • Companion",
-                fontSize = 14.sp,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
                 color = palette.primary,
                 letterSpacing = 1.sp
             )
 
-            if (blockingTitle != null) {
-                Spacer(modifier = Modifier.height(30.dp))
+            Spacer(modifier = Modifier.height(28.dp))
+
+            if (blockingTitle == null) {
+                // Subtle Loading Spinner
+                CircularProgressIndicator(
+                    color = palette.primary,
+                    strokeWidth = 2.dp,
+                    modifier = Modifier.size(20.dp)
+                )
+            } else {
+                // Blocking maintenance/update card
                 MiraCard(modifier = Modifier.fillMaxWidth()) {
                     Text(
                         text = blockingTitle!!,
@@ -209,6 +260,21 @@ fun SplashScreen(
                     )
                 }
             }
+        }
+
+        // Bottom Pinned Version Label
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 24.dp)
+        ) {
+            Text(
+                text = "v1.0.0 (Build 1)",
+                fontSize = 11.5.sp,
+                fontWeight = FontWeight.Medium,
+                color = palette.textSecondary.copy(alpha = 0.7f),
+                letterSpacing = 0.5.sp
+            )
         }
     }
 }

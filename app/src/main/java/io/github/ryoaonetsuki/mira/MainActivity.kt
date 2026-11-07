@@ -34,9 +34,9 @@ class MainActivity : FragmentActivity() {
         val userPrefs = UserPreferences(applicationContext)
 
         setContent {
-            val paletteName by userPrefs.themePaletteFlow.collectAsState(initial = "Midnight")
+            val themeMode by userPrefs.themeModeFlow.collectAsState(initial = "System")
 
-            MiraTheme(paletteName = paletteName) {
+            MiraTheme(themeMode = themeMode) {
                 Surface(
                     modifier = Modifier.fillMaxSize()
                 ) {

@@ -39,7 +39,7 @@ Developed by **Salman Biswas**.
   - **Tools Suite:** Free AI image generation (Pollinations), private web search, in-app tabbed browser, and update manager.
 - **Advanced Security & Theming:**
   - **Face Lock:** Biometric & device credential gating for sensitive memories and conversations.
-  - **Theme Palettes:** 7 selectable themes (*Midnight, Obsidian, Nocturne, Ember, Abyss, Rosewood, Daylight*).
+  - **Themes:** DeepSeek Original Dark & Light themes with auto system-follow and manual toggle.
   - **WhatsApp Auto-Reply:** `NotificationListenerService` responding to incoming chats with customizable templates.
 
 ---

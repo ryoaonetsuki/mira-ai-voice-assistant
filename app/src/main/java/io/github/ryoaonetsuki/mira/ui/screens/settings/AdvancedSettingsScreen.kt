@@ -1,9 +1,7 @@
 package io.github.ryoaonetsuki.mira.ui.screens.settings
 
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.Close
+import androidx.compose.ui.res.painterResource
+import io.github.ryoaonetsuki.mira.R
 import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
@@ -88,7 +86,7 @@ fun AdvancedSettingsScreen(
                 title = { Text("Advanced & Security", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(painter = painterResource(id = R.drawable.ic_fluent_arrow_left_24_regular), contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -253,8 +251,31 @@ fun AdvancedSettingsScreen(
                             Text("SOS Contacts (${sosContacts.size})", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
                             Text("Saved emergency contacts (stored on this device)", fontSize = 12.sp, color = palette.textSecondary)
                         }
-                        IconButton(onClick = { showSosDialog = true }) {
-                            Icon(Icons.Rounded.Add, contentDescription = "Add SOS", tint = palette.primary)
+                        Surface(
+                            color = palette.primary.copy(alpha = 0.15f),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { showSosDialog = true }
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            ) {
+                                Icon(
+                                    painter = painterResource(id = R.drawable.ic_fluent_person_add_24_regular),
+                                    contentDescription = null,
+                                    tint = palette.primary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Add",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = palette.primary
+                                )
+                            }
                         }
                     }
 
@@ -267,7 +288,12 @@ fun AdvancedSettingsScreen(
                         ) {
                             Text("${c.name} (${c.phone})", fontSize = 13.sp, color = palette.textPrimary, modifier = Modifier.weight(1f))
                             IconButton(onClick = { scope.launch { db.sosContactDao().deleteContact(c) } }) {
-                                Icon(Icons.Rounded.Close, contentDescription = "Delete", tint = palette.textSecondary, modifier = Modifier.size(16.dp))
+                                Icon(
+                                    painter = painterResource(id = R.drawable.ic_fluent_dismiss_24_regular),
+                                    contentDescription = "Delete",
+                                    tint = palette.textSecondary,
+                                    modifier = Modifier.size(16.dp)
+                                )
                             }
                         }
                     }

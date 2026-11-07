@@ -19,7 +19,7 @@ import io.github.ryoaonetsuki.mira.data.local.entities.*
         ScheduledPostEntity::class,
         SosContactEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class MiraDatabase : RoomDatabase() {
@@ -46,6 +46,12 @@ abstract class MiraDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE memories ADD COLUMN conversationId TEXT DEFAULT NULL")
+            }
+        }
+
         fun getInstance(context: Context): MiraDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -53,7 +59,7 @@ abstract class MiraDatabase : RoomDatabase() {
                     MiraDatabase::class.java,
                     "mira_database"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                     .fallbackToDestructiveMigration()
                     .build()
                 INSTANCE = instance

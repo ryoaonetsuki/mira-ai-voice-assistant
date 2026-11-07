@@ -1,7 +1,5 @@
 package io.github.ryoaonetsuki.mira.ui.screens.settings
 
-import androidx.compose.ui.res.painterResource
-import io.github.ryoaonetsuki.mira.R
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.background
@@ -12,10 +10,13 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.ryoaonetsuki.mira.R
 import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
 import io.github.ryoaonetsuki.mira.network.GeminiRestClient
 import io.github.ryoaonetsuki.mira.ui.components.MiraButton
@@ -60,10 +61,21 @@ fun EmailSettingsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Email Integration", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
+                title = {
+                    Text(
+                        text = "Email Integration",
+                        fontSize = 19.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = palette.textPrimary
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(painter = painterResource(id = R.drawable.ic_fluent_arrow_left_24_regular), contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_fluent_arrow_left_24_regular),
+                            contentDescription = "Back",
+                            tint = palette.textPrimary
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -76,19 +88,30 @@ fun EmailSettingsScreen(
                 .fillMaxSize()
                 .padding(padding)
                 .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             item {
-                Text("Sender Profile", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.primary)
-            }
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "Sender Profile",
+                    fontSize = 13.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = palette.primary
+                )
 
-            item {
+                Spacer(modifier = Modifier.height(6.dp))
+
                 MiraCard(modifier = Modifier.fillMaxWidth()) {
                     OutlinedTextField(
                         value = sendAsEmail,
                         onValueChange = { sendAsEmail = it },
                         label = { Text("Send email as (Email address)") },
                         singleLine = true,
+                        shape = RoundedCornerShape(12.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = palette.primary,
+                            unfocusedBorderColor = palette.borderSubtle
+                        ),
                         modifier = Modifier.fillMaxWidth()
                     )
                     Spacer(modifier = Modifier.height(10.dp))
@@ -96,17 +119,26 @@ fun EmailSettingsScreen(
                         value = signatureInput,
                         onValueChange = { signatureInput = it },
                         label = { Text("Signature") },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = palette.primary,
+                            unfocusedBorderColor = palette.borderSubtle
+                        ),
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
             }
 
             item {
-                Spacer(modifier = Modifier.height(4.dp))
-                Text("Compose Email", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.primary)
-            }
+                Text(
+                    text = "AI Email Composer",
+                    fontSize = 13.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = palette.primary
+                )
 
-            item {
+                Spacer(modifier = Modifier.height(6.dp))
+
                 MiraCard(modifier = Modifier.fillMaxWidth()) {
                     OutlinedTextField(
                         value = recipientInput,
@@ -114,25 +146,41 @@ fun EmailSettingsScreen(
                         label = { Text("To (Recipient)") },
                         placeholder = { Text("colleague@domain.com") },
                         singleLine = true,
+                        shape = RoundedCornerShape(12.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = palette.primary,
+                            unfocusedBorderColor = palette.borderSubtle
+                        ),
                         modifier = Modifier.fillMaxWidth()
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
                     OutlinedTextField(
                         value = emailSubjectInput,
                         onValueChange = { emailSubjectInput = it },
                         label = { Text("Subject") },
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = draftPromptInput,
-                        onValueChange = { draftPromptInput = it },
-                        label = { Text("What should the email say? (Brief instructions)") },
-                        minLines = 2,
+                        shape = RoundedCornerShape(12.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = palette.primary,
+                            unfocusedBorderColor = palette.borderSubtle
+                        ),
                         modifier = Modifier.fillMaxWidth()
                     )
                     Spacer(modifier = Modifier.height(10.dp))
+                    OutlinedTextField(
+                        value = draftPromptInput,
+                        onValueChange = { draftPromptInput = it },
+                        label = { Text("What should the email say? (Instructions)") },
+                        placeholder = { Text("e.g. Confirm the project sync meeting for tomorrow at 2 PM") },
+                        minLines = 2,
+                        shape = RoundedCornerShape(12.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = palette.primary,
+                            unfocusedBorderColor = palette.borderSubtle
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(14.dp))
                     MiraButton(
                         text = "AI Draft Email",
                         isLoading = isComposing,
@@ -161,27 +209,50 @@ fun EmailSettingsScreen(
             if (composedBody.isNotBlank()) {
                 item {
                     MiraCard(modifier = Modifier.fillMaxWidth()) {
-                        Text("Drafted Email Body", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.primary)
-                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "Drafted Email Body",
+                            fontSize = 14.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = palette.primary
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
                         OutlinedTextField(
                             value = composedBody,
                             onValueChange = { composedBody = it },
                             minLines = 4,
+                            shape = RoundedCornerShape(12.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = palette.primary,
+                                unfocusedBorderColor = palette.borderSubtle
+                            ),
                             modifier = Modifier.fillMaxWidth()
                         )
-                        Spacer(modifier = Modifier.height(10.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
                         Button(
                             onClick = { sendEmail() },
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
-                            modifier = Modifier.fillMaxWidth()
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = palette.primary,
+                                contentColor = if (palette.isDark) palette.background else Color.White
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp)
                         ) {
-                            Icon(painter = painterResource(id = R.drawable.ic_fluent_send_24_regular), contentDescription = null, tint = androidx.compose.ui.graphics.Color.Black)
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_fluent_send_24_regular),
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Open in Mail App & Send", color = androidx.compose.ui.graphics.Color.Black)
+                            Text("Open in Mail App & Send", fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }
+            }
+
+            item {
+                Spacer(modifier = Modifier.height(20.dp))
             }
         }
     }

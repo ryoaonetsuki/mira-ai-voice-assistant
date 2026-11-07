@@ -13,8 +13,6 @@ sealed class Screen(val route: String) {
     object CodeProjects : Screen("code_projects")
     object Whiteboard : Screen("whiteboard")
     object Vibes : Screen("vibes")
-    object Markets : Screen("markets")
-    object Marketing : Screen("marketing")
     object Licence : Screen("licence")
     object Extensions : Screen("extensions")
     object Browser : Screen("browser")

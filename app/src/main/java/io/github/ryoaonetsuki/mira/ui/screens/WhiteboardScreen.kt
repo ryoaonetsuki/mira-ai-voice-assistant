@@ -7,7 +7,6 @@ import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
 import android.widget.Toast
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -36,7 +35,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.ryoaonetsuki.mira.R
 import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
-import io.github.ryoaonetsuki.mira.ui.theme.MiraMotion
 
 data class DrawPath(val path: androidx.compose.ui.graphics.Path, val color: Color, val strokeWidth: Float)
 
@@ -51,15 +49,15 @@ fun WhiteboardScreen(
     val paths = remember { mutableStateListOf<DrawPath>() }
     val undonePaths = remember { mutableStateListOf<DrawPath>() }
     var currentPath by remember { mutableStateOf<androidx.compose.ui.graphics.Path?>(null) }
-    var selectedColor by remember { mutableStateOf(Color(0xFF22D3EE)) }
+    var selectedColor by remember { mutableStateOf(palette.primary) }
     var strokeWidth by remember { mutableFloatStateOf(8f) }
     var isEraser by remember { mutableStateOf(false) }
 
     val canvasBackgroundColor = palette.surfaceSubtle
 
     val primarySwatches = listOf(
-        Color(0xFF22D3EE), // Cyan Accent
-        Color(0xFF8B5CF6), // Violet Accent
+        palette.primary, // DeepSeek Blue
+        palette.secondary, // DeepSeek Slate Blue
         Color(0xFFFFFFFF), // Crisp White
         Color(0xFFFBBF24), // Warm Amber
         Color(0xFF10B981), // Emerald Green
@@ -341,11 +339,7 @@ fun WhiteboardScreen(
                         // 6 Primary Swatches
                         for (col in primarySwatches) {
                             val isSelected = !isEraser && selectedColor == col
-                            val animatedBorderColor by animateColorAsState(
-                                targetValue = if (isSelected) palette.primary else palette.borderSubtle.copy(alpha = 0.6f),
-                                animationSpec = MiraMotion.effectsSpec<Color>(),
-                                label = "SwatchBorder"
-                            )
+                            val borderColor = if (isSelected) palette.primary else palette.borderSubtle.copy(alpha = 0.6f)
 
                             Box(
                                 contentAlignment = Alignment.Center,
@@ -364,7 +358,7 @@ fun WhiteboardScreen(
                                         .background(col)
                                         .border(
                                             width = if (isSelected) 2.5.dp else 1.dp,
-                                            color = animatedBorderColor,
+                                            color = borderColor,
                                             shape = CircleShape
                                         )
                                 )

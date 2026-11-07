@@ -31,6 +31,32 @@ interface ChatDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMessage(message: ChatMessageEntity): Long
 
+    @Transaction
+    suspend fun ensureConversationExists(
+        conversationId: String,
+        defaultTitle: String = "New Chat"
+    ) {
+        if (getConversationById(conversationId) == null) {
+            insertConversation(
+                ConversationEntity(
+                    id = conversationId,
+                    title = defaultTitle,
+                    createdAt = System.currentTimeMillis(),
+                    updatedAt = System.currentTimeMillis()
+                )
+            )
+        }
+    }
+
+    @Transaction
+    suspend fun insertMessageEnsuringConversation(
+        message: ChatMessageEntity,
+        defaultTitle: String = "New Chat"
+    ): Long {
+        ensureConversationExists(message.conversationId, defaultTitle)
+        return insertMessage(message)
+    }
+
     @Query("DELETE FROM chat_messages WHERE conversationId = :conversationId")
     suspend fun deleteMessagesForConversation(conversationId: String)
 }

@@ -75,7 +75,6 @@ fun SetupScreen(
     val scope = rememberCoroutineScope()
     val securePrefs = remember { SecurePreferences(context) }
     val restClient = remember { GeminiRestClient() }
-    val serverVoiceClient = remember { io.github.ryoaonetsuki.mira.network.ServerVoiceClient() }
     val resolver = remember { io.github.ryoaonetsuki.mira.backend.ApiKeyResolver(context) }
 
     var currentStep by remember { mutableIntStateOf(startStep) }
@@ -86,11 +85,6 @@ fun SetupScreen(
     var keyStatus by remember { mutableStateOf(SetupKeyStatus.IDLE) }
     var isServerKeyAvailable by remember { mutableStateOf(false) }
 
-    var groqKeyInput by remember { mutableStateOf(securePrefs.getGroqApiKey() ?: "") }
-    var isGroqKeyVisible by remember { mutableStateOf(false) }
-    var isCheckingGroqKey by remember { mutableStateOf(false) }
-    var groqValidationMessage by remember { mutableStateOf<String?>(null) }
-    var groqKeyStatus by remember { mutableStateOf(SetupKeyStatus.IDLE) }
 
     var liveCapabilityMessage by remember { mutableStateOf<String?>(null) }
     var isLiveCapable by remember { mutableStateOf(false) }
@@ -101,7 +95,6 @@ fun SetupScreen(
 
     val testAndSaveKeys: () -> Unit = testAndSaveKeys@{
         val normalizedGemini = normalizeApiKey(apiKeyInput)
-        val trimmedGroq = groqKeyInput.trim()
 
         if (normalizedGemini.isBlank()) {
             keyStatus = SetupKeyStatus.INVALID
@@ -132,32 +125,6 @@ fun SetupScreen(
             liveCapabilityMessage = liveOutcome.message
             io.github.ryoaonetsuki.mira.voice.LiveVoiceDiagnostics.updateLiveCapability(liveOutcome.message)
 
-            // Validate Groq ONLY if user provided a key (Groq is optional, spec §3.3)
-            if (trimmedGroq.isNotBlank()) {
-                isCheckingGroqKey = true
-                groqKeyStatus = SetupKeyStatus.CHECKING
-                groqValidationMessage = "Validating Groq key..."
-                val groqOutcome = serverVoiceClient.validateGroqKey(trimmedGroq)
-                isCheckingGroqKey = false
-                when (groqOutcome) {
-                    is KeyValidationOutcome.Valid -> {
-                        groqKeyStatus = SetupKeyStatus.VALID
-                        groqValidationMessage = "Valid Groq Key! Stored encrypted on device."
-                        securePrefs.setGroqApiKey(trimmedGroq)
-                    }
-                    is KeyValidationOutcome.TransientServerBusy -> {
-                        groqKeyStatus = SetupKeyStatus.TRANSIENT
-                        groqValidationMessage = groqOutcome.message
-                        securePrefs.setGroqApiKey(trimmedGroq)
-                    }
-                    is KeyValidationOutcome.InvalidKey -> {
-                        groqKeyStatus = SetupKeyStatus.INVALID
-                        groqValidationMessage = groqOutcome.userFacingMessage
-                    }
-                }
-            } else {
-                securePrefs.clearGroqApiKey()
-            }
 
             isCheckingKey = false
 
@@ -202,53 +169,6 @@ fun SetupScreen(
         }
     }
 
-    val testGroqKeyOnly: () -> Unit = {
-        val trimmed = groqKeyInput.trim()
-        if (trimmed.isBlank()) {
-            groqKeyStatus = SetupKeyStatus.INVALID
-            groqValidationMessage = "Groq API key is required — please enter your Groq key"
-        } else if (!SecurePreferences.isPlausibleGroqKey(trimmed)) {
-            groqKeyStatus = SetupKeyStatus.INVALID
-            groqValidationMessage = "Groq key must start with 'gsk_' and be at least 20 characters"
-        } else if (!securePrefs.isSecureStorageAvailable()) {
-            groqKeyStatus = SetupKeyStatus.INVALID
-            groqValidationMessage = "Secure storage unavailable on this device — key was not saved"
-        } else {
-            isCheckingGroqKey = true
-            groqKeyStatus = SetupKeyStatus.CHECKING
-            groqValidationMessage = "Validating key with Groq..."
-            scope.launch {
-                val outcome = serverVoiceClient.validateGroqKey(trimmed)
-                isCheckingGroqKey = false
-                when (outcome) {
-                    is KeyValidationOutcome.Valid -> {
-                        val saved = securePrefs.setGroqApiKey(trimmed)
-                        if (saved) {
-                            groqKeyStatus = SetupKeyStatus.VALID
-                            groqValidationMessage = "Valid Groq Key! Stored encrypted on device."
-                        } else {
-                            groqKeyStatus = SetupKeyStatus.INVALID
-                            groqValidationMessage = "Secure storage unavailable on this device — key was not saved"
-                        }
-                    }
-                    is KeyValidationOutcome.TransientServerBusy -> {
-                        val saved = securePrefs.setGroqApiKey(trimmed)
-                        if (saved) {
-                            groqKeyStatus = SetupKeyStatus.TRANSIENT
-                            groqValidationMessage = outcome.message
-                        } else {
-                            groqKeyStatus = SetupKeyStatus.INVALID
-                            groqValidationMessage = "Groq servers busy. Key was NOT rejected — try again shortly."
-                        }
-                    }
-                    is KeyValidationOutcome.InvalidKey -> {
-                        groqKeyStatus = SetupKeyStatus.INVALID
-                        groqValidationMessage = outcome.userFacingMessage
-                    }
-                }
-            }
-        }
-    }
 
     // Permission states
     var hasMicPermission by remember {
@@ -341,16 +261,16 @@ fun SetupScreen(
                     .fillMaxWidth()
                     .verticalScroll(rememberScrollState())
             ) {
-                // STEP 1: API Keys
+                // STEP 1: API Key
                 Text(
-                    text = "Add Your API Keys",
+                    text = "Add Your API Key",
                     fontSize = 24.sp,
                     fontWeight = FontWeight.Bold,
                     color = palette.textPrimary
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Gemini and Groq keys are required — free, fast, and no credit card needed.",
+                    text = "Only your Gemini key is needed for chat and voice.",
                     fontSize = 14.sp,
                     color = palette.textSecondary,
                     lineHeight = 20.sp
@@ -368,7 +288,7 @@ fun SetupScreen(
                     )
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "1. Gemini key (required) — gives Mira her intelligence and native Live voice\n2. Groq key (optional) — optional alternative server voice, addable anytime",
+                        text = "Get your free Gemini key, paste it below, then save it to continue.",
                         fontSize = 13.sp,
                         color = palette.textSecondary,
                         lineHeight = 20.sp
@@ -467,105 +387,19 @@ fun SetupScreen(
                     MiraButton(
                         text = "Test & Save",
                         onClick = testAndSaveKeys,
-                        isLoading = isCheckingKey || isCheckingGroqKey,
+                        isLoading = isCheckingKey,
                         modifier = Modifier.weight(1f)
                     )
                 }
 
-                Spacer(modifier = Modifier.height(20.dp))
-
-                // FIELD 2: Groq API Key (OPTIONAL for alternative voice)
-                OutlinedTextField(
-                    value = groqKeyInput,
-                    onValueChange = {
-                        groqKeyInput = it
-                        groqValidationMessage = null
-                        groqKeyStatus = SetupKeyStatus.IDLE
-                    },
-                    label = { Text("Groq API Key (Optional — alternative voice)") },
-                    placeholder = { Text("Paste your Groq key (optional) — starts with gsk_") },
-                    visualTransformation = if (isGroqKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                    trailingIcon = {
-                        IconButton(onClick = { isGroqKeyVisible = !isGroqKeyVisible }) {
-                            Icon(
-                                imageVector = if (isGroqKeyVisible) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
-                                contentDescription = "Toggle Visibility",
-                                tint = palette.textSecondary
-                            )
-                        }
-                    },
-                    singleLine = true,
-                    shape = RoundedCornerShape(14.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = palette.primary,
-                        unfocusedBorderColor = palette.surfaceVariant,
-                        focusedTextColor = palette.textPrimary,
-                        unfocusedTextColor = palette.textPrimary,
-                        focusedContainerColor = palette.surface,
-                        unfocusedContainerColor = palette.surface
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                // Hint line under the Groq field
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = "Optional for alternative voice. Native Gemini Live only requires a Gemini API key.",
-                    fontSize = 12.sp,
-                    color = palette.textSecondary,
-                    lineHeight = 17.sp
-                )
-
-                if (groqValidationMessage != null) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    val gMsgColor = when (groqKeyStatus) {
-                        SetupKeyStatus.VALID -> Color(0xFF10B981)
-                        SetupKeyStatus.TRANSIENT -> Color(0xFFF59E0B)
-                        SetupKeyStatus.INVALID -> Color(0xFFEF4444)
-                        SetupKeyStatus.CHECKING, SetupKeyStatus.IDLE -> palette.textSecondary
-                    }
-                    Text(
-                        text = groqValidationMessage!!,
-                        fontSize = 13.sp,
-                        color = gMsgColor
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                // Groq Action Buttons
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    OutlinedButton(
-                        onClick = {
-                            val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://console.groq.com/keys"))
-                            browserIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                            context.startActivity(browserIntent)
-                        },
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = palette.primary),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("Get Free Key")
-                    }
-
-                    MiraButton(
-                        text = "Test Groq Key",
-                        onClick = testGroqKeyOnly,
-                        isLoading = isCheckingGroqKey,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
 
                 Spacer(modifier = Modifier.height(24.dp))
 
                 // Primary Save & Continue Button
                 MiraButton(
-                    text = "Save Keys & Continue →",
+                    text = "Save Key & Continue →",
                     onClick = testAndSaveKeys,
-                    isLoading = isCheckingKey || isCheckingGroqKey,
+                    isLoading = isCheckingKey,
                     modifier = Modifier.fillMaxWidth()
                 )
 

@@ -386,6 +386,7 @@ fun RulesScreen(
                             label = { Text("Rule Instruction") },
                             shape = RoundedCornerShape(12.dp),
                             minLines = 2,
+                            maxLines = 5,
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedContainerColor = palette.surfaceVariant,
                                 unfocusedContainerColor = palette.surfaceVariant,
@@ -394,7 +395,9 @@ fun RulesScreen(
                                 focusedBorderColor = palette.primary,
                                 unfocusedBorderColor = palette.borderSubtle
                             ),
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 120.dp)
                         )
                     }
                 },

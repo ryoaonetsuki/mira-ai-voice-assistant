@@ -446,6 +446,7 @@ function handleVoiceSession(ws, groqKey, geminiKey) {
     };
 
     let llmSuccess = false;
+    let lastErrorDetail = "";
 
     // 1. Primary LLM: Groq openai/gpt-oss-120b streaming
     try {
@@ -454,10 +455,17 @@ function handleVoiceSession(ws, groqKey, geminiKey) {
     } catch (groqErr) {
       if (signal.aborted) return;
       const msg = String(groqErr.message || "");
+      console.error("[server-voice] Groq streaming chat failed:", msg);
       if (msg.includes("401") || msg.includes("403")) {
-        sendJson({ type: "error", code: "groq_failed", message: "API key problem — check your keys in Settings" });
+        sendJson({
+          type: "error",
+          code: "groq_failed",
+          message: "API key problem — check your keys in Settings",
+          detail: "Groq auth rejected: " + msg.slice(0, 100)
+        });
         return;
       }
+      lastErrorDetail = "Groq: " + msg.slice(0, 80);
       // Non-auth error: fall back to Gemini streaming ladder
     }
 
@@ -469,11 +477,23 @@ function handleVoiceSession(ws, groqKey, geminiKey) {
       } catch (geminiErr) {
         if (signal.aborted) return;
         const msg = String(geminiErr.message || "");
+        console.error("[server-voice] Gemini fallback streaming chat failed:", msg);
         if (msg.includes("401") || msg.includes("403")) {
-          sendJson({ type: "error", code: "gemini_failed", message: "API key problem — check your keys in Settings" });
+          sendJson({
+            type: "error",
+            code: "gemini_failed",
+            message: "API key problem — check your keys in Settings",
+            detail: "Gemini auth rejected: " + msg.slice(0, 100)
+          });
           return;
         }
-        sendJson({ type: "error", code: "gemini_failed", message: "Chat service unavailable — please try again" });
+        const fullDetail = (lastErrorDetail ? lastErrorDetail + "; " : "") + "Gemini: " + msg.slice(0, 80);
+        sendJson({
+          type: "error",
+          code: "gemini_failed",
+          message: "Chat service unavailable (" + fullDetail + ") — please try again",
+          detail: fullDetail
+        });
         return;
       }
     }

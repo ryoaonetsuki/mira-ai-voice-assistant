@@ -144,24 +144,18 @@ fun MiraNavGraph(
                 )
             ) { backStackEntry ->
                 val id = backStackEntry.arguments?.getString("id").orEmpty()
-                ModalNavigationDrawer(
-                    drawerState = drawerState,
-                    drawerContent = appDrawerContent
-                ) {
-                    ChatScreen(
-                        initialOpenLink = android.net.Uri.Builder()
-                            .scheme("mira")
-                            .authority("project")
-                            .appendPath(id)
-                            .build()
-                            .toString(),
-                        onBack = { navController.popBackStack() },
-                        onOpenDrawer = { scope.launch { drawerState.open() } },
-                        onOpenBrowser = { url ->
-                            navController.navigate("browser?url=${java.net.URLEncoder.encode(url, "UTF-8")}")
-                        }
-                    )
-                }
+                ChatScreen(
+                    initialOpenLink = android.net.Uri.Builder()
+                        .scheme("mira")
+                        .authority("project")
+                        .appendPath(id)
+                        .build()
+                        .toString(),
+                    onBack = { navController.popBackStack() },
+                    onOpenBrowser = { url ->
+                        navController.navigate("browser?url=${java.net.URLEncoder.encode(url, "UTF-8")}")
+                    }
+                )
             }
 
             composable(
@@ -172,24 +166,18 @@ fun MiraNavGraph(
                 )
             ) { backStackEntry ->
                 val name = backStackEntry.arguments?.getString("name").orEmpty()
-                ModalNavigationDrawer(
-                    drawerState = drawerState,
-                    drawerContent = appDrawerContent
-                ) {
-                    ChatScreen(
-                        initialOpenLink = android.net.Uri.Builder()
-                            .scheme("mira")
-                            .authority("file")
-                            .appendPath(name)
-                            .build()
-                            .toString(),
-                        onBack = { navController.popBackStack() },
-                        onOpenDrawer = { scope.launch { drawerState.open() } },
-                        onOpenBrowser = { url ->
-                            navController.navigate("browser?url=${java.net.URLEncoder.encode(url, "UTF-8")}")
-                        }
-                    )
-                }
+                ChatScreen(
+                    initialOpenLink = android.net.Uri.Builder()
+                        .scheme("mira")
+                        .authority("file")
+                        .appendPath(name)
+                        .build()
+                        .toString(),
+                    onBack = { navController.popBackStack() },
+                    onOpenBrowser = { url ->
+                        navController.navigate("browser?url=${java.net.URLEncoder.encode(url, "UTF-8")}")
+                    }
+                )
             }
 
             composable(
@@ -202,19 +190,13 @@ fun MiraNavGraph(
                     }
                 )
             ) { backStackEntry ->
-                ModalNavigationDrawer(
-                    drawerState = drawerState,
-                    drawerContent = appDrawerContent
-                ) {
-                    ChatScreen(
-                        initialPrompt = backStackEntry.arguments?.getString("prompt"),
-                        onBack = { navController.popBackStack() },
-                        onOpenDrawer = { scope.launch { drawerState.open() } },
-                        onOpenBrowser = { url ->
-                            navController.navigate("browser?url=${java.net.URLEncoder.encode(url, "UTF-8")}")
-                        }
-                    )
-                }
+                ChatScreen(
+                    initialPrompt = backStackEntry.arguments?.getString("prompt"),
+                    onBack = { navController.popBackStack() },
+                    onOpenBrowser = { url ->
+                        navController.navigate("browser?url=${java.net.URLEncoder.encode(url, "UTF-8")}")
+                    }
+                )
             }
 
             composable(Screen.Scan.route) {

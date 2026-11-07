@@ -3,7 +3,6 @@ package io.github.ryoaonetsuki.mira.ui.components
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Brush
-import androidx.compose.material.icons.rounded.Campaign
 import androidx.compose.material.icons.rounded.ChatBubble
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Extension
@@ -13,7 +12,6 @@ import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Rule
 import androidx.compose.material.icons.rounded.Settings
-import androidx.compose.material.icons.rounded.TrendingUp
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -59,8 +57,6 @@ fun AppDrawer(
         DrawerItem("Code Projects", Screen.CodeProjects.route, Icons.Rounded.Code, "Creation"),
         DrawerItem("Whiteboard", Screen.Whiteboard.route, Icons.Rounded.Brush, "Creation"),
         DrawerItem("Vibes", Screen.Vibes.route, Icons.Rounded.GraphicEq, "Lifestyle"),
-        DrawerItem("Markets", Screen.Markets.route, Icons.Rounded.TrendingUp, "Lifestyle"),
-        DrawerItem("Marketing", Screen.Marketing.route, Icons.Rounded.Campaign, "Creation"),
         DrawerItem("Extensions", Screen.Extensions.route, Icons.Rounded.Extension, "System"),
         DrawerItem("Settings", Screen.SettingsHub.route, Icons.Rounded.Settings, "System"),
         DrawerItem("About", Screen.About.route, Icons.Rounded.Info, "System")

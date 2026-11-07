@@ -179,7 +179,11 @@ class GeminiLiveClient(
 
                 transitionTo(LiveClientState.CONFIGURING)
                 LiveVoiceDiagnostics.updateStage("CONFIGURING")
-                listener.onConnected()
+                try {
+                    listener.onConnected()
+                } catch (e: Exception) {
+                    Log.e(TAG, "MIRA_LIVE_VOICE: Error in listener.onConnected: ${e.message}")
+                }
 
                 // Send ONE setup payload (spec §2)
                 val bcp47 = mapLanguageToBcp47(language)
@@ -221,7 +225,11 @@ class GeminiLiveClient(
                         LiveVoiceDiagnostics.updateSetupDuration(setupMs)
                         LiveVoiceDiagnostics.updateStage("LISTENING")
                         transitionTo(LiveClientState.LISTENING)
-                        listener.onSetupComplete()
+                        try {
+                            listener.onSetupComplete()
+                        } catch (e: Exception) {
+                            Log.e(TAG, "MIRA_LIVE_VOICE: Error in listener.onSetupComplete: ${e.message}")
+                        }
                         startStallWatchdog()
                         return
                     }
@@ -240,7 +248,11 @@ class GeminiLiveClient(
                         if (newHandle.isNotBlank()) {
                             latestResumptionHandle = newHandle
                             Log.i(TAG, "MIRA_LIVE_VOICE: Received new session resumption handle (length=${newHandle.length})")
-                            listener.onSessionResumptionUpdate(newHandle)
+                            try {
+                                listener.onSessionResumptionUpdate(newHandle)
+                            } catch (e: Exception) {
+                                Log.e(TAG, "MIRA_LIVE_VOICE: Error in listener.onSessionResumptionUpdate: ${e.message}")
+                            }
                         }
                     }
 
@@ -267,7 +279,11 @@ class GeminiLiveClient(
                         if (interrupted) {
                             Log.i(TAG, "MIRA_LIVE_VOICE: Server interrupted received — model turn cancelled")
                             transitionTo(LiveClientState.INTERRUPTED)
-                            listener.onInterrupted()
+                            try {
+                                listener.onInterrupted()
+                            } catch (e: Exception) {
+                                Log.e(TAG, "MIRA_LIVE_VOICE: Error in listener.onInterrupted: ${e.message}")
+                            }
                             transitionTo(LiveClientState.LISTENING)
                             LiveVoiceDiagnostics.updateStage("LISTENING")
                         }
@@ -295,7 +311,11 @@ class GeminiLiveClient(
                                                     transitionTo(LiveClientState.SPEAKING)
                                                     LiveVoiceDiagnostics.updateStage("SPEAKING")
                                                 }
-                                                listener.onAudioData(pcmBytes)
+                                                try {
+                                                    listener.onAudioData(pcmBytes)
+                                                } catch (e: Exception) {
+                                                    Log.e(TAG, "MIRA_LIVE_VOICE: Error in listener.onAudioData: ${e.message}")
+                                                }
                                             }
                                         }
                                     }
@@ -306,7 +326,11 @@ class GeminiLiveClient(
                         // Turn complete
                         if (serverContent.optBoolean("turnComplete", false)) {
                             Log.i(TAG, "MIRA_LIVE_VOICE: Server turnComplete received")
-                            listener.onTurnComplete()
+                            try {
+                                listener.onTurnComplete()
+                            } catch (e: Exception) {
+                                Log.e(TAG, "MIRA_LIVE_VOICE: Error in listener.onTurnComplete: ${e.message}")
+                            }
                             if (_state.value == LiveClientState.SPEAKING || _state.value == LiveClientState.PROCESSING) {
                                 transitionTo(LiveClientState.LISTENING)
                                 LiveVoiceDiagnostics.updateStage("LISTENING")
@@ -320,7 +344,11 @@ class GeminiLiveClient(
                             val text = inputTrans.optString("text", "").trim()
                             if (text.isNotBlank()) {
                                 Log.i(TAG, "MIRA_LIVE_VOICE: User transcription: $text")
-                                listener.onTranscript(text, isUser = true)
+                                try {
+                                    listener.onTranscript(text, isUser = true)
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "MIRA_LIVE_VOICE: Error in listener.onTranscript: ${e.message}")
+                                }
                             }
                         }
 
@@ -331,7 +359,11 @@ class GeminiLiveClient(
                             val text = outputTrans.optString("text", "").trim()
                             if (text.isNotBlank()) {
                                 Log.i(TAG, "MIRA_LIVE_VOICE: Model transcription: $text")
-                                listener.onTranscript(text, isUser = false)
+                                try {
+                                    listener.onTranscript(text, isUser = false)
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "MIRA_LIVE_VOICE: Error in listener.onTranscript: ${e.message}")
+                                }
                             }
                         }
                     }
@@ -383,7 +415,11 @@ class GeminiLiveClient(
                 if (code == 1000) {
                     transitionTo(LiveClientState.STOPPED)
                     LiveVoiceDiagnostics.updateStage("STOPPED")
-                    listener.onClosed("Normal closure (1000)")
+                    try {
+                        listener.onClosed("Normal closure (1000)")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "MIRA_LIVE_VOICE: Error in listener.onClosed: ${e.message}")
+                    }
                 } else if (reconnectAttempts < MAX_AUTO_RECONNECTS) {
                     handleAutoReconnect("WS closed (code=$code)")
                 } else {
@@ -415,7 +451,11 @@ class GeminiLiveClient(
                         Log.w(TAG, "MIRA_LIVE_VOICE: Session stalled (>30s silence after user audio)")
                         val stallMsg = "Live voice: Server did not answer — tap to retry"
                         handleError(stallMsg, code = null)
-                        listener.onStalled()
+                        try {
+                            listener.onStalled()
+                        } catch (e: Exception) {
+                            Log.e(TAG, "MIRA_LIVE_VOICE: Error in listener.onStalled: ${e.message}")
+                        }
                         break
                     }
                 }
@@ -461,17 +501,21 @@ class GeminiLiveClient(
         webSocket = null
         isRunning.set(false)
 
-        listener.onError(message)
+        try {
+            listener.onError(message)
+        } catch (e: Exception) {
+            Log.e(TAG, "MIRA_LIVE_VOICE: Error in listener.onError: ${e.message}")
+        }
     }
 
     /**
      * Streams a 16kHz PCM16 mono chunk (20–40ms) to the server.
      * Frames are streamed continuously including silence.
+     * Gated strictly to LISTENING, PROCESSING, or SPEAKING states (spec §3).
      */
     fun sendAudioChunk(pcmBytes: ByteArray) {
         val currentState = _state.value
         if (currentState != LiveClientState.LISTENING &&
-            currentState != LiveClientState.CONFIGURING &&
             currentState != LiveClientState.PROCESSING &&
             currentState != LiveClientState.SPEAKING
         ) return

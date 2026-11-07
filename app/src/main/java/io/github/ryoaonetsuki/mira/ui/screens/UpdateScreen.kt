@@ -2,9 +2,13 @@ package io.github.ryoaonetsuki.mira.ui.screens
 
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -38,6 +42,9 @@ fun UpdateScreen(
     var releaseInfo by remember { mutableStateOf<ReleaseInfo?>(null) }
     var checkError by remember { mutableStateOf<String?>(null) }
 
+    val installedVersion = "1.0.0"
+    val installedBuild = "1"
+
     fun checkForUpdates() {
         isChecking = true
         checkError = null
@@ -59,10 +66,21 @@ fun UpdateScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("App Updates", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
+                title = {
+                    Text(
+                        text = "App Updates",
+                        fontSize = 19.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = palette.textPrimary
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(painter = painterResource(id = R.drawable.ic_fluent_arrow_left_24_regular), contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_fluent_arrow_left_24_regular),
+                            contentDescription = "Back",
+                            tint = palette.textPrimary
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -70,106 +88,253 @@ fun UpdateScreen(
         },
         containerColor = palette.background
     ) { padding ->
-        Column(
+        LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+                .padding(horizontal = 20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier
-                    .size(68.dp)
-                    .clip(CircleShape)
-                    .background(palette.primary.copy(alpha = 0.15f))
-            ) {
-                Icon(
-                    painter = painterResource(id = R.drawable.ic_fluent_arrow_download_24_regular),
-                    contentDescription = null,
-                    tint = palette.primary,
-                    modifier = Modifier.size(34.dp)
-                )
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Text(
-                text = "Mira AI Releases",
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold,
-                color = palette.textPrimary
-            )
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            Text(
-                text = "Installed Version: 1.0.0 (Build 1)",
-                fontSize = 13.sp,
-                color = palette.textSecondary
-            )
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            if (isChecking) {
-                CircularProgressIndicator(color = palette.primary, modifier = Modifier.size(32.dp))
+            item {
                 Spacer(modifier = Modifier.height(8.dp))
-                Text("Checking GitHub releases…", fontSize = 13.sp, color = palette.textSecondary)
-            } else if (releaseInfo != null) {
-                val rel = releaseInfo!!
-                MiraCard(modifier = Modifier.fillMaxWidth()) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Latest Release: ${rel.tagName}",
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = palette.primary
-                            )
-                            Text(
-                                text = rel.name,
-                                fontSize = 13.sp,
-                                color = palette.textPrimary
-                            )
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Text(
-                        text = rel.notes,
-                        fontSize = 13.sp,
-                        color = palette.textSecondary,
-                        lineHeight = 18.sp
+
+                // Hero Icon with Ambient Halo
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .size(72.dp)
+                        .clip(CircleShape)
+                        .background(palette.primary.copy(alpha = 0.15f))
+                        .border(1.5.dp, palette.primary.copy(alpha = 0.35f), CircleShape)
+                ) {
+                    Icon(
+                        painter = painterResource(id = R.drawable.ic_fluent_arrow_download_24_regular),
+                        contentDescription = null,
+                        tint = palette.primary,
+                        modifier = Modifier.size(34.dp)
                     )
                 }
 
-                Spacer(modifier = Modifier.height(20.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
-                MiraButton(
-                    text = "Download Release APK",
-                    onClick = {
-                        val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(rel.downloadUrl))
-                        browserIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                        context.startActivity(browserIntent)
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                )
-            } else {
                 Text(
-                    text = checkError ?: "Unable to check updates.",
-                    color = Color(0xFFEF4444),
-                    fontSize = 13.sp
+                    text = "Mira AI Releases",
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = palette.textPrimary
                 )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Version Badge
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = palette.surfaceVariant.copy(alpha = 0.65f),
+                    border = BorderStroke(1.dp, palette.borderSubtle)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFF10B981))
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Installed: v$installedVersion (Build $installedBuild)",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = palette.textSecondary
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
             }
 
-            Spacer(modifier = Modifier.weight(1f))
+            // Checking State Card
+            if (isChecking) {
+                item {
+                    MiraCard(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 8.dp)
+                        ) {
+                            CircularProgressIndicator(
+                                color = palette.primary,
+                                strokeWidth = 2.5.dp,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.width(14.dp))
+                            Column {
+                                Text(
+                                    text = "Checking GitHub for updates…",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = palette.textPrimary
+                                )
+                                Text(
+                                    text = "Connecting to repository release channel",
+                                    fontSize = 12.sp,
+                                    color = palette.textSecondary
+                                )
+                            }
+                        }
+                    }
+                }
+            } else if (releaseInfo != null) {
+                val rel = releaseInfo!!
+                val isNewer = rel.tagName.contains("v") && !rel.tagName.contains(installedVersion)
 
-            OutlinedButton(
-                onClick = { checkForUpdates() },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(painter = painterResource(id = R.drawable.ic_fluent_arrow_clockwise_24_regular), contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Check Again")
+                // Version Info Card
+                item {
+                    MiraCard(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = "Release ${rel.tagName}",
+                                        fontSize = 16.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = palette.primary
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Surface(
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = if (isNewer) palette.primary.copy(alpha = 0.18f) else Color(0xFF10B981).copy(alpha = 0.18f),
+                                        border = BorderStroke(1.dp, if (isNewer) palette.primary.copy(alpha = 0.4f) else Color(0xFF10B981).copy(alpha = 0.4f))
+                                    ) {
+                                        Text(
+                                            text = if (isNewer) "Update Available" else "Up to Date",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = if (isNewer) palette.primary else Color(0xFF10B981),
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = rel.name,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = palette.textPrimary
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Release Notes Card
+                item {
+                    MiraCard(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            text = "Release Notes",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = palette.primary
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = rel.notes.ifBlank { "No release notes published for this build." },
+                            fontSize = 13.sp,
+                            color = palette.textSecondary,
+                            lineHeight = 19.sp
+                        )
+                    }
+                }
+
+                // Download Release APK Action
+                item {
+                    MiraButton(
+                        text = "Download Release APK",
+                        onClick = {
+                            val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(rel.downloadUrl))
+                            browserIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                            context.startActivity(browserIntent)
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            } else if (checkError != null) {
+                // Error Card
+                item {
+                    MiraCard(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFFEF4444).copy(alpha = 0.15f))
+                            ) {
+                                Icon(
+                                    painter = painterResource(id = R.drawable.ic_fluent_alert_24_regular),
+                                    contentDescription = null,
+                                    tint = Color(0xFFEF4444),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Unable to check updates",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color(0xFFEF4444)
+                                )
+                                Text(
+                                    text = checkError!!,
+                                    fontSize = 12.sp,
+                                    color = palette.textSecondary,
+                                    lineHeight = 16.sp
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Check Again Button
+            item {
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedButton(
+                    onClick = { checkForUpdates() },
+                    enabled = !isChecking,
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = palette.primary
+                    ),
+                    border = BorderStroke(1.dp, palette.borderSubtle),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                ) {
+                    Icon(
+                        painter = painterResource(id = R.drawable.ic_fluent_arrow_clockwise_24_regular),
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = if (isChecking) "Checking..." else "Check for Updates",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+                Spacer(modifier = Modifier.height(20.dp))
             }
         }
     }

@@ -77,9 +77,9 @@ fun MiraNavGraph(
                 },
                 containerColor = palette.background
             ) { padding ->
-                // HomeScreen fills the full scaffold area including padding.
-                // Its internal Column adds the bottom nav bar at the bottom.
+                // Apply Scaffold padding to HomeScreen so cards sit cleanly below AppTopBar (spec §7)
                 HomeScreen(
+                    modifier = Modifier.padding(padding),
                     onNavigate = { route ->
                         navController.navigate(route)
                     }

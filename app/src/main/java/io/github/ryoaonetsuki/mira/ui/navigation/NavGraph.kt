@@ -43,6 +43,20 @@ fun MiraNavGraph(
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route ?: Screen.Splash.route
 
+    val appDrawerContent: @Composable () -> Unit = {
+        AppDrawer(
+            currentRoute = currentRoute,
+            onNavigate = { route ->
+                navController.navigate(route) {
+                    launchSingleTop = true
+                }
+            },
+            onCloseDrawer = {
+                scope.launch { drawerState.close() }
+            }
+        )
+    }
+
     // Keep the graph mounted on Home so notification deep links always resolve.
     // Navigation handles the Activity's launch intent automatically on cold start.
     LaunchedEffect(navigationIntent) {
@@ -95,19 +109,7 @@ fun MiraNavGraph(
             composable(Screen.Home.route) {
                 ModalNavigationDrawer(
                     drawerState = drawerState,
-                    drawerContent = {
-                        AppDrawer(
-                            currentRoute = currentRoute,
-                            onNavigate = { route ->
-                                navController.navigate(route) {
-                                    launchSingleTop = true
-                                }
-                            },
-                            onCloseDrawer = {
-                                scope.launch { drawerState.close() }
-                            }
-                        )
-                    }
+                    drawerContent = appDrawerContent
                 ) {
                     Scaffold(
                         topBar = {
@@ -142,18 +144,24 @@ fun MiraNavGraph(
                 )
             ) { backStackEntry ->
                 val id = backStackEntry.arguments?.getString("id").orEmpty()
-                ChatScreen(
-                    initialOpenLink = android.net.Uri.Builder()
-                        .scheme("mira")
-                        .authority("project")
-                        .appendPath(id)
-                        .build()
-                        .toString(),
-                    onBack = { navController.popBackStack() },
-                    onOpenBrowser = { url ->
-                        navController.navigate("browser?url=${java.net.URLEncoder.encode(url, "UTF-8")}")
-                    }
-                )
+                ModalNavigationDrawer(
+                    drawerState = drawerState,
+                    drawerContent = appDrawerContent
+                ) {
+                    ChatScreen(
+                        initialOpenLink = android.net.Uri.Builder()
+                            .scheme("mira")
+                            .authority("project")
+                            .appendPath(id)
+                            .build()
+                            .toString(),
+                        onBack = { navController.popBackStack() },
+                        onOpenDrawer = { scope.launch { drawerState.open() } },
+                        onOpenBrowser = { url ->
+                            navController.navigate("browser?url=${java.net.URLEncoder.encode(url, "UTF-8")}")
+                        }
+                    )
+                }
             }
 
             composable(
@@ -164,15 +172,24 @@ fun MiraNavGraph(
                 )
             ) { backStackEntry ->
                 val name = backStackEntry.arguments?.getString("name").orEmpty()
-                ChatScreen(
-                    initialOpenLink = android.net.Uri.Builder()
-                        .scheme("mira")
-                        .authority("file")
-                        .appendPath(name)
-                        .build()
-                        .toString(),
-                    onBack = { navController.popBackStack() }
-                )
+                ModalNavigationDrawer(
+                    drawerState = drawerState,
+                    drawerContent = appDrawerContent
+                ) {
+                    ChatScreen(
+                        initialOpenLink = android.net.Uri.Builder()
+                            .scheme("mira")
+                            .authority("file")
+                            .appendPath(name)
+                            .build()
+                            .toString(),
+                        onBack = { navController.popBackStack() },
+                        onOpenDrawer = { scope.launch { drawerState.open() } },
+                        onOpenBrowser = { url ->
+                            navController.navigate("browser?url=${java.net.URLEncoder.encode(url, "UTF-8")}")
+                        }
+                    )
+                }
             }
 
             composable(
@@ -185,13 +202,19 @@ fun MiraNavGraph(
                     }
                 )
             ) { backStackEntry ->
-                ChatScreen(
-                    initialPrompt = backStackEntry.arguments?.getString("prompt"),
-                    onBack = { navController.popBackStack() },
-                    onOpenBrowser = { url ->
-                        navController.navigate("browser?url=${java.net.URLEncoder.encode(url, "UTF-8")}")
-                    }
-                )
+                ModalNavigationDrawer(
+                    drawerState = drawerState,
+                    drawerContent = appDrawerContent
+                ) {
+                    ChatScreen(
+                        initialPrompt = backStackEntry.arguments?.getString("prompt"),
+                        onBack = { navController.popBackStack() },
+                        onOpenDrawer = { scope.launch { drawerState.open() } },
+                        onOpenBrowser = { url ->
+                            navController.navigate("browser?url=${java.net.URLEncoder.encode(url, "UTF-8")}")
+                        }
+                    )
+                }
             }
 
             composable(Screen.Scan.route) {

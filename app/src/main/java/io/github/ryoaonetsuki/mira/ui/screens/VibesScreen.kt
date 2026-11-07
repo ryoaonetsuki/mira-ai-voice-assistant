@@ -4,7 +4,6 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.annotation.DrawableRes
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -29,7 +28,6 @@ import io.github.ryoaonetsuki.mira.R
 import io.github.ryoaonetsuki.mira.data.preferences.UserPreferences
 import io.github.ryoaonetsuki.mira.ui.components.MiraCard
 import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
-import io.github.ryoaonetsuki.mira.ui.theme.MiraMotion
 
 data class AmbientTrack(
     val id: String,
@@ -60,12 +58,12 @@ fun VibesScreen(
     val favoriteSong by userPrefs.favoriteSongFlow.collectAsState(initial = "Starboy")
 
     // Ambient mixer tracks
-    val ambientTracks = remember {
+    val ambientTracks = remember(palette.primary, palette.secondary) {
         listOf(
-            AmbientTrack("rain", "Gentle Rain", "Soothing patter for calming thoughts", R.drawable.ic_fluent_weather_moon_24_regular, Color(0xFF22D3EE)),
+            AmbientTrack("rain", "Gentle Rain", "Soothing patter for calming thoughts", R.drawable.ic_fluent_weather_moon_24_regular, palette.primary),
             AmbientTrack("forest", "Deep Forest", "Rustling leaves and morning birds", R.drawable.ic_fluent_drink_coffee_24_regular, Color(0xFF10B981)),
             AmbientTrack("waves", "Ocean Waves", "Rhythmic rolling surf and coastal tide", R.drawable.ic_fluent_sound_wave_circle_24_regular, Color(0xFF38BDF8)),
-            AmbientTrack("whitenoise", "White Noise", "Steady broadband sound for deep focus", R.drawable.ic_fluent_headphones_24_regular, Color(0xFF8B5CF6)),
+            AmbientTrack("whitenoise", "White Noise", "Steady broadband sound for deep focus", R.drawable.ic_fluent_headphones_24_regular, palette.secondary),
             AmbientTrack("fireplace", "Cozy Fireplace", "Warm crackling embers and flame", R.drawable.ic_fluent_weather_sunny_24_regular, Color(0xFFF59E0B))
         )
     }
@@ -109,8 +107,8 @@ fun VibesScreen(
     }
 
     val vibes = listOf(
-        VibePreset("Chill Lo-Fi", "Mellow beats to unwind and relax", R.drawable.ic_fluent_headphones_24_regular, "lofi hip hop radio beats to relax chill to", Color(0xFF22D3EE)),
-        VibePreset("Focus & Study", "Deep binaural and ambient flow state", R.drawable.ic_fluent_target_arrow_24_regular, "deep focus ambient study music", Color(0xFF8B5CF6)),
+        VibePreset("Chill Lo-Fi", "Mellow beats to unwind and relax", R.drawable.ic_fluent_headphones_24_regular, "lofi hip hop radio beats to relax chill to", palette.primary),
+        VibePreset("Focus & Study", "Deep binaural and ambient flow state", R.drawable.ic_fluent_target_arrow_24_regular, "deep focus ambient study music", palette.secondary),
         VibePreset("Gym & Energy", "High BPM workout drive and pump", R.drawable.ic_fluent_dumbbell_24_regular, "workout motivation high energy electronic gym music", Color(0xFFEF4444)),
         VibePreset("Late Night Soul", "Moody RnB, jazz and atmospheric vibes", R.drawable.ic_fluent_weather_moon_24_regular, "late night r&b and moody soul playlist", Color(0xFFA855F7)),
         VibePreset("Acoustic Warmth", "Unplugged guitar, coffeehouse tunes", R.drawable.ic_fluent_drink_coffee_24_regular, "acoustic guitar warm coffeehouse playlist", Color(0xFFF59E0B)),

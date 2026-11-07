@@ -23,10 +23,7 @@ fun OptionalSettingsScreen(
     val palette = LocalMiraPalette.current
     val securePrefs = remember { io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences(context) }
 
-    var selectedImageProvider by remember { mutableStateOf("Pollinations (Free)") }
-    var selectedSearchEngine by remember { mutableStateOf("DuckDuckGo (Free)") }
     var mapsApiKey by remember { mutableStateOf(securePrefs.getConnectorToken("maps") ?: "") }
-    var searchApiKey by remember { mutableStateOf(securePrefs.getConnectorToken("search_engine") ?: "") }
 
     Scaffold(
         topBar = {
@@ -49,65 +46,6 @@ fun OptionalSettingsScreen(
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            item {
-                Text("Image Studio Provider", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.primary)
-            }
-
-            item {
-                MiraCard(modifier = Modifier.fillMaxWidth()) {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        val providers = listOf("Pollinations (Free)", "Default Engine")
-                        for (p in providers) {
-                            FilterChip(
-                                selected = selectedImageProvider == p,
-                                onClick = { selectedImageProvider = p },
-                                label = { Text(p) },
-                                colors = FilterChipDefaults.filterChipColors(selectedContainerColor = palette.primary, selectedLabelColor = androidx.compose.ui.graphics.Color.Black)
-                            )
-                        }
-                    }
-                }
-            }
-
-            item {
-                Text("Web Search Engine", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.primary)
-            }
-
-            item {
-                MiraCard(modifier = Modifier.fillMaxWidth()) {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        val engines = listOf("DuckDuckGo (Free)", "Tavily", "Brave")
-                        for (e in engines) {
-                            FilterChip(
-                                selected = selectedSearchEngine == e,
-                                onClick = { selectedSearchEngine = e },
-                                label = { Text(e) },
-                                colors = FilterChipDefaults.filterChipColors(selectedContainerColor = palette.primary, selectedLabelColor = androidx.compose.ui.graphics.Color.Black)
-                            )
-                        }
-                    }
-                    if (selectedSearchEngine != "DuckDuckGo (Free)") {
-                        Spacer(modifier = Modifier.height(10.dp))
-                        OutlinedTextField(
-                            value = searchApiKey,
-                            onValueChange = {
-                                searchApiKey = it
-                                securePrefs.setConnectorToken("search_engine", it)
-                            },
-                            label = { Text("$selectedSearchEngine API Key") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                }
-            }
-
             item {
                 Text("Google Maps & Places API", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.primary)
             }

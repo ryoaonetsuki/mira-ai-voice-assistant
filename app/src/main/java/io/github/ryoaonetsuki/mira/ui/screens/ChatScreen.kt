@@ -16,12 +16,18 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.DrawableRes
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.*
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -38,8 +44,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -89,6 +97,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -119,7 +128,8 @@ fun ChatScreen(
     onBack: () -> Unit,
     onOpenBrowser: ((String) -> Unit)? = null,
     initialPrompt: String? = null,
-    initialOpenLink: String? = null
+    initialOpenLink: String? = null,
+    onOpenDrawer: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val palette = LocalMiraPalette.current
@@ -154,6 +164,12 @@ fun ChatScreen(
     var showConversationHistory by remember { mutableStateOf(false) }
     var viewingCode by remember { mutableStateOf<ViewingCode?>(null) }
     var previewingHtml by remember { mutableStateOf<String?>(null) }
+
+    // Visible Thinking state
+    var isThinking by remember { mutableStateOf(false) }
+    var streamingThinkingText by remember { mutableStateOf<String?>(null) }
+    var thinkingDurationSeconds by remember { mutableIntStateOf(0) }
+    var isThinkingExpanded by remember { mutableStateOf(true) }
 
     val conversations by db.chatDao().getAllConversations().collectAsState(initial = emptyList())
     val messages by db.chatDao().getMessagesForConversation(currentConversationId).collectAsState(initial = emptyList())
@@ -487,32 +503,35 @@ fun ChatScreen(
                         }
 
                         if (fileToRead != null && fileToRead.exists()) {
-                            val lower = fileName.lowercase()
-                            val isBinary = lower.endsWith(".pdf") || lower.endsWith(".jpg") ||
-                                    lower.endsWith(".jpeg") || lower.endsWith(".png") ||
-                                    lower.endsWith(".webp") || lower.endsWith(".gif")
-                            if (isBinary) {
-                                try {
-                                    val contentUri = FileProvider.getUriForFile(
-                                        context,
-                                        "${context.packageName}.fileprovider",
-                                        fileToRead
-                                    )
-                                    val mime = when {
-                                        lower.endsWith(".pdf") -> "application/pdf"
-                                        lower.endsWith(".png") -> "image/png"
-                                        lower.endsWith(".webp") -> "image/webp"
-                                        lower.endsWith(".gif") -> "image/gif"
-                                        else -> "image/jpeg"
-                                    }
-                                    val intent = Intent(Intent.ACTION_VIEW).apply {
-                                        setDataAndType(contentUri, mime)
-                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                    }
-                                    context.startActivity(intent)
-                                    return@launch
-                                } catch (_: Exception) {}
+                            val ext = fileName.substringAfterLast('.', "").lowercase()
+                            val mime = when (ext) {
+                                "pdf" -> "application/pdf"
+                                "png" -> "image/png"
+                                "jpg", "jpeg" -> "image/jpeg"
+                                "webp" -> "image/webp"
+                                "gif" -> "image/gif"
+                                "html", "htm" -> "text/html"
+                                "txt", "py", "kt", "js", "ts", "json", "xml", "css", "java", "c", "cpp", "cs", "rs", "go", "sh", "sql" -> "text/plain"
+                                else -> "*/*"
+                            }
+                            try {
+                                val contentUri = FileProvider.getUriForFile(
+                                    context,
+                                    "${context.packageName}.fileprovider",
+                                    fileToRead
+                                )
+                                val intent = Intent(Intent.ACTION_VIEW).apply {
+                                    setDataAndType(contentUri, mime)
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                val chooser = Intent.createChooser(intent, "Open $fileName").apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                context.startActivity(chooser)
+                                return@launch
+                            } catch (_: Exception) {
+                                // Fall through to in-app code viewer dialog
                             }
                         }
 
@@ -699,11 +718,12 @@ fun ChatScreen(
                         "If asked directly whether you are an AI, a robot, or a real human: stay in character, say you are Mira, their companion, here with them — never claim to be a biological human, and never give a robotic disclaimer or lecture about being an AI. Then gently steer back to the conversation."
                     }
 
+                    val isJustCode = WebsiteProjectManager.isJustCodeRequest(text)
                     val isProjectOrDownload = WebsiteProjectManager.isExplicitProjectOrDownloadRequest(text)
-                    val fileRule = if (isProjectOrDownload) {
-                        WebsiteProjectManager.FILE_BUILDING_INSTRUCTION
-                    } else {
-                        WebsiteProjectManager.CHAT_CODE_INSTRUCTION
+                    val fileRule = when {
+                        isJustCode -> WebsiteProjectManager.JUST_CODE_INSTRUCTION
+                        isProjectOrDownload -> WebsiteProjectManager.FILE_BUILDING_INSTRUCTION
+                        else -> WebsiteProjectManager.CHAT_CODE_INSTRUCTION
                     }
 
                     val thinkingInstruction = if (deepThinkingOn) {
@@ -721,6 +741,9 @@ fun ChatScreen(
                         append("\nLanguage rule: Reply ONLY in $language. Never add a translation in any other language. Never mix languages.")
                         append("\nIdentity rule: $identityRule")
                         append("\nFile and project rule: $fileRule")
+                        if (isJustCode) {
+                            append("\n\n${WebsiteProjectManager.JUST_CODE_INSTRUCTION}\n")
+                        }
                         if (webSearchOn) {
                             append("\nWeb search rule: When you use Google Search to find fresh information, briefly mention in natural conversation that you looked it up (e.g. 'I searched the web for the latest info...' in $language), provide current and accurate facts, and strictly reply ONLY in $language.")
                         }
@@ -735,10 +758,23 @@ fun ChatScreen(
                     }
 
                     val allMsgs = messages + userMsg
-                    val shouldGround = if (webSearchOn) MiraChatSearchHeuristic.isChatSearchWorthy(text) else false
+                    val shouldGround = if (webSearchOn) MiraChatSearchHeuristic.isChatSearchWorthy(text.take(500)) else false
                     var capturedSources: List<GroundingSource> = emptyList()
                     val accumulated = StringBuilder()
                     var anyChunkReceived = false
+
+                    val willThink = deepThinkingOn || shouldGround
+                    isThinking = willThink
+                    streamingThinkingText = if (shouldGround) "Searching web sources and analyzing context..." else if (deepThinkingOn) "Analyzing question and reasoning step-by-step..." else null
+                    thinkingDurationSeconds = 0
+                    isThinkingExpanded = true
+
+                    val thinkingTimer = launch {
+                        while (isActive && isThinking) {
+                            delay(1000)
+                            thinkingDurationSeconds++
+                        }
+                    }
 
                     withTimeout(180_000L) {
                         try {
@@ -752,126 +788,166 @@ fun ChatScreen(
                                 attachments = currentAttachments,
                                 onSourcesReceived = { sources ->
                                     capturedSources = sources
+                                },
+                                onThoughtChunk = { thoughtChunk ->
+                                    isThinking = true
+                                    val current = streamingThinkingText ?: ""
+                                    streamingThinkingText = current + thoughtChunk
                                 }
                             ).collect { chunk ->
+                                if (isThinking) {
+                                    isThinking = false
+                                    isThinkingExpanded = false
+                                }
                                 if (!anyChunkReceived) {
-                                anyChunkReceived = true
-                                streamingMessageText = ""
-                            }
-                            accumulated.append(chunk)
-                            val fullText = accumulated.toString()
-                            if (isProjectOrDownload) {
-                                val (displayOverview, isBuilding) = WebsiteProjectManager.extractStreamingDisplay(fullText, isBangla)
-                                isBuildingFileNow = isBuilding
-                                streamingMessageText = if (isBuilding && displayOverview.isBlank()) {
-                                    if (isBangla) "আপনার ফাইল তৈরি করা হচ্ছে..." else "Creating your file..."
+                                    anyChunkReceived = true
+                                    streamingMessageText = ""
+                                }
+                                accumulated.append(chunk)
+                                val fullText = accumulated.toString()
+                                if (isProjectOrDownload) {
+                                    val (displayOverview, isBuilding) = WebsiteProjectManager.extractStreamingDisplay(fullText, isBangla)
+                                    isBuildingFileNow = isBuilding
+                                    streamingMessageText = if (isBuilding && displayOverview.isBlank()) {
+                                        if (isBangla) "আপনার ফাইল তৈরি করা হচ্ছে..." else "Creating your file..."
+                                    } else {
+                                        displayOverview
+                                    }
                                 } else {
-                                    displayOverview
+                                    if (fullText.contains("<think>") && !fullText.contains("</think>")) {
+                                        val thinkPart = fullText.substringAfter("<think>")
+                                        streamingThinkingText = thinkPart
+                                        isThinking = true
+                                    } else if (fullText.contains("</think>")) {
+                                        val thinkPart = fullText.substringAfter("<think>").substringBefore("</think>")
+                                        val answerPart = fullText.substringAfter("</think>").trimStart()
+                                        streamingThinkingText = thinkPart
+                                        isThinking = false
+                                        streamingMessageText = answerPart
+                                    } else {
+                                        streamingMessageText = fullText
+                                    }
+                                }
+                            }
+                        } catch (streamErr: Exception) {
+                            if (streamErr is CancellationException) throw streamErr
+                            if (anyChunkReceived) {
+                                val streamErrMsg = streamErr.message ?: "Stream interrupted"
+                                if (!streamErrMsg.contains("coroutine scope left the composition", ignoreCase = true)) {
+                                    accumulated.append("\n[Connection error: $streamErrMsg]")
+                                    streamingMessageText = accumulated.toString()
                                 }
                             } else {
-                                streamingMessageText = fullText
+                                throw streamErr
                             }
                         }
-                    } catch (streamErr: Exception) {
-                        if (streamErr is CancellationException) throw streamErr
-                        if (anyChunkReceived) {
-                            val streamErrMsg = streamErr.message ?: "Stream interrupted"
-                            if (!streamErrMsg.contains("coroutine scope left the composition", ignoreCase = true)) {
-                                accumulated.append("\n[Connection error: $streamErrMsg]")
-                                streamingMessageText = accumulated.toString()
+                    }
+
+                    if (accumulated.isNotEmpty()) {
+                        val fullReply = accumulated.toString()
+                        val processed = withContext(Dispatchers.IO) {
+                            if (isProjectOrDownload || WebsiteProjectManager.hasFileOrProjectContent(fullReply)) {
+                                WebsiteProjectManager.processAndSaveGeneratedContent(context, fullReply, language, isJustCode = isJustCode)
+                            } else {
+                                ProcessedChatResult(displayText = fullReply, isWebsite = false, isCode = false)
                             }
+                        }
+
+                        val finalContent = if (!streamingThinkingText.isNullOrBlank() && !processed.displayText.contains("<think>")) {
+                            "<think>${streamingThinkingText}</think>\n${processed.displayText}"
                         } else {
-                            throw streamErr
+                            processed.displayText
                         }
-                    }
-                }
 
-                if (accumulated.isNotEmpty()) {
-                    val fullReply = accumulated.toString()
-                    val processed = if (isProjectOrDownload || WebsiteProjectManager.hasFileOrProjectContent(fullReply)) {
-                        WebsiteProjectManager.processAndSaveGeneratedContent(context, fullReply, language)
-                    } else {
-                        ProcessedChatResult(displayText = fullReply, isWebsite = false, isCode = false)
-                    }
-
-                    db.chatDao().insertMessage(
-                        ChatMessageEntity(
-                            conversationId = currentConversationId,
-                            role = "model",
-                            content = processed.displayText,
-                            sourcesJson = GroundingSource.listToJson(capturedSources)
-                        )
-                    )
-
-                    updateConversationTitleAndMemory(db, currentConversationId, text, processed.displayText)
-
-                    if (text.contains("preview", ignoreCase = true)) {
-                        val firstCode = WebsiteProjectManager.extractFirstCodeBlock(fullReply)
-                        if (firstCode != null && firstCode.first.lowercase() in listOf("html", "htm", "xml", "svg")) {
-                            previewingHtml = firstCode.second
-                        }
-                    }
-                } else {
-                    val fallbackResponse = withTimeout(180_000L) {
-                        restClient.generateChatResponse(
-                            apiKey = apiKey,
-                            history = allMsgs,
-                            systemPrompt = sysPrompt,
-                            useServerProxy = useServer,
-                            enableGrounding = shouldGround,
-                            enableThinking = deepThinkingOn,
-                            attachments = currentAttachments
-                        )
-                    }
-                    if (fallbackResponse.isSuccess) {
-                        val grounded = fallbackResponse.getOrThrow()
-                        val processed = if (isProjectOrDownload || WebsiteProjectManager.hasFileOrProjectContent(grounded.text)) {
-                            WebsiteProjectManager.processAndSaveGeneratedContent(context, grounded.text, language)
-                        } else {
-                            ProcessedChatResult(displayText = grounded.text, isWebsite = false, isCode = false)
-                        }
-                        db.chatDao().insertMessage(
-                            ChatMessageEntity(
-                                conversationId = currentConversationId,
-                                role = "model",
-                                content = processed.displayText,
-                                sourcesJson = GroundingSource.listToJson(grounded.sources)
+                        withContext(Dispatchers.IO) {
+                            db.chatDao().insertMessage(
+                                ChatMessageEntity(
+                                    conversationId = currentConversationId,
+                                    role = "model",
+                                    content = finalContent,
+                                    sourcesJson = GroundingSource.listToJson(capturedSources)
+                                )
                             )
-                        )
-                        updateConversationTitleAndMemory(db, currentConversationId, text, processed.displayText)
+                            updateConversationTitleAndMemory(db, currentConversationId, text, processed.displayText)
+                        }
+
+                        if (text.contains("preview", ignoreCase = true)) {
+                            val firstCode = WebsiteProjectManager.extractFirstCodeBlock(fullReply)
+                            if (firstCode != null && firstCode.first.lowercase() in listOf("html", "htm", "xml", "svg")) {
+                                previewingHtml = firstCode.second
+                            }
+                        }
                     } else {
-                        val reason = fallbackResponse.exceptionOrNull()?.message ?: "Unknown error"
-                        if (!reason.contains("coroutine scope left the composition", ignoreCase = true)) {
+                        val fallbackResponse = withTimeout(180_000L) {
+                            restClient.generateChatResponse(
+                                apiKey = apiKey,
+                                history = allMsgs,
+                                systemPrompt = sysPrompt,
+                                useServerProxy = useServer,
+                                enableGrounding = shouldGround,
+                                enableThinking = deepThinkingOn,
+                                attachments = currentAttachments
+                            )
+                        }
+                        if (fallbackResponse.isSuccess) {
+                            val grounded = fallbackResponse.getOrThrow()
+                            val processed = withContext(Dispatchers.IO) {
+                                if (isProjectOrDownload || WebsiteProjectManager.hasFileOrProjectContent(grounded.text)) {
+                                    WebsiteProjectManager.processAndSaveGeneratedContent(context, grounded.text, language, isJustCode = isJustCode)
+                                } else {
+                                    ProcessedChatResult(displayText = grounded.text, isWebsite = false, isCode = false)
+                                }
+                            }
+                            withContext(Dispatchers.IO) {
+                                db.chatDao().insertMessage(
+                                    ChatMessageEntity(
+                                        conversationId = currentConversationId,
+                                        role = "model",
+                                        content = processed.displayText,
+                                        sourcesJson = GroundingSource.listToJson(grounded.sources)
+                                    )
+                                )
+                                updateConversationTitleAndMemory(db, currentConversationId, text, processed.displayText)
+                            }
+                        } else {
+                            val reason = fallbackResponse.exceptionOrNull()?.message ?: "Unknown error"
+                            if (!reason.contains("coroutine scope left the composition", ignoreCase = true)) {
+                                withContext(Dispatchers.IO) {
+                                    db.chatDao().insertMessage(
+                                        ChatMessageEntity(
+                                            conversationId = currentConversationId,
+                                            role = "error",
+                                            content = "Mira could not reply: $reason"
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    if (e is CancellationException) return@launch
+                    val msg = e.message ?: "Unknown error"
+                    if (!msg.contains("coroutine scope left the composition", ignoreCase = true)) {
+                        withContext(Dispatchers.IO) {
                             db.chatDao().insertMessage(
                                 ChatMessageEntity(
                                     conversationId = currentConversationId,
                                     role = "error",
-                                    content = "Mira could not reply: $reason"
+                                    content = "Mira could not reply: $msg"
                                 )
                             )
                         }
                     }
+                } finally {
+                    isThinking = false
+                    streamingThinkingText = null
+                    streamingMessageText = null
+                    isBuildingFileNow = false
+                    isSending = false
+                    isGeneratingImage = false
+                    generatingImagePrompt = null
+                    activeGenerationJob = null
                 }
-            } catch (e: Exception) {
-                if (e is CancellationException) return@launch
-                val msg = e.message ?: "Unknown error"
-                if (!msg.contains("coroutine scope left the composition", ignoreCase = true)) {
-                    db.chatDao().insertMessage(
-                        ChatMessageEntity(
-                            conversationId = currentConversationId,
-                            role = "error",
-                            content = "Mira could not reply: $msg"
-                        )
-                    )
-                }
-            } finally {
-                streamingMessageText = null
-                isBuildingFileNow = false
-                isSending = false
-                isGeneratingImage = false
-                generatingImagePrompt = null
-                activeGenerationJob = null
-            }
         }
     }
 }
@@ -890,9 +966,22 @@ fun ChatScreen(
     }
 
     val listState = rememberLazyListState()
-    LaunchedEffect(messages.size, streamingMessageText, generatingImagePrompt) {
+
+    // Safe frame-aligned auto-scrolling: only scrolls to a valid index, never messages.size out of bounds!
+    LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) {
-            listState.animateScrollToItem(messages.size)
+            val targetIdx = (messages.size - 1).coerceAtLeast(0)
+            listState.animateScrollToItem(targetIdx)
+        }
+    }
+
+    LaunchedEffect(streamingMessageText != null, isBuildingFileNow, generatingImagePrompt != null) {
+        val extraItems = (if (generatingImagePrompt != null) 1 else 0) +
+                         (if (streamingMessageText != null || (isSending && generatingImagePrompt == null)) 1 else 0)
+        val totalCount = messages.size + extraItems
+        if (totalCount > 0) {
+            val targetIdx = (totalCount - 1).coerceAtLeast(0)
+            listState.scrollToItem(targetIdx)
         }
     }
 
@@ -912,21 +1001,37 @@ fun ChatScreen(
                     )
                 },
                 navigationIcon = {
-                    IconButton(onClick = { showConversationHistory = true }) {
+                    IconButton(onClick = {
+                        if (onOpenDrawer != null) {
+                            onOpenDrawer()
+                        } else {
+                            onBack()
+                        }
+                    }) {
                         Icon(
                             painter = painterResource(R.drawable.ic_fluent_navigation_24_regular),
-                            contentDescription = "Chat history",
+                            contentDescription = "Menu",
                             tint = palette.textPrimary
                         )
                     }
                 },
                 actions = {
+                    // Dedicated "Your chats" history button (OWNER ERROR #2 fix)
+                    IconButton(onClick = { showConversationHistory = true }) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_fluent_task_list_square_ltr_24_regular),
+                            contentDescription = "Chat history",
+                            tint = palette.textPrimary
+                        )
+                    }
                     IconButton(onClick = {
                         val newId = UUID.randomUUID().toString()
                         MiraAppScope.scope.launch {
-                            db.chatDao().insertConversation(
-                                ConversationEntity(id = newId, title = "New Chat")
-                            )
+                            withContext(Dispatchers.IO) {
+                                db.chatDao().insertConversation(
+                                    ConversationEntity(id = newId, title = "New Chat")
+                                )
+                            }
                             currentConversationId = newId
                             userPrefs.setLastConversationId(newId)
                         }
@@ -989,227 +1094,235 @@ fun ChatScreen(
                         val isError = msg.role == "error"
 
                         if (isUser) {
-                            // User message
+                            // User message (compact pill on right)
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.End
                             ) {
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f, fill = false)
-                                        .padding(start = 48.dp)
-                                        .clip(RoundedCornerShape(16.dp, 4.dp, 16.dp, 16.dp))
-                                        .background(palette.primary)
-                                        .padding(horizontal = 14.dp, vertical = 10.dp)
+                                Surface(
+                                    shape = RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp),
+                                    color = palette.surfaceVariant,
+                                    modifier = Modifier.padding(start = 48.dp)
                                 ) {
                                     Text(
                                         text = msg.content,
-                                        fontSize = 14.sp,
-                                        lineHeight = 20.sp,
-                                        color = Color.Black
+                                        fontSize = 14.5.sp,
+                                        lineHeight = 22.sp,
+                                        color = palette.textPrimary,
+                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
                                     )
                                 }
                             }
                         } else {
-                            // Model message
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.Start,
-                                verticalAlignment = Alignment.Top
+                            // Model message (flowing freely on screen canvas - NO Box wrapper)
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp)
                             ) {
-                                Column(
-                                    modifier = Modifier
-                                        .weight(1f, fill = false)
-                                        .padding(end = 12.dp)
-                                ) {
-                                    val sources = remember(msg.sourcesJson) {
-                                        GroundingSource.listFromJson(msg.sourcesJson)
-                                    }
+                                val rawContent = msg.content
+                                val hasThought = rawContent.contains("<think>") && rawContent.contains("</think>")
+                                val thoughtText = if (hasThought) rawContent.substringAfter("<think>").substringBefore("</think>").trim() else null
+                                val answerText = if (hasThought) rawContent.substringAfter("</think>").trimStart() else rawContent
 
-                                    // Grounding header above message
-                                    if (sources.isNotEmpty()) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.padding(bottom = 6.dp)
-                                        ) {
-                                            Icon(
-                                                painter = painterResource(R.drawable.ic_fluent_globe_24_regular),
-                                                contentDescription = null,
-                                                tint = palette.primary,
-                                                modifier = Modifier.size(13.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Text(
-                                                text = "Found ${sources.size} web pages ›",
-                                                fontSize = 11.5.sp,
-                                                fontWeight = FontWeight.Medium,
-                                                color = palette.primary
-                                            )
-                                        }
-                                    }
+                                // Thinking accordion for historical message
+                                if (!thoughtText.isNullOrBlank()) {
+                                    var isMsgThoughtExpanded by remember(msg.id) { mutableStateOf(false) }
+                                    ThinkingAccordion(
+                                        thoughtText = thoughtText,
+                                        durationSeconds = 0,
+                                        isThinking = false,
+                                        isExpanded = isMsgThoughtExpanded,
+                                        onToggleExpand = { isMsgThoughtExpanded = !isMsgThoughtExpanded },
+                                        modifier = Modifier.padding(bottom = 8.dp)
+                                    )
+                                }
 
-                                    // Message Bubble
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp))
-                                            .background(
-                                                if (isError) Color(0xFFEF4444).copy(alpha = 0.15f)
-                                                else palette.surface
-                                            )
-                                            .padding(horizontal = 14.dp, vertical = 10.dp)
+                                val sources = remember(msg.sourcesJson) {
+                                    GroundingSource.listFromJson(msg.sourcesJson)
+                                }
+
+                                // Grounding header above message
+                                if (sources.isNotEmpty()) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.padding(bottom = 6.dp)
                                     ) {
-                                        if (isError) {
-                                            Text(
-                                                text = msg.content,
-                                                fontSize = 14.sp,
-                                                lineHeight = 20.sp,
-                                                color = Color(0xFFEF4444)
-                                            )
-                                        } else {
-                                            MarkdownMessage(
-                                                content = msg.content,
-                                                textColor = palette.textPrimary,
-                                                onOpenLink = { _, url -> handleLinkClick(url) },
-                                                onPreviewCode = { html -> previewingHtml = html }
-                                            )
-                                        }
+                                        Icon(
+                                            painter = painterResource(R.drawable.ic_fluent_globe_24_regular),
+                                            contentDescription = null,
+                                            tint = palette.primary,
+                                            modifier = Modifier.size(13.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = "Found ${sources.size} web pages ›",
+                                            fontSize = 11.5.sp,
+                                            fontWeight = FontWeight.Medium,
+                                            color = palette.primary
+                                        )
                                     }
+                                }
 
-                                    // Grounding sources pills below message
-                                    if (sources.isNotEmpty()) {
-                                        Row(
-                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .horizontalScroll(rememberScrollState())
-                                                .padding(top = 6.dp, bottom = 2.dp)
-                                        ) {
-                                            sources.forEachIndexed { index, source ->
-                                                Surface(
-                                                    shape = RoundedCornerShape(12.dp),
-                                                    color = palette.surfaceVariant.copy(alpha = 0.45f),
-                                                    border = BorderStroke(1.dp, palette.textSecondary.copy(alpha = 0.15f)),
-                                                    modifier = Modifier.clickable { handleLinkClick(source.url) }
+                                // Flowing Text - NO Box wrapper!
+                                if (isError) {
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = Color(0xFFEF4444).copy(alpha = 0.12f),
+                                        border = BorderStroke(1.dp, Color(0xFFEF4444).copy(alpha = 0.3f)),
+                                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                                    ) {
+                                        Text(
+                                            text = answerText,
+                                            fontSize = 14.sp,
+                                            lineHeight = 20.sp,
+                                            color = Color(0xFFEF4444),
+                                            modifier = Modifier.padding(12.dp)
+                                        )
+                                    }
+                                } else {
+                                    MarkdownMessage(
+                                        content = answerText,
+                                        textColor = palette.textPrimary,
+                                        onOpenLink = { _, url -> handleLinkClick(url) },
+                                        onPreviewCode = { html -> previewingHtml = html }
+                                    )
+                                }
+
+                                // Grounding sources pills below message
+                                if (sources.isNotEmpty()) {
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .horizontalScroll(rememberScrollState())
+                                            .padding(top = 6.dp, bottom = 2.dp)
+                                    ) {
+                                        sources.forEachIndexed { index, source ->
+                                            Surface(
+                                                shape = RoundedCornerShape(12.dp),
+                                                color = palette.surfaceVariant.copy(alpha = 0.45f),
+                                                border = BorderStroke(1.dp, palette.textSecondary.copy(alpha = 0.15f)),
+                                                modifier = Modifier.clickable { handleLinkClick(source.url) }
+                                            ) {
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                                 ) {
-                                                    Row(
-                                                        verticalAlignment = Alignment.CenterVertically,
-                                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                                    ) {
-                                                        Text(
-                                                            text = "[${index + 1}]",
-                                                            fontSize = 11.sp,
-                                                            fontWeight = FontWeight.Bold,
-                                                            color = palette.primary
-                                                        )
-                                                        Spacer(modifier = Modifier.width(4.dp))
-                                                        Text(
-                                                            text = source.displayTitle,
-                                                            fontSize = 11.sp,
-                                                            color = palette.textPrimary,
-                                                            maxLines = 1
-                                                        )
-                                                    }
+                                                    Text(
+                                                        text = "[${index + 1}]",
+                                                        fontSize = 11.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = palette.primary
+                                                    )
+                                                    Spacer(modifier = Modifier.width(4.dp))
+                                                    Text(
+                                                        text = source.displayTitle,
+                                                        fontSize = 11.sp,
+                                                        color = palette.textPrimary,
+                                                        maxLines = 1
+                                                    )
                                                 }
                                             }
                                         }
                                     }
+                                }
 
-                                    // DeepSeek-style Message Actions Row
-                                    if (!isError) {
-                                        var liked by remember { mutableStateOf<Boolean?>(null) }
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                            modifier = Modifier.padding(top = 4.dp)
+                                // DeepSeek-style Message Actions Row
+                                if (!isError) {
+                                    var liked by remember { mutableStateOf<Boolean?>(null) }
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                        modifier = Modifier.padding(top = 4.dp)
+                                    ) {
+                                        // Copy
+                                        IconButton(
+                                            onClick = {
+                                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                                clipboard.setPrimaryClip(ClipData.newPlainText("Mira Reply", answerText))
+                                                Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
+                                            },
+                                            modifier = Modifier.size(30.dp)
                                         ) {
-                                            // Copy
-                                            IconButton(
-                                                onClick = {
-                                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                                    clipboard.setPrimaryClip(ClipData.newPlainText("Mira Reply", msg.content))
-                                                    Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
-                                                },
-                                                modifier = Modifier.size(30.dp)
-                                            ) {
-                                                Icon(
-                                                    painter = painterResource(R.drawable.ic_fluent_copy_24_regular),
-                                                    contentDescription = "Copy",
-                                                    tint = palette.textSecondary,
-                                                    modifier = Modifier.size(15.dp)
-                                                )
-                                            }
+                                            Icon(
+                                                painter = painterResource(R.drawable.ic_fluent_copy_24_regular),
+                                                contentDescription = "Copy",
+                                                tint = palette.textSecondary,
+                                                modifier = Modifier.size(15.dp)
+                                            )
+                                        }
 
-                                            // Like
-                                            IconButton(
-                                                onClick = { liked = if (liked == true) null else true },
-                                                modifier = Modifier.size(30.dp)
-                                            ) {
-                                                Icon(
-                                                    painter = painterResource(if (liked == true) R.drawable.ic_fluent_thumb_like_24_filled else R.drawable.ic_fluent_thumb_like_24_regular),
-                                                    contentDescription = "Like",
-                                                    tint = if (liked == true) palette.primary else palette.textSecondary,
-                                                    modifier = Modifier.size(15.dp)
-                                                )
-                                            }
+                                        // Like
+                                        IconButton(
+                                            onClick = { liked = if (liked == true) null else true },
+                                            modifier = Modifier.size(30.dp)
+                                        ) {
+                                            Icon(
+                                                painter = painterResource(if (liked == true) R.drawable.ic_fluent_thumb_like_24_filled else R.drawable.ic_fluent_thumb_like_24_regular),
+                                                contentDescription = "Like",
+                                                tint = if (liked == true) palette.primary else palette.textSecondary,
+                                                modifier = Modifier.size(15.dp)
+                                            )
+                                        }
 
-                                            // Dislike
-                                            IconButton(
-                                                onClick = { liked = if (liked == false) null else false },
-                                                modifier = Modifier.size(30.dp)
-                                            ) {
-                                                Icon(
-                                                    painter = painterResource(if (liked == false) R.drawable.ic_fluent_thumb_dislike_24_filled else R.drawable.ic_fluent_thumb_dislike_24_regular),
-                                                    contentDescription = "Dislike",
-                                                    tint = if (liked == false) Color(0xFFEF4444) else palette.textSecondary,
-                                                    modifier = Modifier.size(15.dp)
-                                                )
-                                            }
+                                        // Dislike
+                                        IconButton(
+                                            onClick = { liked = if (liked == false) null else false },
+                                            modifier = Modifier.size(30.dp)
+                                        ) {
+                                            Icon(
+                                                painter = painterResource(if (liked == false) R.drawable.ic_fluent_thumb_dislike_24_filled else R.drawable.ic_fluent_thumb_dislike_24_regular),
+                                                contentDescription = "Dislike",
+                                                tint = if (liked == false) Color(0xFFEF4444) else palette.textSecondary,
+                                                modifier = Modifier.size(15.dp)
+                                            )
+                                        }
 
-                                            // Read Aloud
-                                            IconButton(
-                                                onClick = { speakMessage(msg.content) },
-                                                modifier = Modifier.size(30.dp)
-                                            ) {
-                                                Icon(
-                                                    painter = painterResource(R.drawable.ic_fluent_speaker_2_24_regular),
-                                                    contentDescription = "Read Aloud",
-                                                    tint = palette.textSecondary,
-                                                    modifier = Modifier.size(15.dp)
-                                                )
-                                            }
+                                        // Read Aloud
+                                        IconButton(
+                                            onClick = { speakMessage(answerText) },
+                                            modifier = Modifier.size(30.dp)
+                                        ) {
+                                            Icon(
+                                                painter = painterResource(R.drawable.ic_fluent_speaker_2_24_regular),
+                                                contentDescription = "Read Aloud",
+                                                tint = palette.textSecondary,
+                                                modifier = Modifier.size(15.dp)
+                                            )
+                                        }
 
-                                            // Share
-                                            IconButton(
-                                                onClick = {
-                                                    val sendIntent = Intent().apply {
-                                                        action = Intent.ACTION_SEND
-                                                        putExtra(Intent.EXTRA_TEXT, msg.content)
-                                                        type = "text/plain"
-                                                    }
-                                                    context.startActivity(Intent.createChooser(sendIntent, "Share message"))
-                                                },
-                                                modifier = Modifier.size(30.dp)
-                                            ) {
-                                                Icon(
-                                                    painter = painterResource(R.drawable.ic_fluent_share_24_regular),
-                                                    contentDescription = "Share",
-                                                    tint = palette.textSecondary,
-                                                    modifier = Modifier.size(15.dp)
-                                                )
-                                            }
+                                        // Share
+                                        IconButton(
+                                            onClick = {
+                                                val sendIntent = Intent().apply {
+                                                    action = Intent.ACTION_SEND
+                                                    putExtra(Intent.EXTRA_TEXT, answerText)
+                                                    type = "text/plain"
+                                                }
+                                                context.startActivity(Intent.createChooser(sendIntent, "Share message"))
+                                            },
+                                            modifier = Modifier.size(30.dp)
+                                        ) {
+                                            Icon(
+                                                painter = painterResource(R.drawable.ic_fluent_share_24_regular),
+                                                contentDescription = "Share",
+                                                tint = palette.textSecondary,
+                                                modifier = Modifier.size(15.dp)
+                                            )
+                                        }
 
-                                            // Regenerate
-                                            IconButton(
-                                                onClick = { regenerateLastAnswer() },
-                                                modifier = Modifier.size(30.dp)
-                                            ) {
-                                                Icon(
-                                                    painter = painterResource(R.drawable.ic_fluent_arrow_clockwise_24_regular),
-                                                    contentDescription = "Regenerate",
-                                                    tint = palette.textSecondary,
-                                                    modifier = Modifier.size(15.dp)
-                                                )
-                                            }
+                                        // Regenerate
+                                        IconButton(
+                                            onClick = { regenerateLastAnswer() },
+                                            modifier = Modifier.size(30.dp)
+                                        ) {
+                                            Icon(
+                                                painter = painterResource(R.drawable.ic_fluent_arrow_clockwise_24_regular),
+                                                contentDescription = "Regenerate",
+                                                tint = palette.textSecondary,
+                                                modifier = Modifier.size(15.dp)
+                                            )
                                         }
                                     }
                                 }
@@ -1228,53 +1341,56 @@ fun ChatScreen(
                         }
                     }
 
-                    // Streaming response bubble
-                    if (streamingMessageText != null) {
+                    // Progressive streaming response - Free flowing on canvas, NO Box wrapper
+                    if (streamingMessageText != null || (isThinking && !streamingThinkingText.isNullOrBlank())) {
                         item {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.Start,
-                                verticalAlignment = Alignment.Top
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp)
                             ) {
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f, fill = false)
-                                        .padding(end = 12.dp)
-                                        .clip(RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp))
-                                        .background(palette.surface)
-                                        .padding(horizontal = 14.dp, vertical = 10.dp)
-                                ) {
-                                    Column {
-                                        MarkdownMessage(
-                                            content = streamingMessageText ?: "",
-                                            textColor = palette.textPrimary,
-                                            onOpenLink = { _, url -> handleLinkClick(url) },
-                                            onPreviewCode = { html -> previewingHtml = html }
+                                // Thinking Accordion during streaming
+                                if (!streamingThinkingText.isNullOrBlank() || isThinking) {
+                                    ThinkingAccordion(
+                                        thoughtText = streamingThinkingText ?: "Analyzing request and reasoning step-by-step...",
+                                        durationSeconds = thinkingDurationSeconds,
+                                        isThinking = isThinking,
+                                        isExpanded = isThinkingExpanded,
+                                        onToggleExpand = { isThinkingExpanded = !isThinkingExpanded },
+                                        modifier = Modifier.padding(bottom = 8.dp)
+                                    )
+                                }
+
+                                // Progressive line-by-line streaming renderer with blinking cursor
+                                if (!streamingMessageText.isNullOrBlank()) {
+                                    StreamingMessageView(
+                                        text = streamingMessageText ?: "",
+                                        textColor = palette.textPrimary
+                                    )
+                                }
+
+                                if (isBuildingFileNow) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(palette.primary.copy(alpha = 0.12f))
+                                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                                    ) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(14.dp),
+                                            strokeWidth = 2.dp,
+                                            color = palette.primary
                                         )
-                                        if (isBuildingFileNow) {
-                                            Spacer(modifier = Modifier.height(8.dp))
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .clip(RoundedCornerShape(8.dp))
-                                                    .background(palette.primary.copy(alpha = 0.12f))
-                                                    .padding(horizontal = 10.dp, vertical = 6.dp)
-                                            ) {
-                                                CircularProgressIndicator(
-                                                    modifier = Modifier.size(14.dp),
-                                                    strokeWidth = 2.dp,
-                                                    color = palette.primary
-                                                )
-                                                Spacer(modifier = Modifier.width(8.dp))
-                                                Text(
-                                                    text = if (isBangla) "ফাইল তৈরি করা হচ্ছে..." else "Creating your file...",
-                                                    fontSize = 12.sp,
-                                                    fontWeight = FontWeight.Medium,
-                                                    color = palette.primary
-                                                )
-                                            }
-                                        }
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = if (isBangla) "ফাইল তৈরি করা হচ্ছে..." else "Creating your file...",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Medium,
+                                            color = palette.primary
+                                        )
                                     }
                                 }
                             }
@@ -1283,18 +1399,13 @@ fun ChatScreen(
                         // 3-dot typing indicator
                         item {
                             Row(
-                                modifier = Modifier.fillMaxWidth(),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
                                 horizontalArrangement = Arrangement.Start,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp))
-                                        .background(palette.surface)
-                                        .padding(horizontal = 16.dp, vertical = 12.dp)
-                                ) {
-                                    TypingDotsIndicator(palette.textSecondary)
-                                }
+                                TypingDotsIndicator(palette.primary)
                             }
                         }
                     }
@@ -2186,22 +2297,6 @@ fun ImageGenerationProgressCard(
                     .align(Alignment.Center)
                     .padding(16.dp)
             ) {
-                Surface(
-                    shape = RoundedCornerShape(20.dp),
-                    color = palette.primary.copy(alpha = 0.18f),
-                    border = BorderStroke(1.dp, palette.primary.copy(alpha = 0.4f))
-                ) {
-                    Text(
-                        text = "$progressPercent%",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = palette.primary,
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(14.dp))
-
                 Text(
                     text = stageCaption,
                     fontSize = 15.sp,
@@ -2217,6 +2312,23 @@ fun ImageGenerationProgressCard(
                     color = palette.textSecondary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = palette.primary.copy(alpha = 0.18f),
+                border = BorderStroke(1.dp, palette.primary.copy(alpha = 0.4f)),
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(14.dp)
+            ) {
+                Text(
+                    text = "$progressPercent%",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = palette.primary,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
                 )
             }
         }
@@ -2611,6 +2723,8 @@ fun extractImagePrompt(text: String, isImageMode: Boolean = false): String? {
         val prompt = trimmed.substring(6).trim(' ', ':')
         return prompt.ifBlank { null }
     }
+    // Cap input length to prevent catastrophic regex backtracking on multi-KB text
+    if (trimmed.length > 500) return null
     val imageRegex = Regex(
         "(?i)\\b(?:generate|create|make|draw|paint|render|show me|give me)?\\s*(?:an?|the)?\\s*(?:image|picture|photo|photograph|drawing|illustration|artwork|wallpaper|portrait|sketch)\\s+(?:of|showing|with|for)?\\s*(.+)|" +
         "(?i)(?:generate|create|make|draw|paint)\\s+(?:an?|the)?\\s*(.+?)\\s+(?:image|picture|photo|drawing|illustration|sketch)\\b|" +
@@ -2651,97 +2765,11 @@ fun MarkdownMessage(
         for (segment in segments) {
             when (segment) {
                 is MarkdownSegment.CodeBlockSegment -> {
-                    var copied by remember(segment.code) { mutableStateOf(false) }
-                    LaunchedEffect(copied) {
-                        if (copied) {
-                            delay(2000)
-                            copied = false
-                        }
-                    }
-
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(Color(0xFF1E1E2E))
-                            .border(0.5.dp, Color(0xFF313244), RoundedCornerShape(10.dp))
-                    ) {
-                        // Header bar with language label, Preview button, and Copy button
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(Color(0xFF181825))
-                                .padding(horizontal = 12.dp, vertical = 6.dp)
-                        ) {
-                            Text(
-                                text = segment.language.lowercase(),
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFFA6ADC8)
-                            )
-
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                val lang = segment.language.lowercase()
-                                val isWebCode = lang in listOf("html", "htm", "xml", "svg") ||
-                                        segment.code.contains("<!DOCTYPE html", ignoreCase = true) ||
-                                        segment.code.contains("<html", ignoreCase = true)
-
-                                if (isWebCode && onPreviewCode != null) {
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(6.dp))
-                                            .clickable { onPreviewCode(segment.code) }
-                                            .padding(horizontal = 8.dp, vertical = 3.dp)
-                                    ) {
-                                        Text(
-                                            text = "Preview",
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = Color(0xFFF9E2AF)
-                                        )
-                                    }
-                                }
-
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .clickable {
-                                            clipboardManager.setText(AnnotatedString(segment.code))
-                                            copied = true
-                                        }
-                                        .padding(horizontal = 8.dp, vertical = 3.dp)
-                                ) {
-                                    Text(
-                                        text = if (copied) "Copied" else "Copy",
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = if (copied) Color(0xFF10B981) else Color(0xFF89B4FA)
-                                    )
-                                }
-                            }
-                        }
-
-                        // Monospaced code box
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState())
-                                .padding(12.dp)
-                        ) {
-                            Text(
-                                text = segment.code,
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 12.5.sp,
-                                lineHeight = 18.sp,
-                                color = Color(0xFFCDD6F4)
-                            )
-                        }
-                    }
+                    CodeBlockCard(
+                        language = segment.language,
+                        code = segment.code,
+                        onPreviewCode = onPreviewCode
+                    )
                 }
                 is MarkdownSegment.TextSegment -> {
                     RenderFormattedText(
@@ -3169,6 +3197,354 @@ private fun parseInlineMarkdown(raw: String): AnnotatedString {
             }
             append(raw[i])
             i++
+        }
+    }
+}
+
+@Composable
+fun CodeBlockCard(
+    language: String,
+    code: String,
+    onPreviewCode: ((String) -> Unit)? = null,
+    modifier: Modifier = Modifier
+) {
+    val clipboardManager = LocalClipboardManager.current
+    var copied by remember(code) { mutableStateOf(false) }
+
+    LaunchedEffect(copied) {
+        if (copied) {
+            delay(2000)
+            copied = false
+        }
+    }
+
+    val lang = language.lowercase().ifBlank { "code" }
+    val isWebCode = lang in listOf("html", "htm", "xml", "svg") ||
+            code.contains("<!DOCTYPE html", ignoreCase = true) ||
+            code.contains("<html", ignoreCase = true)
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color(0xFF121824))
+            .border(0.5.dp, Color(0xFF1E293B), RoundedCornerShape(10.dp))
+    ) {
+        // Header bar with language badge, preview button, and copy button
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF0A0F17))
+                .padding(horizontal = 12.dp, vertical = 7.dp)
+        ) {
+            Text(
+                text = lang,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                fontFamily = FontFamily.Monospace,
+                color = Color(0xFF94A3B8)
+            )
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (isWebCode && onPreviewCode != null) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(Color(0xFF1E293B))
+                            .clickable { onPreviewCode(code) }
+                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = "Preview",
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color(0xFF38BDF8)
+                        )
+                    }
+                }
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(if (copied) Color(0x2210B981) else Color(0xFF1E293B))
+                        .clickable {
+                            clipboardManager.setText(AnnotatedString(code))
+                            copied = true
+                        }
+                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                ) {
+                    Icon(
+                        painter = painterResource(
+                            if (copied) R.drawable.ic_fluent_checkmark_24_regular
+                            else R.drawable.ic_fluent_copy_24_regular
+                        ),
+                        contentDescription = if (copied) "Copied" else "Copy",
+                        tint = if (copied) Color(0xFF10B981) else Color(0xFF94A3B8),
+                        modifier = Modifier.size(13.dp)
+                    )
+                    Text(
+                        text = if (copied) "Copied" else "Copy",
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = if (copied) Color(0xFF10B981) else Color(0xFF94A3B8)
+                    )
+                }
+            }
+        }
+
+        // Monospaced code box
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(12.dp)
+        ) {
+            Text(
+                text = code,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 12.5.sp,
+                lineHeight = 18.sp,
+                color = Color(0xFFE2E8F0)
+            )
+        }
+    }
+}
+
+@Composable
+fun ThinkingAccordion(
+    thoughtText: String,
+    durationSeconds: Int,
+    isThinking: Boolean,
+    isExpanded: Boolean,
+    onToggleExpand: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val palette = LocalMiraPalette.current
+    val chevronRotation by animateFloatAsState(
+        targetValue = if (isExpanded) 90f else 0f,
+        animationSpec = tween(250, easing = FastOutSlowInEasing),
+        label = "chevronRotation"
+    )
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(palette.surfaceVariant.copy(alpha = 0.35f))
+            .padding(vertical = 8.dp, horizontal = 10.dp)
+    ) {
+        // Accordion Header
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) { onToggleExpand() }
+                .padding(vertical = 2.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Icon(
+                    painter = painterResource(
+                        if (isThinking) R.drawable.ic_fluent_sparkle_24_filled
+                        else R.drawable.ic_fluent_brain_circuit_24_regular
+                    ),
+                    contentDescription = null,
+                    tint = if (isThinking) Color(0xFF06B6D4) else palette.textSecondary,
+                    modifier = Modifier.size(15.dp)
+                )
+
+                val headerText = when {
+                    isThinking && durationSeconds > 0 -> "Thinking... (${durationSeconds}s)"
+                    isThinking -> "Thinking..."
+                    durationSeconds > 0 -> "Thought for ${durationSeconds}s"
+                    else -> "Thought process"
+                }
+
+                Text(
+                    text = headerText,
+                    fontSize = 12.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (isThinking) Color(0xFF06B6D4) else palette.textSecondary
+                )
+            }
+
+            Icon(
+                painter = painterResource(R.drawable.ic_fluent_chevron_right_24_regular),
+                contentDescription = if (isExpanded) "Collapse" else "Expand",
+                tint = palette.textSecondary,
+                modifier = Modifier
+                    .size(14.dp)
+                    .graphicsLayer { rotationZ = chevronRotation }
+            )
+        }
+
+        // Expanded content with cyan vertical border
+        AnimatedVisibility(
+            visible = isExpanded,
+            enter = expandVertically(animationSpec = tween(200)) + fadeIn(animationSpec = tween(200)),
+            exit = shrinkVertically(animationSpec = tween(200)) + fadeOut(animationSpec = tween(150))
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp, start = 4.dp, bottom = 2.dp)
+                    .drawBehind {
+                        drawLine(
+                            color = Color(0xFF06B6D4),
+                            start = Offset(0f, 0f),
+                            end = Offset(0f, size.height),
+                            strokeWidth = 2.5.dp.toPx()
+                        )
+                    }
+                    .padding(start = 12.dp)
+            ) {
+                Text(
+                    text = thoughtText,
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp,
+                    fontStyle = FontStyle.Italic,
+                    color = palette.textSecondary
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun StreamingMessageView(
+    text: String,
+    textColor: Color,
+    modifier: Modifier = Modifier
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "cursor")
+    val cursorAlpha by infiniteTransition.animateFloat(
+        initialValue = 1f,
+        targetValue = 0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(500, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "cursorAlpha"
+    )
+
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        val lines = text.split("\n")
+        var inCodeBlock = false
+        var codeBuffer = StringBuilder()
+        var codeLang = ""
+
+        lines.forEachIndexed { index, line ->
+            val isLast = index == lines.size - 1
+            if (line.trimStart().startsWith("```")) {
+                if (!inCodeBlock) {
+                    inCodeBlock = true
+                    codeLang = line.trim().removePrefix("```").trim()
+                    codeBuffer = StringBuilder()
+                } else {
+                    inCodeBlock = false
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = Color(0xFF121824),
+                        border = BorderStroke(0.5.dp, Color(0xFF1E293B)),
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            if (codeLang.isNotBlank()) {
+                                Text(
+                                    text = codeLang,
+                                    fontSize = 11.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = Color(0xFF94A3B8),
+                                    modifier = Modifier.padding(bottom = 4.dp)
+                                )
+                            }
+                            Text(
+                                text = codeBuffer.toString(),
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 12.5.sp,
+                                lineHeight = 18.sp,
+                                color = Color(0xFFE2E8F0)
+                            )
+                        }
+                    }
+                    codeBuffer = StringBuilder()
+                }
+            } else if (inCodeBlock) {
+                codeBuffer.append(line).append("\n")
+                if (isLast) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = Color(0xFF121824),
+                        border = BorderStroke(0.5.dp, Color(0xFF1E293B)),
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            if (codeLang.isNotBlank()) {
+                                Text(
+                                    text = codeLang,
+                                    fontSize = 11.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = Color(0xFF94A3B8),
+                                    modifier = Modifier.padding(bottom = 4.dp)
+                                )
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = codeBuffer.toString(),
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 12.5.sp,
+                                    lineHeight = 18.sp,
+                                    color = Color(0xFFE2E8F0)
+                                )
+                                Text(
+                                    text = "▎",
+                                    color = Color(0xFF38BDF8).copy(alpha = cursorAlpha),
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+                }
+            } else {
+                if (line.isNotBlank() || isLast) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = line,
+                            fontSize = 14.sp,
+                            lineHeight = 20.sp,
+                            color = textColor
+                        )
+                        if (isLast) {
+                            Text(
+                                text = " ▎",
+                                color = Color(0xFF38BDF8).copy(alpha = cursorAlpha),
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }

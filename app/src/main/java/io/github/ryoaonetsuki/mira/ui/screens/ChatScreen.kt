@@ -15,10 +15,26 @@ import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Language
+import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Send
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import android.os.Bundle
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import android.widget.Toast
+import androidx.compose.material.icons.rounded.CameraAlt
+import androidx.compose.material.icons.rounded.Image
+import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material.icons.rounded.Psychology
+import androidx.compose.material.icons.rounded.Stop
+import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -40,10 +56,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
+import coil.compose.AsyncImage
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -62,6 +80,7 @@ import io.github.ryoaonetsuki.mira.backend.KeySource
 import io.github.ryoaonetsuki.mira.data.local.MiraDatabase
 import io.github.ryoaonetsuki.mira.data.local.entities.ChatMessageEntity
 import io.github.ryoaonetsuki.mira.data.local.entities.ConversationEntity
+import io.github.ryoaonetsuki.mira.data.local.entities.MemoryEntity
 import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
 import io.github.ryoaonetsuki.mira.data.preferences.UserPreferences
 import io.github.ryoaonetsuki.mira.network.ChatAttachment
@@ -76,7 +95,9 @@ import io.github.ryoaonetsuki.mira.projects.WebsiteProjectManager
 import io.github.ryoaonetsuki.mira.server.LocalProjectServer
 import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -128,6 +149,7 @@ fun ChatScreen(
     var streamingMessageText by remember { mutableStateOf<String?>(null) }
     var isBuildingFileNow by remember { mutableStateOf(false) }
     var showClearConfirm by remember { mutableStateOf(false) }
+    var showConversationHistory by remember { mutableStateOf(false) }
     var viewingCode by remember { mutableStateOf<ViewingCode?>(null) }
 
     val conversations by db.chatDao().getAllConversations().collectAsState(initial = emptyList())
@@ -137,32 +159,228 @@ fun ChatScreen(
     val webSearchEnabled by userPrefs.webSearchEnabledFlow.collectAsState(initial = true)
     val deepThinkingEnabled by userPrefs.deepThinkingEnabledFlow.collectAsState(initial = false)
 
-    val filePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri: android.net.Uri? ->
-        if (uri != null) {
-            MiraAppScope.scope.launch {
-                try {
+    val inputScope = rememberCoroutineScope()
+    var showAttachmentMenu by remember { mutableStateOf(false) }
+    var isLoadingAttachment by remember { mutableStateOf(false) }
+    var pendingCameraPath by rememberSaveable { mutableStateOf<String?>(null) }
+    var isDictating by remember { mutableStateOf(false) }
+    var speechRecognizer by remember { mutableStateOf<SpeechRecognizer?>(null) }
+    var dictationPrefix by remember { mutableStateOf("") }
+    val currentLanguage by rememberUpdatedState(language)
+
+    fun stageUri(uri: android.net.Uri, temporaryFile: File? = null) {
+        isLoadingAttachment = true
+        inputScope.launch {
+            try {
+                val attachment = withContext(Dispatchers.IO) {
                     val fileName = GeminiFilesClient.getFileName(context, uri)
                     val mimeType = GeminiFilesClient.getMimeType(context, uri, fileName)
-                    val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                    if (bytes != null && bytes.isNotEmpty()) {
-                        val savedFile = filesClient.saveToMiraFiles(context, fileName, bytes)
-                        stagedAttachment = StagedAttachment(
-                            file = savedFile,
-                            fileName = fileName,
-                            mimeType = mimeType,
-                            bytes = bytes
-                        )
-                    } else {
-                        Toast.makeText(context, "Could not read selected file", Toast.LENGTH_SHORT).show()
+                    val bytes = context.contentResolver.openInputStream(uri)?.use { stream ->
+                        // Bound memory use before reading the entire attachment.
+                        val output = java.io.ByteArrayOutputStream()
+                        val buffer = ByteArray(8192)
+                        var total = 0
+                        while (true) {
+                            val count = stream.read(buffer)
+                            if (count == -1) break
+                            total += count
+                            require(total <= 20 * 1024 * 1024) {
+                                "Please choose a file smaller than 20 MB"
+                            }
+                            output.write(buffer, 0, count)
+                        }
+                        output.toByteArray()
                     }
-                } catch (e: Exception) {
-                    if (e is CancellationException) return@launch
-                    android.util.Log.e("ChatScreen", "Error picking file: ${e.message}", e)
-                    Toast.makeText(context, "Could not load file: ${e.message}", Toast.LENGTH_SHORT).show()
+                    require(bytes != null && bytes.isNotEmpty()) {
+                        "Could not read selected file"
+                    }
+                    StagedAttachment(
+                        file = filesClient.saveToMiraFiles(context, fileName, bytes),
+                        fileName = fileName,
+                        mimeType = mimeType,
+                        bytes = bytes
+                    )
                 }
+                stagedAttachment = attachment
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Toast.makeText(context, e.message ?: "Could not load attachment", Toast.LENGTH_SHORT).show()
+            } finally {
+                withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) {
+                    temporaryFile?.delete()
+                }
+                isLoadingAttachment = false
             }
+        }
+    }
+
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        uri?.let { stageUri(it) }
+    }
+    val imagePickerLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        uri?.let { stageUri(it) }
+    }
+    val cameraLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.TakePicture()
+    ) { success ->
+        val photo = pendingCameraPath?.let { File(it) }
+        pendingCameraPath = null
+        if (success && photo != null) {
+            try {
+                val uri = FileProvider.getUriForFile(
+                    context,
+                    "${context.packageName}.fileprovider",
+                    photo
+                )
+                stageUri(uri, temporaryFile = photo)
+            } catch (_: Exception) {
+                photo.delete()
+                Toast.makeText(context, "Could not attach photo", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            photo?.delete()
+        }
+    }
+
+    fun openCamera() {
+        var photo: File? = null
+        try {
+            // Use the same app-owned files location as existing file attachments.
+            val root = context.getExternalFilesDir(null)
+                ?: throw IllegalStateException("Photo storage is unavailable")
+            val directory = File(root, "Mira/Files")
+            check(directory.isDirectory || directory.mkdirs()) {
+                "Could not create photo storage"
+            }
+            photo = File.createTempFile("Mira_photo_", ".jpg", directory)
+            val uri = FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                photo
+            )
+            pendingCameraPath = photo.absolutePath
+            cameraLauncher.launch(uri)
+        } catch (_: Exception) {
+            photo?.delete()
+            pendingCameraPath = null
+            Toast.makeText(context, "Camera unavailable or photo storage is not accessible", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            openCamera()
+        } else {
+            Toast.makeText(context, "Camera permission is needed to take a photo", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun startDictation() {
+        // The default recognizer can use a server even with PREFER_OFFLINE.
+        // Only use Android's explicitly on-device recognizer.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+            !SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
+        ) {
+            Toast.makeText(
+                context,
+                "On-device dictation is unavailable. It requires Android 12 or later and an installed speech model.",
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+        try {
+            speechRecognizer?.destroy()
+            speechRecognizer = null
+            val recognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
+            speechRecognizer = recognizer
+            dictationPrefix = inputMessage.trimEnd()
+            recognizer.setRecognitionListener(object : RecognitionListener {
+                override fun onReadyForSpeech(params: Bundle?) = Unit
+                override fun onBeginningOfSpeech() = Unit
+                override fun onRmsChanged(rmsdB: Float) = Unit
+                override fun onBufferReceived(buffer: ByteArray?) = Unit
+                override fun onEndOfSpeech() = Unit
+                override fun onPartialResults(partialResults: Bundle?) = Unit
+                override fun onEvent(eventType: Int, params: Bundle?) = Unit
+
+                override fun onResults(results: Bundle?) {
+                    isDictating = false
+                    val transcript = results
+                        ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                        ?.firstOrNull()
+                        ?.trim()
+                        .orEmpty()
+                    if (transcript.isNotEmpty()) {
+                        inputMessage = listOf(dictationPrefix, transcript)
+                            .filter { it.isNotBlank() }
+                            .joinToString(" ")
+                    } else {
+                        Toast.makeText(context, "No speech detected. Please try again.", Toast.LENGTH_SHORT).show()
+                    }
+                }
+
+                override fun onError(error: Int) {
+                    isDictating = false
+                    val message = when (error) {
+                        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ->
+                            "Microphone permission is needed for dictation"
+                        SpeechRecognizer.ERROR_NO_MATCH,
+                        SpeechRecognizer.ERROR_SPEECH_TIMEOUT ->
+                            "No speech detected. Please try again."
+                        SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED,
+                        SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE ->
+                            "Install an on-device speech model for your selected language in Android settings."
+                        SpeechRecognizer.ERROR_RECOGNIZER_BUSY ->
+                            "The microphone is busy. Please try again."
+                        else -> "Dictation could not finish (error $error). Please try again."
+                    }
+                    Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                }
+            })
+            val locale = when {
+                currentLanguage.contains("Bangla", ignoreCase = true) ||
+                    currentLanguage.contains("Bengali", ignoreCase = true) -> "bn-BD"
+                currentLanguage.contains("English", ignoreCase = true) -> "en-US"
+                else -> java.util.Locale.getDefault().toLanguageTag()
+            }
+            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE, locale)
+                putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+            }
+            isDictating = true
+            recognizer.startListening(intent)
+        } catch (_: Exception) {
+            isDictating = false
+            speechRecognizer?.destroy()
+            speechRecognizer = null
+            Toast.makeText(context, "Could not start on-device dictation", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val microphonePermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            startDictation()
+        } else {
+            Toast.makeText(context, "Microphone permission is needed for dictation", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            speechRecognizer?.destroy()
+            speechRecognizer = null
         }
     }
 
@@ -337,66 +555,42 @@ fun ChatScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Image(
-                            painter = painterResource(R.drawable.logo_chosen),
-                            contentDescription = "Mira Logo",
-                            modifier = Modifier
-                                .size(32.dp)
-                                .clip(CircleShape)
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column {
-                            Text(
-                                text = "Chat with Mira",
-                                fontSize = 17.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = palette.textPrimary
-                            )
-                            Text(
-                                text = "Always here for you",
-                                fontSize = 11.sp,
-                                color = palette.primary
-                            )
-                        }
-                    }
+                    val firstUserMessage = messages.firstOrNull { it.role == "user" }?.content.orEmpty()
+                    val conversationTitle = firstUserMessage
+                        .replace(Regex("\\s+"), " ")
+                        .trim()
+                        .let { if (it.length > 40) "${it.take(39).trimEnd()}…" else it }
+                    Text(
+                        text = conversationTitle,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = palette.textPrimary,
+                        maxLines = 1
+                    )
                 },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = { showConversationHistory = true }) {
                         Icon(
-                            imageVector = Icons.Rounded.ArrowBack,
-                            contentDescription = "Back",
+                            imageVector = Icons.Rounded.Menu,
+                            contentDescription = "Chat history",
                             tint = palette.textPrimary
                         )
                     }
                 },
                 actions = {
-                    // New conversation
                     IconButton(onClick = {
                         val newId = UUID.randomUUID().toString()
                         MiraAppScope.scope.launch {
                             db.chatDao().insertConversation(
-                                ConversationEntity(
-                                    id = newId,
-                                    title = "Chat ${conversations.size + 1}"
-                                )
+                                ConversationEntity(id = newId, title = "Mira Conversation")
                             )
                             currentConversationId = newId
                         }
                     }) {
                         Icon(
-                            imageVector = Icons.Rounded.AddComment,
-                            contentDescription = "New Chat",
+                            imageVector = Icons.Rounded.Add,
+                            contentDescription = "New chat",
                             tint = palette.textPrimary
-                        )
-                    }
-
-                    // Clear history
-                    IconButton(onClick = { showClearConfirm = true }) {
-                        Icon(
-                            imageVector = Icons.Rounded.DeleteOutline,
-                            contentDescription = "Clear History",
-                            tint = palette.textSecondary
                         )
                     }
                 },
@@ -486,7 +680,7 @@ fun ChatScreen(
                                 }
                             }
                         } else {
-                            // Mira / error message — left-aligned with circular avatar
+                            // Mira / error message — left-aligned, no avatar
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.Start,
@@ -507,16 +701,8 @@ fun ChatScreen(
                                             color = Color.White
                                         )
                                     }
-                                } else {
-                                    Image(
-                                        painter = painterResource(R.drawable.logo_chosen),
-                                        contentDescription = "Mira",
-                                        modifier = Modifier
-                                            .size(32.dp)
-                                            .clip(CircleShape)
-                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
                                 }
-                                Spacer(modifier = Modifier.width(8.dp))
                                 Column(
                                     modifier = Modifier
                                         .weight(1f, fill = false)
@@ -631,14 +817,6 @@ fun ChatScreen(
                                 horizontalArrangement = Arrangement.Start,
                                 verticalAlignment = Alignment.Top
                             ) {
-                                Image(
-                                    painter = painterResource(R.drawable.logo_chosen),
-                                    contentDescription = "Mira",
-                                    modifier = Modifier
-                                        .size(32.dp)
-                                        .clip(CircleShape)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
                                 Box(
                                     modifier = Modifier
                                         .weight(1f, fill = false)
@@ -696,14 +874,6 @@ fun ChatScreen(
                                 horizontalArrangement = Arrangement.Start,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Image(
-                                    painter = painterResource(R.drawable.logo_chosen),
-                                    contentDescription = "Mira",
-                                    modifier = Modifier
-                                        .size(32.dp)
-                                        .clip(CircleShape)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
                                 Box(
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(topStart = 4.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 16.dp))
@@ -727,68 +897,6 @@ fun ChatScreen(
                     .padding(start = 14.dp, end = 14.dp, top = 4.dp, bottom = 12.dp)
             ) {
                 Column(modifier = Modifier.fillMaxWidth()) {
-                    // Two toggles row: Web Search + Deep Thinking
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 4.dp, vertical = 2.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        FilterChip(
-                            selected = webSearchEnabled,
-                            onClick = {
-                                MiraAppScope.scope.launch {
-                                    userPrefs.setWebSearchEnabled(!webSearchEnabled)
-                                }
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Rounded.Search,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(15.dp)
-                                )
-                            },
-                            label = { Text("Web Search", fontSize = 11.5.sp) },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = palette.primary,
-                                selectedLabelColor = Color.Black,
-                                selectedLeadingIconColor = Color.Black,
-                                containerColor = palette.surfaceVariant.copy(alpha = 0.5f),
-                                labelColor = palette.textSecondary,
-                                iconColor = palette.textSecondary
-                            ),
-                            border = null,
-                            shape = RoundedCornerShape(16.dp)
-                        )
-
-                        FilterChip(
-                            selected = deepThinkingEnabled,
-                            onClick = {
-                                MiraAppScope.scope.launch {
-                                    userPrefs.setDeepThinkingEnabled(!deepThinkingEnabled)
-                                }
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Rounded.AutoAwesome,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(15.dp)
-                                )
-                            },
-                            label = { Text("Deep Thinking", fontSize = 11.5.sp) },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = palette.primary,
-                                selectedLabelColor = Color.Black,
-                                selectedLeadingIconColor = Color.Black,
-                                containerColor = palette.surfaceVariant.copy(alpha = 0.5f),
-                                labelColor = palette.textSecondary,
-                                iconColor = palette.textSecondary
-                            ),
-                            border = null,
-                            shape = RoundedCornerShape(16.dp)
-                        )
-                    }
 
                     // Staged attachment chip (if present)
                     if (stagedAttachment != null) {
@@ -841,26 +949,103 @@ fun ChatScreen(
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(24.dp))
                             .background(palette.surface)
-                            .padding(horizontal = 6.dp, vertical = 4.dp)
-                    ) {
-                        IconButton(
-                            onClick = {
-                                filePickerLauncher.launch(GeminiFilesClient.READABLE_MIME_TYPES)
-                            },
-                            modifier = Modifier.size(38.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.Add,
-                                contentDescription = "Add attachment",
-                                tint = palette.primary,
-                                modifier = Modifier.size(22.dp)
+                            .border(
+                                1.dp,
+                                palette.textSecondary.copy(alpha = 0.14f),
+                                RoundedCornerShape(24.dp)
                             )
+                            .padding(horizontal = 4.dp, vertical = 4.dp)
+                    ) {
+                        Box {
+                            IconButton(
+                                onClick = { showAttachmentMenu = true },
+                                enabled = !isLoadingAttachment && pendingCameraPath == null,
+                                modifier = Modifier.size(48.dp)
+                            ) {
+                                if (isLoadingAttachment) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(20.dp),
+                                        color = palette.primary,
+                                        strokeWidth = 2.dp
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Add,
+                                        contentDescription = "Add attachment",
+                                        tint = palette.primary,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                }
+                            }
+                            DropdownMenu(
+                                expanded = showAttachmentMenu,
+                                onDismissRequest = { showAttachmentMenu = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Open Camera") },
+                                    leadingIcon = {
+                                        Icon(Icons.Rounded.CameraAlt, contentDescription = null)
+                                    },
+                                    onClick = {
+                                        showAttachmentMenu = false
+                                        if (ContextCompat.checkSelfPermission(
+                                                context,
+                                                Manifest.permission.CAMERA
+                                            ) == PackageManager.PERMISSION_GRANTED
+                                        ) {
+                                            openCamera()
+                                        } else {
+                                            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                                        }
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Open Image") },
+                                    leadingIcon = {
+                                        Icon(Icons.Rounded.Image, contentDescription = null)
+                                    },
+                                    onClick = {
+                                        showAttachmentMenu = false
+                                        try {
+                                            imagePickerLauncher.launch(
+                                                androidx.activity.result.PickVisualMediaRequest(
+                                                    ActivityResultContracts.PickVisualMedia.ImageOnly
+                                                )
+                                            )
+                                        } catch (_: Exception) {
+                                            Toast.makeText(context, "Photo picker is unavailable", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Open Files") },
+                                    leadingIcon = {
+                                        Icon(Icons.Rounded.FolderOpen, contentDescription = null)
+                                    },
+                                    onClick = {
+                                        showAttachmentMenu = false
+                                        try {
+                                            filePickerLauncher.launch(GeminiFilesClient.READABLE_MIME_TYPES)
+                                        } catch (_: Exception) {
+                                            Toast.makeText(context, "File picker is unavailable", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                )
+                            }
                         }
 
                         TextField(
                             value = inputMessage,
                             onValueChange = { inputMessage = it },
-                            placeholder = { Text("Ask Mira anything…", fontSize = 14.sp) },
+                            placeholder = {
+                                Text(
+                                    if (isDictating) "Listening…" else "Ask Mira anything…",
+                                    fontSize = 14.sp
+                                )
+                            },
+                            readOnly = isDictating,
+                            minLines = 1,
+                            maxLines = 5,
                             colors = TextFieldDefaults.colors(
                                 focusedContainerColor = Color.Transparent,
                                 unfocusedContainerColor = Color.Transparent,
@@ -873,9 +1058,44 @@ fun ChatScreen(
                             modifier = Modifier.weight(1f)
                         )
 
-                        Spacer(modifier = Modifier.width(6.dp))
+                        IconButton(
+                            onClick = {
+                                if (isDictating) {
+                                    try {
+                                        speechRecognizer?.stopListening()
+                                    } catch (_: Exception) {
+                                        isDictating = false
+                                    }
+                                } else if (ContextCompat.checkSelfPermission(
+                                        context,
+                                        Manifest.permission.RECORD_AUDIO
+                                    ) == PackageManager.PERMISSION_GRANTED
+                                ) {
+                                    startDictation()
+                                } else {
+                                    microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                }
+                            },
+                            enabled = !isSending,
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (isDictating) palette.primary.copy(alpha = 0.16f)
+                                    else Color.Transparent
+                                )
+                        ) {
+                            Icon(
+                                imageVector = if (isDictating) Icons.Rounded.Stop else Icons.Rounded.Mic,
+                                contentDescription = if (isDictating) "Finish dictation" else "Dictate message",
+                                tint = if (isDictating) palette.primary else palette.textSecondary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
 
                         IconButton(
+                            enabled = !isSending && !isDictating && !isLoadingAttachment &&
+                                (inputMessage.isNotBlank() || stagedAttachment != null),
                             onClick = {
                                 val text = inputMessage.trim()
                                 val currentStaged = stagedAttachment
@@ -946,6 +1166,33 @@ fun ChatScreen(
                                                 content = userContent
                                             )
                                             db.chatDao().insertMessage(userMsg)
+                                            if (messages.none { it.role == "user" }) {
+                                                val titleSource = text.ifBlank {
+                                                    currentStaged?.fileName.orEmpty()
+                                                }.replace(Regex("\\s+"), " ").trim()
+                                                val title = if (titleSource.length > 40) {
+                                                    "${titleSource.take(39).trimEnd()}…"
+                                                } else {
+                                                    titleSource
+                                                }
+                                                if (title.isNotBlank()) {
+                                                    val conversation = db.chatDao()
+                                                        .getConversationById(currentConversationId)
+                                                    if (conversation != null) {
+                                                        db.chatDao().updateConversation(
+                                                            conversation.copy(title = title)
+                                                        )
+                                                        // Auto-save this conversation as a memory
+                                                        // (once, on the first user message).
+                                                        db.memoryDao().insertMemory(
+                                                            MemoryEntity(
+                                                                content = "$title\n${userContent.take(300)}",
+                                                                category = "Chat"
+                                                            )
+                                                        )
+                                                    }
+                                                }
+                                            }
 
                                             // Check connector command before invoking Gemini (only for pure text without attachment)
                                             if (currentStaged == null) {
@@ -956,6 +1203,26 @@ fun ChatScreen(
                                                             conversationId = currentConversationId,
                                                             role = "model",
                                                             content = connectorReply
+                                                        )
+                                                    )
+                                                    isSending = false
+                                                    return@launch
+                                                }
+                                            }
+
+                                            // Image generation (Pollinations, free, no key):
+                                            // answer image requests with a generated image
+                                            // instead of a text reply.
+                                            if (currentStaged == null) {
+                                                val imagePrompt = extractImagePrompt(text)
+                                                if (imagePrompt != null) {
+                                                    val encoded = java.net.URLEncoder.encode(imagePrompt, "UTF-8")
+                                                    val imageUrl = "https://image.pollinations.ai/prompt/$encoded?width=1024&height=1024&nologo=true&seed=${System.currentTimeMillis()}"
+                                                    db.chatDao().insertMessage(
+                                                        ChatMessageEntity(
+                                                            conversationId = currentConversationId,
+                                                            role = "model",
+                                                            content = "Here is your image:\n\n![$imagePrompt]($imageUrl)"
                                                         )
                                                     )
                                                     isSending = false
@@ -1205,9 +1472,194 @@ fun ChatScreen(
                             Icon(
                                 imageVector = Icons.Rounded.Send,
                                 contentDescription = "Send",
-                                tint = Color.Black,
+                                tint = if (!isSending && !isDictating && !isLoadingAttachment &&
+                                    (inputMessage.isNotBlank() || stagedAttachment != null)
+                                ) Color.Black else Color.Black.copy(alpha = 0.38f),
                                 modifier = Modifier.size(20.dp)
                             )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                            .padding(top = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val toggleColors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = palette.primary.copy(alpha = 0.14f),
+                            selectedLabelColor = palette.primary,
+                            selectedLeadingIconColor = palette.primary,
+                            containerColor = palette.surface,
+                            labelColor = palette.textSecondary,
+                            iconColor = palette.textSecondary
+                        )
+                        FilterChip(
+                            selected = webSearchEnabled,
+                            onClick = {
+                                inputScope.launch {
+                                    userPrefs.setWebSearchEnabled(!webSearchEnabled)
+                                }
+                            },
+                            label = { Text("Search", fontSize = 12.sp) },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Rounded.Search,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            },
+                            colors = toggleColors,
+                            border = null,
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.heightIn(min = 48.dp)
+                        )
+                        FilterChip(
+                            selected = deepThinkingEnabled,
+                            onClick = {
+                                inputScope.launch {
+                                    userPrefs.setDeepThinkingEnabled(!deepThinkingEnabled)
+                                }
+                            },
+                            label = { Text("Thinking", fontSize = 12.sp) },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Rounded.Psychology,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            },
+                            colors = toggleColors,
+                            border = null,
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.heightIn(min = 48.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+        if (showConversationHistory) {
+            Dialog(
+                onDismissRequest = { showConversationHistory = false },
+                properties = DialogProperties(
+                    usePlatformDefaultWidth = false,
+                    decorFitsSystemWindows = false
+                )
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.45f))
+                        .clickable { showConversationHistory = false },
+                    horizontalArrangement = Arrangement.Start
+                ) {
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .fillMaxWidth(0.84f)
+                            .clickable(enabled = false) {},
+                        color = palette.surface,
+                        shape = RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .statusBarsPadding()
+                                .navigationBarsPadding()
+                                .padding(16.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Your chats",
+                                    modifier = Modifier.weight(1f),
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = palette.textPrimary
+                                )
+                                IconButton(onClick = { showConversationHistory = false }) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Close,
+                                        contentDescription = "Close history",
+                                        tint = palette.textSecondary
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(12.dp))
+                            if (conversations.isEmpty()) {
+                                Text(
+                                    text = "Your conversations will appear here.",
+                                    color = palette.textSecondary,
+                                    fontSize = 14.sp
+                                )
+                            } else {
+                                LazyColumn(
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    items(conversations, key = { it.id }) { conversation ->
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clip(RoundedCornerShape(12.dp))
+                                                .background(
+                                                    if (conversation.id == currentConversationId)
+                                                        palette.surfaceVariant
+                                                    else Color.Transparent
+                                                )
+                                                .clickable {
+                                                    currentConversationId = conversation.id
+                                                    showConversationHistory = false
+                                                }
+                                                .padding(start = 14.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = conversation.title,
+                                                modifier = Modifier.weight(1f),
+                                                color = palette.textPrimary,
+                                                fontSize = 14.sp,
+                                                maxLines = 1
+                                            )
+                                            IconButton(
+                                                onClick = {
+                                                    MiraAppScope.scope.launch {
+                                                        db.chatDao().deleteMessagesForConversation(conversation.id)
+                                                        db.chatDao().deleteConversation(conversation)
+                                                        if (currentConversationId == conversation.id) {
+                                                            val replacement = conversations.firstOrNull {
+                                                                it.id != conversation.id
+                                                            }
+                                                            if (replacement != null) {
+                                                                currentConversationId = replacement.id
+                                                            } else {
+                                                                val newId = UUID.randomUUID().toString()
+                                                                db.chatDao().insertConversation(
+                                                                    ConversationEntity(
+                                                                        id = newId,
+                                                                        title = "Mira Conversation"
+                                                                    )
+                                                                )
+                                                                currentConversationId = newId
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Rounded.DeleteOutline,
+                                                    contentDescription = "Delete ${conversation.title}",
+                                                    tint = palette.textSecondary
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -1513,6 +1965,26 @@ private fun TypingDotsIndicator(dotColor: Color) {
 sealed class MarkdownSegment {
     data class TextSegment(val text: String) : MarkdownSegment()
     data class CodeBlockSegment(val language: String, val code: String) : MarkdownSegment()
+    data class ImageSegment(val alt: String, val url: String) : MarkdownSegment()
+}
+
+/** Splits a plain-text chunk on markdown image syntax ![alt](url). */
+fun splitImageSegments(text: String): List<MarkdownSegment> {
+    val segments = mutableListOf<MarkdownSegment>()
+    val imageRegex = Regex("!\\[([^\\]]*)\\]\\(([^)]+)\\)")
+    var lastIndex = 0
+    for (match in imageRegex.findAll(text)) {
+        val before = text.substring(lastIndex, match.range.first)
+        if (before.isNotEmpty()) segments.add(MarkdownSegment.TextSegment(before))
+        segments.add(MarkdownSegment.ImageSegment(match.groupValues[1], match.groupValues[2].trim()))
+        lastIndex = match.range.last + 1
+    }
+    if (lastIndex < text.length) {
+        val remaining = text.substring(lastIndex)
+        if (remaining.isNotEmpty()) segments.add(MarkdownSegment.TextSegment(remaining))
+    }
+    if (segments.isEmpty() && text.isNotEmpty()) segments.add(MarkdownSegment.TextSegment(text))
+    return segments
 }
 
 fun parseMarkdownSegments(raw: String): List<MarkdownSegment> {
@@ -1523,7 +1995,7 @@ fun parseMarkdownSegments(raw: String): List<MarkdownSegment> {
     for (match in codeFenceRegex.findAll(raw)) {
         val before = raw.substring(lastIndex, match.range.first)
         if (before.isNotEmpty()) {
-            segments.add(MarkdownSegment.TextSegment(before))
+            segments.addAll(splitImageSegments(before))
         }
         val lang = match.groupValues[1].ifBlank { "code" }
         val code = match.groupValues[2].trimEnd()
@@ -1534,7 +2006,7 @@ fun parseMarkdownSegments(raw: String): List<MarkdownSegment> {
     if (lastIndex < raw.length) {
         val remaining = raw.substring(lastIndex)
         if (remaining.isNotEmpty()) {
-            segments.add(MarkdownSegment.TextSegment(remaining))
+            segments.addAll(splitImageSegments(remaining))
         }
     }
 
@@ -1542,6 +2014,34 @@ fun parseMarkdownSegments(raw: String): List<MarkdownSegment> {
         segments.add(MarkdownSegment.TextSegment(raw))
     }
     return segments
+}
+
+/**
+ * Returns the image prompt if the user's message asks for an image, else null.
+ * Triggers: a leading "/image" command, or a natural image-request phrase.
+ */
+fun extractImagePrompt(text: String): String? {
+    val trimmed = text.trim()
+    if (trimmed.isEmpty()) return null
+    // "/image <prompt>" command
+    if (trimmed.lowercase().startsWith("/image")) {
+        val prompt = trimmed.substring(6).trim(' ', ':')
+        return prompt.ifBlank { null }
+    }
+    val lower = trimmed.lowercase()
+    val triggers = listOf(
+        "generate an image", "generate image", "create an image", "create image",
+        "generate a picture", "create a picture", "make a picture", "make an image",
+        "draw me", "draw a", "draw an", "draw the", "paint a", "paint me"
+    )
+    for (trigger in triggers) {
+        val idx = lower.indexOf(trigger)
+        if (idx >= 0) {
+            val after = trimmed.substring(idx + trigger.length).trim(' ', ':', '-', '—')
+            return after.ifBlank { trimmed }
+        }
+    }
+    return null
 }
 
 @Composable
@@ -1633,6 +2133,26 @@ fun MarkdownMessage(
                         defaultColor = textColor,
                         onOpenLink = onOpenLink
                     )
+                }
+                is MarkdownSegment.ImageSegment -> {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        AsyncImage(
+                            model = segment.url,
+                            contentDescription = segment.alt,
+                            contentScale = ContentScale.FillWidth,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                        )
+                        if (segment.alt.isNotBlank()) {
+                            Text(
+                                text = segment.alt,
+                                fontSize = 12.sp,
+                                color = palette.textSecondary,
+                                modifier = Modifier.padding(top = 4.dp)
+                            )
+                        }
+                    }
                 }
             }
         }

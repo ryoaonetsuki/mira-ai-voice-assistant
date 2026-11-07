@@ -1,17 +1,6 @@
 package io.github.ryoaonetsuki.mira.ui.components
 
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.AutoAwesome
-import androidx.compose.material.icons.rounded.Brush
-import androidx.compose.material.icons.rounded.ChatBubble
-import androidx.compose.material.icons.rounded.Code
-import androidx.compose.material.icons.rounded.Extension
-import androidx.compose.material.icons.rounded.GraphicEq
-import androidx.compose.material.icons.rounded.Home
-import androidx.compose.material.icons.rounded.Image
-import androidx.compose.material.icons.rounded.Info
-import androidx.compose.material.icons.rounded.Rule
-import androidx.compose.material.icons.rounded.Settings
+import androidx.annotation.DrawableRes
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -25,7 +14,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -37,7 +25,8 @@ import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
 data class DrawerItem(
     val title: String,
     val route: String,
-    val icon: ImageVector,
+    @DrawableRes val regularIcon: Int,
+    @DrawableRes val filledIcon: Int = regularIcon,
     val category: String = "Core"
 )
 
@@ -50,16 +39,16 @@ fun AppDrawer(
     val palette = LocalMiraPalette.current
 
     val drawerItems = listOf(
-        DrawerItem("Home", Screen.Home.route, Icons.Rounded.Home, "Core"),
-        DrawerItem("Chat", Screen.Chat.route, Icons.Rounded.ChatBubble, "Core"),
-        DrawerItem("Memories", Screen.Memories.route, Icons.Rounded.AutoAwesome, "Productivity"),
-        DrawerItem("Mira Rules", Screen.Rules.route, Icons.Rounded.Rule, "Productivity"),
-        DrawerItem("Code Projects", Screen.CodeProjects.route, Icons.Rounded.Code, "Creation"),
-        DrawerItem("Whiteboard", Screen.Whiteboard.route, Icons.Rounded.Brush, "Creation"),
-        DrawerItem("Vibes", Screen.Vibes.route, Icons.Rounded.GraphicEq, "Lifestyle"),
-        DrawerItem("Extensions", Screen.Extensions.route, Icons.Rounded.Extension, "System"),
-        DrawerItem("Settings", Screen.SettingsHub.route, Icons.Rounded.Settings, "System"),
-        DrawerItem("About", Screen.About.route, Icons.Rounded.Info, "System")
+        DrawerItem("Home", Screen.Home.route, R.drawable.ic_fluent_home_24_regular, R.drawable.ic_fluent_home_24_filled, "Core"),
+        DrawerItem("Chat", Screen.Chat.route, R.drawable.ic_fluent_chat_24_regular, R.drawable.ic_fluent_chat_24_filled, "Core"),
+        DrawerItem("Memories", Screen.Memories.route, R.drawable.ic_fluent_sparkle_24_regular, R.drawable.ic_fluent_sparkle_24_filled, "Productivity"),
+        DrawerItem("Mira Rules", Screen.Rules.route, R.drawable.ic_fluent_task_list_square_ltr_24_regular, R.drawable.ic_fluent_task_list_square_ltr_24_regular, "Productivity"),
+        DrawerItem("Code Projects", Screen.CodeProjects.route, R.drawable.ic_fluent_code_24_regular, R.drawable.ic_fluent_code_24_filled, "Creation"),
+        DrawerItem("Whiteboard", Screen.Whiteboard.route, R.drawable.ic_fluent_board_24_regular, R.drawable.ic_fluent_board_24_regular, "Creation"),
+        DrawerItem("Vibes", Screen.Vibes.route, R.drawable.ic_fluent_sound_wave_circle_24_regular, R.drawable.ic_fluent_sound_wave_circle_24_regular, "Lifestyle"),
+        DrawerItem("Extensions", Screen.Extensions.route, R.drawable.ic_fluent_puzzle_piece_24_regular, R.drawable.ic_fluent_puzzle_piece_24_regular, "System"),
+        DrawerItem("Settings", Screen.SettingsHub.route, R.drawable.ic_fluent_settings_24_regular, R.drawable.ic_fluent_settings_24_filled, "System"),
+        DrawerItem("About", Screen.About.route, R.drawable.ic_fluent_info_24_regular, R.drawable.ic_fluent_info_24_filled, "System")
     )
 
     ModalDrawerSheet(
@@ -132,7 +121,7 @@ fun AppDrawer(
                             .padding(horizontal = 14.dp, vertical = 10.dp)
                     ) {
                         Icon(
-                            imageVector = item.icon,
+                            painter = painterResource(id = if (isSelected) item.filledIcon else item.regularIcon),
                             contentDescription = item.title,
                             tint = itemTint,
                             modifier = Modifier.size(20.dp)

@@ -5,6 +5,9 @@ import android.media.AudioFormat
 import android.media.AudioTrack
 import android.os.Build
 import android.util.Log
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -246,10 +249,184 @@ class AudioPlayer(
         Log.i(TAG, "MIRA_LIVE_VOICE: AudioPlayer released ($totalAudioChunksWritten chunks, $totalAudioBytesWritten bytes)")
     }
 
+    /**
+     * Preview-only: Prepares AudioTrack for voice preview playback.
+     * Primes the track by setting initial volume to 0.0 to eliminate onset pop,
+     * then ramps volume 0 -> 1 over ~80ms in a background thread.
+     */
+    fun beginPreview() {
+        try {
+            audioTrack?.setVolume(0.0f)
+        } catch (e: Exception) {
+            Log.w(TAG, "AudioPlayer.beginPreview: failed to set volume to 0: ${e.message}")
+        }
+        Thread({
+            val steps = 10
+            val stepDelay = 8L // ~80ms total
+            for (i in 1..steps) {
+                if (!isPlaying.get()) break
+                val vol = i.toFloat() / steps
+                try {
+                    audioTrack?.setVolume(vol)
+                } catch (_: Exception) {}
+                try {
+                    Thread.sleep(stepDelay)
+                } catch (_: InterruptedException) {
+                    break
+                }
+            }
+            if (isPlaying.get()) {
+                try {
+                    audioTrack?.setVolume(1.0f)
+                } catch (_: Exception) {}
+            }
+        }, "MiraPreviewFadeInThread").start()
+    }
+
+    /**
+     * Preview-only: Quickly fades volume down to 0 over [durationMs] (default 40ms)
+     * to eliminate clicks/pops before stopImmediatelyAndFlush() and release() are invoked.
+     */
+    fun fadeOutPreview(durationMs: Long = 40L) {
+        val track = audioTrack ?: return
+        if (track.state != AudioTrack.STATE_INITIALIZED || track.playState != AudioTrack.PLAYSTATE_PLAYING) return
+        try {
+            val steps = 5
+            val stepDelay = maxOf(1L, durationMs / steps)
+            for (i in (steps - 1) downTo 0) {
+                track.setVolume(i.toFloat() / steps)
+                try {
+                    Thread.sleep(stepDelay)
+                } catch (_: InterruptedException) {
+                    break
+                }
+            }
+            track.setVolume(0.0f)
+        } catch (_: Exception) {}
+    }
+
+    /**
+     * Preview-only: Fades out quickly first, then stopImmediatelyAndFlush() + release().
+     * Used when the user stops early, selects another voice, or the screen is disposed.
+     */
+    fun stopPreviewCleanly(fadeDurationMs: Long = 40L) {
+        fadeOutPreview(fadeDurationMs)
+        stopImmediatelyAndFlush()
+        release()
+    }
+
+    /**
+     * Preview-only: On natural end (all chunks fed), waits for the audio queue and AudioTrack buffer
+     * to drain, fades volume 1 -> 0 over ~100ms, then stops, flushes, and releases the track.
+     * Never leaves the AudioTrack running after the preview ends.
+     */
+    suspend fun endPreviewCleanly() = withContext(Dispatchers.IO) {
+        val track = audioTrack
+        try {
+            // 1. Wait for audioQueue to drain
+            val queueDrainTimeoutMs = 15000L
+            val startQueueWait = System.currentTimeMillis()
+            while (audioQueue.isNotEmpty() && isPlaying.get()) {
+                if (System.currentTimeMillis() - startQueueWait > queueDrainTimeoutMs) break
+                delay(20)
+            }
+
+            // 2. Wait for AudioTrack buffer to drain
+            if (track != null && track.state == AudioTrack.STATE_INITIALIZED && isPlaying.get()) {
+                val totalFrames = totalAudioBytesWritten / 2
+                val trackDrainTimeoutMs = 5000L
+                val startTrackWait = System.currentTimeMillis()
+                while (isPlaying.get() && (System.currentTimeMillis() - startTrackWait) < trackDrainTimeoutMs) {
+                    val currentHead = try {
+                        track.playbackHeadPosition.toLong() and 0xFFFFFFFFL
+                    } catch (_: Exception) {
+                        totalFrames
+                    }
+                    if (currentHead >= totalFrames) {
+                        break
+                    }
+                    delay(25)
+                }
+
+                // 3. Fade volume 1 -> 0 over ~100ms
+                val steps = 10
+                val stepDelay = 10L // 100ms total
+                for (i in (steps - 1) downTo 0) {
+                    if (!isPlaying.get()) break
+                    try {
+                        track.setVolume(i.toFloat() / steps)
+                    } catch (_: Exception) {}
+                    delay(stepDelay)
+                }
+                try {
+                    track.setVolume(0.0f)
+                } catch (_: Exception) {}
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "MIRA_LIVE_VOICE: Error during endPreviewCleanly: ${e.message}")
+        } finally {
+            // 4. Stop + flush + release
+            stopImmediatelyAndFlush()
+            release()
+        }
+    }
+
     companion object {
         private const val TAG = "MIRA_LIVE_VOICE"
         const val SAMPLE_RATE = 24000
         const val PREBUFFER_MAX_BYTES = 4800 // ~100ms at 24kHz PCM16 mono
         const val PREBUFFER_TIMEOUT_MS = 150L
+
+        /**
+         * Preview-only helper: Applies linear fade-in and fade-out ramps directly to 24kHz PCM16 mono samples.
+         * Math:
+         * - Fade-in: first [fadeInDurationMs] (default 80ms = 1920 samples) ramp linearly from 0.0 to 1.0.
+         * - Fade-out: last [fadeOutDurationMs] (default 100ms = 2400 samples) ramp linearly from 1.0 to 0.0.
+         * Eliminates DC offset clicks at onset and trailing waveform pops at cutoff.
+         */
+        fun applyPreviewFadeRamps(
+            pcmData: ByteArray,
+            fadeInDurationMs: Int = 80,
+            fadeOutDurationMs: Int = 100,
+            sampleRate: Int = SAMPLE_RATE
+        ): ByteArray {
+            if (pcmData.size < 4) return pcmData
+            val result = pcmData.clone()
+            val bytesPerSample = 2 // 16-bit mono
+            val totalSamples = result.size / bytesPerSample
+
+            // Fade-in ramp: 0.0 -> 1.0
+            val fadeInSamples = minOf(totalSamples / 2, (sampleRate * fadeInDurationMs) / 1000)
+            if (fadeInSamples > 0) {
+                for (i in 0 until fadeInSamples) {
+                    val factor = i.toFloat() / fadeInSamples
+                    val offset = i * bytesPerSample
+                    val low = result[offset].toInt() and 0xFF
+                    val high = result[offset + 1].toInt()
+                    val sample = ((high shl 8) or low).toShort()
+                    val ramped = (sample * factor).toInt().coerceIn(-32768, 32767).toShort()
+                    result[offset] = (ramped.toInt() and 0xFF).toByte()
+                    result[offset + 1] = ((ramped.toInt() shr 8) and 0xFF).toByte()
+                }
+            }
+
+            // Fade-out ramp: 1.0 -> 0.0
+            val fadeOutSamples = minOf(totalSamples / 2, (sampleRate * fadeOutDurationMs) / 1000)
+            if (fadeOutSamples > 0) {
+                val startIdx = totalSamples - fadeOutSamples
+                for (i in 0 until fadeOutSamples) {
+                    val factor = 1.0f - (i.toFloat() / fadeOutSamples)
+                    val offset = (startIdx + i) * bytesPerSample
+                    val low = result[offset].toInt() and 0xFF
+                    val high = result[offset + 1].toInt()
+                    val sample = ((high shl 8) or low).toShort()
+                    val ramped = (sample * factor).toInt().coerceIn(-32768, 32767).toShort()
+                    result[offset] = (ramped.toInt() and 0xFF).toByte()
+                    result[offset + 1] = ((ramped.toInt() shr 8) and 0xFF).toByte()
+                }
+            }
+
+            return result
+        }
     }
 }

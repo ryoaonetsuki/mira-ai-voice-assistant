@@ -64,6 +64,7 @@ data class QuickChip(val label: String, val icon: ImageVector, val prompt: Strin
 
 @Composable
 fun HomeScreen(
+    modifier: Modifier = Modifier,
     onNavigate: (String) -> Unit
 ) {
     val context = LocalContext.current
@@ -114,10 +115,9 @@ fun HomeScreen(
     val orbDisplayState = if (liveState == LiveState.ERROR) LiveState.IDLE else liveState
 
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxSize()
             .background(palette.background)
-            .statusBarsPadding()
     ) {
         // Scrollable main content
         Column(

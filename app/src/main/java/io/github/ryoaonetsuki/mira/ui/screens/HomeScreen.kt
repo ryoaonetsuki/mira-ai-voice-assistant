@@ -6,6 +6,14 @@ import androidx.compose.material.icons.rounded.CalendarToday
 import androidx.compose.material.icons.rounded.Chat
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material.icons.rounded.MusicNote
+import androidx.compose.material.icons.rounded.School
+import androidx.compose.material.icons.rounded.Book
+import androidx.compose.material.icons.rounded.Newspaper
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Alarm
+import androidx.compose.material.icons.rounded.CenterFocusStrong
+import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.WbSunny
@@ -18,6 +26,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -48,6 +57,19 @@ import io.github.ryoaonetsuki.mira.ui.navigation.Screen
 import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
 import java.text.SimpleDateFormat
 import java.util.*
+
+data class QuickChip(val label: String, val icon: ImageVector, val prompt: String)
+
+val quickChips = listOf(
+    QuickChip("Music", Icons.Rounded.MusicNote, "Let's play some music to match the mood."),
+    QuickChip("Study", Icons.Rounded.School, "Help me study and explain key concepts."),
+    QuickChip("Journal", Icons.Rounded.Book, "Let's do a quick journal entry about today."),
+    QuickChip("News", Icons.Rounded.Newspaper, "What are the top news headlines right now?"),
+    QuickChip("Tasks", Icons.Rounded.CheckCircle, "What tasks should I focus on next?"),
+    QuickChip("Reminder", Icons.Rounded.Alarm, "Set a reminder for my upcoming schedule."),
+    QuickChip("Focus", Icons.Rounded.CenterFocusStrong, "Let's begin a 25-minute Pomodoro focus session."),
+    QuickChip("Vent", Icons.Rounded.Favorite, "I need someone to listen and talk things through.")
+)
 
 @Composable
 fun HomeScreen(
@@ -211,6 +233,37 @@ fun HomeScreen(
             Spacer(modifier = Modifier.height(16.dp))
         }
 
+        // Quick prompt shortcuts, pinned directly above the floating navigation.
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            quickChips.forEach { chip ->
+                AssistChip(
+                    onClick = {
+                        onNavigate("${Screen.Chat.route}?prompt=${java.net.URLEncoder.encode(chip.prompt, "UTF-8")}")
+                    },
+                    label = { Text(chip.label) },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = chip.icon,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    },
+                    colors = AssistChipDefaults.assistChipColors(
+                        containerColor = palette.surfaceVariant,
+                        labelColor = palette.textPrimary,
+                        leadingIconContentColor = palette.primary
+                    )
+                )
+            }
+        }
+
         // Floating Bottom Navigation Bar (Home | Vision | BIG centre Voice | Memory | Chat)
         HomeBottomNavBar(
             isLive = isLive,
@@ -320,7 +373,7 @@ private fun HomeBottomNavBar(
 
                 // Memory tab
                 BottomNavItem(
-                    icon = Icons.Rounded.AutoAwesome,
+                    icon = Icons.Rounded.Book,
                     label = "Memory",
                     selected = false,
                     palette = palette,

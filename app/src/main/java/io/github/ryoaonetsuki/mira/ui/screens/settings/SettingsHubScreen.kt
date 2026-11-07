@@ -52,7 +52,7 @@ fun SettingsHubScreen(
     val palette = LocalMiraPalette.current
 
     val rows = listOf(
-        SettingsHubRow("Mira & Persona", "Persona, assistant name, language, driving mode", Icons.Rounded.Face, Screen.SettingsMaya.route, "Assistant"),
+        SettingsHubRow("Mira & Persona", "Persona, assistant name, language", Icons.Rounded.Face, Screen.SettingsMaya.route, "Assistant"),
         SettingsHubRow("Personal Profile", "Your name, API key, music app & song", Icons.Rounded.Person, Screen.SettingsPersonal.route, "Assistant"),
         SettingsHubRow("Secret Settings", "Friendly vs Romantic tone with age confirmation", Icons.Rounded.Favorite, Screen.SettingsSecret.route, "Assistant"),
         SettingsHubRow("Voice Engine", "Live capability, diagnostics, 30 voices", Icons.Rounded.GraphicEq, Screen.SettingsVoice.route, "Voice"),
@@ -60,9 +60,8 @@ fun SettingsHubScreen(
         SettingsHubRow("Connectors", "GitHub, Telegram, Notion, Spotify, Linear, Todoist", Icons.Rounded.Link, Screen.SettingsConnectors.route, "Integrations"),
         SettingsHubRow("Email", "Send-as address, signature, AI email composer", Icons.Rounded.Email, Screen.SettingsEmail.route, "Integrations"),
         SettingsHubRow("Messages & WhatsApp", "Auto-reply template, Notification listener", Icons.Rounded.Chat, Screen.SettingsMessages.route, "Integrations"),
-        SettingsHubRow("Social Media", "Handle, caption voice, story ideas", Icons.Rounded.Share, Screen.SettingsSocial.route, "Integrations"),
-        SettingsHubRow("Optional Integrations", "Image provider, Maps key, Web search engines", Icons.Rounded.Tune, Screen.SettingsOptional.route, "Integrations"),
-        SettingsHubRow("Skills", "Installed playbooks & tool capabilities", Icons.Rounded.AutoAwesome, Screen.SettingsSkills.route, "System"),
+        SettingsHubRow("Social Media", "Handle, caption voice", Icons.Rounded.Share, Screen.SettingsSocial.route, "Integrations"),
+        SettingsHubRow("Optional Integrations", "Maps API key", Icons.Rounded.Tune, Screen.SettingsOptional.route, "Integrations"),
         SettingsHubRow("Backup & Restore", "Export & restore memories and chats via SAF", Icons.Rounded.Backup, Screen.SettingsBackup.route, "System"),
         SettingsHubRow("About Mira AI", "Version, developer info, open-source licenses", Icons.Rounded.Info, Screen.About.route, "System")
     )

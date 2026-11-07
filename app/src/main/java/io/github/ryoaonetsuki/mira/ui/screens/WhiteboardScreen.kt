@@ -1,11 +1,5 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.DeleteOutline
-import androidx.compose.material.icons.rounded.LineWeight
-import androidx.compose.material.icons.rounded.Save
-import androidx.compose.material.icons.rounded.Undo
 import android.content.ContentValues
 import android.graphics.Bitmap
 import android.graphics.Paint
@@ -35,9 +29,11 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.ryoaonetsuki.mira.R
 import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
 
 data class DrawPath(val path: androidx.compose.ui.graphics.Path, val color: Color, val strokeWidth: Float)
@@ -118,21 +114,21 @@ fun WhiteboardScreen(
                 title = { Text("Whiteboard", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(painter = painterResource(id = R.drawable.ic_fluent_arrow_left_24_regular), contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 actions = {
                     // Undo
                     IconButton(onClick = { if (paths.isNotEmpty()) paths.removeAt(paths.size - 1) }) {
-                        Icon(Icons.Rounded.Undo, contentDescription = "Undo", tint = palette.textPrimary)
+                        Icon(painter = painterResource(id = R.drawable.ic_fluent_arrow_undo_24_regular), contentDescription = "Undo", tint = palette.textPrimary)
                     }
                     // Clear
                     IconButton(onClick = { paths.clear() }) {
-                        Icon(Icons.Rounded.DeleteOutline, contentDescription = "Clear", tint = palette.textSecondary)
+                        Icon(painter = painterResource(id = R.drawable.ic_fluent_delete_24_regular), contentDescription = "Clear", tint = palette.textSecondary)
                     }
                     // Save
                     IconButton(onClick = { saveWhiteboardToGallery() }) {
-                        Icon(Icons.Rounded.Save, contentDescription = "Save to Gallery", tint = palette.primary)
+                        Icon(painter = painterResource(id = R.drawable.ic_fluent_save_24_regular), contentDescription = "Save to Gallery", tint = palette.primary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -243,7 +239,7 @@ fun WhiteboardScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Icon(
-                        imageVector = Icons.Rounded.LineWeight,
+                        painter = painterResource(id = R.drawable.ic_fluent_line_thickness_24_regular),
                         contentDescription = null,
                         tint = palette.textSecondary,
                         modifier = Modifier.size(20.dp)

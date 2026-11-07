@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -35,7 +36,7 @@ fun MiraCard(
     content: @Composable ColumnScope.() -> Unit
 ) {
     val palette = LocalMiraPalette.current
-    val shape = RoundedCornerShape(cornerRadius)
+    val shape = remember(cornerRadius) { RoundedCornerShape(cornerRadius) }
     val cardBackground = containerColor ?: palette.surface
     val cardBorder = borderColor ?: palette.borderSubtle
 
@@ -68,19 +69,21 @@ fun MiraButton(
 ) {
     val palette = LocalMiraPalette.current
     val isInteractive = enabled && !isLoading
-    val shape = RoundedCornerShape(14.dp)
+    val shape = remember { RoundedCornerShape(14.dp) }
 
-    val gradient = if (isInteractive) {
-        Brush.horizontalGradient(
-            colors = listOf(palette.primary, palette.secondary)
-        )
-    } else {
-        Brush.horizontalGradient(
-            colors = listOf(
-                palette.surfaceVariant.copy(alpha = 0.7f),
-                palette.surfaceVariant.copy(alpha = 0.5f)
+    val gradient = remember(isInteractive, palette.primary, palette.secondary, palette.surfaceVariant) {
+        if (isInteractive) {
+            Brush.horizontalGradient(
+                colors = listOf(palette.primary, palette.secondary)
             )
-        )
+        } else {
+            Brush.horizontalGradient(
+                colors = listOf(
+                    palette.surfaceVariant.copy(alpha = 0.7f),
+                    palette.surfaceVariant.copy(alpha = 0.5f)
+                )
+            )
+        }
     }
 
     val contentColor = when {

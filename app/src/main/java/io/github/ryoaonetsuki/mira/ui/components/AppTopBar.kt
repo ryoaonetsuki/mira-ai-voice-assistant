@@ -1,8 +1,5 @@
 package io.github.ryoaonetsuki.mira.ui.components
 
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Menu
-import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -44,7 +41,7 @@ fun AppTopBar(
         navigationIcon = {
             IconButton(onClick = onMenuClick) {
                 Icon(
-                    imageVector = Icons.Rounded.Menu,
+                    painter = painterResource(id = R.drawable.ic_fluent_navigation_24_regular),
                     contentDescription = "Open Drawer",
                     tint = palette.textPrimary
                 )
@@ -58,7 +55,7 @@ fun AppTopBar(
             ) {
                 IconButton(onClick = onNotificationsClick) {
                     Icon(
-                        imageVector = Icons.Rounded.Notifications,
+                        painter = painterResource(id = R.drawable.ic_fluent_alert_24_regular),
                         contentDescription = "Notifications",
                         tint = palette.textPrimary
                     )

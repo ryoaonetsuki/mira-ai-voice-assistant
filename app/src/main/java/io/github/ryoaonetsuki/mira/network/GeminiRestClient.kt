@@ -15,6 +15,8 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.IOException
+import java.net.URLEncoder
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 
@@ -416,23 +418,19 @@ object MiraChatSearchHeuristic {
     }
 }
 
-class GeminiRestClient {
-
-    private val client = OkHttpClient.Builder()
+class GeminiRestClient(
+    private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .writeTimeout(15, TimeUnit.SECONDS)
-        .build()
-
-    // ROUND 6: short-timeout client used ONLY for key validation. Every validation
-    // HTTP call is capped at 8s (callTimeout), so one slow/overloaded Google
-    // response can never wedge Setup. Chat/voice keep the shared client above.
-    private val validationClient = OkHttpClient.Builder()
+        .build(),
+    private val validationClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(5, TimeUnit.SECONDS)
         .readTimeout(8, TimeUnit.SECONDS)
         .writeTimeout(5, TimeUnit.SECONDS)
         .callTimeout(8, TimeUnit.SECONDS)
         .build()
+) {
 
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
@@ -598,11 +596,16 @@ class GeminiRestClient {
     }
 
     /**
-     * In-app Live-capability check (ROUND 12 spec §3.7):
-     * Runs GET https://generativelanguage.googleapis.com/v1beta/models with the x-goog-api-key header
-     * and reports plainly whether models/gemini-3.8-live with bidiGenerateContent is listed.
+     * In-app Live-capability check (ROUND 14 spec §1):
+     * Runs GET https://generativelanguage.googleapis.com/v1beta/models?pageSize=100 with x-goog-api-key header
+     * and follows nextPageToken (up to ~5 pages) to verify if the configured Live model with bidiGenerateContent is listed.
+     * Distinctly classifies errors (auth 400/401/403, transient 429/503/etc., network, parse).
+     * Labels the outcome honestly as "listed" for this key, not that Live audio works.
      */
-    suspend fun checkLiveCapability(apiKey: String): LiveCapabilityOutcome {
+    suspend fun checkLiveCapability(
+        apiKey: String,
+        targetModel: String = "models/gemini-3.8-live"
+    ): LiveCapabilityOutcome {
         val key = normalizeApiKey(apiKey)
         if (key.isBlank()) {
             return LiveCapabilityOutcome(
@@ -610,66 +613,113 @@ class GeminiRestClient {
                 message = "API key cannot be empty"
             )
         }
+        val cleanTarget = targetModel.trim().removePrefix("models/")
         return withContext(Dispatchers.IO) {
-            try {
-                val request = Request.Builder()
-                    .url("https://generativelanguage.googleapis.com/v1beta/models")
-                    .header("x-goog-api-key", key)
-                    .get()
-                    .build()
-                validationClient.newCall(request).execute().use { response ->
-                    val body = response.body?.string() ?: ""
-                    if (!response.isSuccessful) {
-                        val errMsg = try {
-                            val json = JSONObject(body)
-                            json.optJSONObject("error")?.optString("message") ?: "HTTP ${response.code}"
-                        } catch (_: Exception) {
-                            "HTTP ${response.code}"
-                        }
-                        return@withContext LiveCapabilityOutcome(
-                            isCapable = false,
-                            message = if (response.code == 400 || response.code == 403 || response.code == 401) {
-                                "API key problem — check your key in Settings"
-                            } else {
-                                "Could not check Live capability: $errMsg"
-                            }
-                        )
+            val timeoutResult = withTimeoutOrNull(30_000L) {
+                var nextPageToken: String? = null
+                var modelFoundWithoutBidi = false
+
+                for (page in 1..5) {
+                    val urlBuilder = StringBuilder("https://generativelanguage.googleapis.com/v1beta/models?pageSize=100")
+                    if (!nextPageToken.isNullOrBlank()) {
+                        urlBuilder.append("&pageToken=").append(URLEncoder.encode(nextPageToken, "UTF-8"))
                     }
-                    val json = JSONObject(body)
-                    val models = json.optJSONArray("models") ?: JSONArray()
-                    var hasLiveModel = false
-                    for (i in 0 until models.length()) {
-                        val modelObj = models.optJSONObject(i) ?: continue
-                        val name = modelObj.optString("name", "")
-                        if (name == "models/gemini-3.8-live" || name == "gemini-3.8-live") {
-                            val methods = modelObj.optJSONArray("supportedGenerationMethods") ?: JSONArray()
-                            for (j in 0 until methods.length()) {
-                                if (methods.optString(j) == "bidiGenerateContent") {
-                                    hasLiveModel = true
-                                    break
+
+                    val request = Request.Builder()
+                        .url(urlBuilder.toString())
+                        .header("x-goog-api-key", key)
+                        .get()
+                        .build()
+
+                    try {
+                        validationClient.newCall(request).execute().use { response ->
+                            val body = response.body?.string() ?: ""
+                            val code = response.code
+
+                            if (!response.isSuccessful) {
+                                val userMessage = when {
+                                    code in listOf(400, 401, 403) ->
+                                        "Google rejected the key (HTTP $code) — check the key in Settings"
+                                    code in listOf(429, 500, 502, 503, 504) ->
+                                        "Google's servers are busy (HTTP $code) — please try again"
+                                    else ->
+                                        "Live capability check failed (HTTP $code) — please try again"
+                                }
+                                return@withTimeoutOrNull LiveCapabilityOutcome(
+                                    isCapable = false,
+                                    message = userMessage
+                                )
+                            }
+
+                            val json = try {
+                                JSONObject(body)
+                            } catch (e: Exception) {
+                                return@withTimeoutOrNull LiveCapabilityOutcome(
+                                    isCapable = false,
+                                    message = "Live capability check failed — unexpected response from Google"
+                                )
+                            }
+
+                            val models = json.optJSONArray("models") ?: JSONArray()
+                            for (i in 0 until models.length()) {
+                                val modelObj = models.optJSONObject(i) ?: continue
+                                val name = modelObj.optString("name", "").trim().removePrefix("models/")
+                                if (name.equals(cleanTarget, ignoreCase = true)) {
+                                    val methods = modelObj.optJSONArray("supportedGenerationMethods") ?: JSONArray()
+                                    var hasBidi = false
+                                    for (j in 0 until methods.length()) {
+                                        if (methods.optString(j) == "bidiGenerateContent") {
+                                            hasBidi = true
+                                            break
+                                        }
+                                    }
+                                    if (hasBidi) {
+                                        return@withTimeoutOrNull LiveCapabilityOutcome(
+                                            isCapable = true,
+                                            message = "$targetModel is listed for this key (supports bidiGenerateContent)"
+                                        )
+                                    } else {
+                                        modelFoundWithoutBidi = true
+                                    }
                                 }
                             }
+
+                            val nextToken = json.optString("nextPageToken", "").trim()
+                            if (nextToken.isEmpty()) {
+                                break
+                            }
+                            nextPageToken = nextToken
                         }
-                        if (hasLiveModel) break
-                    }
-                    if (hasLiveModel) {
-                        LiveCapabilityOutcome(
-                            isCapable = true,
-                            message = "Live voice available on this key"
-                        )
-                    } else {
-                        LiveCapabilityOutcome(
+                    } catch (e: IOException) {
+                        return@withTimeoutOrNull LiveCapabilityOutcome(
                             isCapable = false,
-                            message = "This key cannot use Live voice — create a new key in Google AI Studio"
+                            message = "Network error checking Live capability — check your internet connection"
+                        )
+                    } catch (e: Exception) {
+                        return@withTimeoutOrNull LiveCapabilityOutcome(
+                            isCapable = false,
+                            message = "Live capability check failed: ${e.message ?: "unexpected error"}"
                         )
                     }
                 }
-            } catch (e: Exception) {
-                LiveCapabilityOutcome(
-                    isCapable = false,
-                    message = "Live check failed: ${e.message ?: "Network error"}"
-                )
+
+                if (modelFoundWithoutBidi) {
+                    LiveCapabilityOutcome(
+                        isCapable = false,
+                        message = "$targetModel is listed for this key but does not support Live voice (bidiGenerateContent)"
+                    )
+                } else {
+                    LiveCapabilityOutcome(
+                        isCapable = false,
+                        message = "$targetModel is not listed for this key/project"
+                    )
+                }
             }
+
+            timeoutResult ?: LiveCapabilityOutcome(
+                isCapable = false,
+                message = "Live capability check timed out — please try again"
+            )
         }
     }
 

@@ -11,7 +11,6 @@ object ConnectorIntentHandler {
         if (lower.isBlank()) return false
 
         return isWeatherCommand(lower) ||
-                isStockCommand(lower) ||
                 isTodoistAddCommand(lower) ||
                 isTodoistListCommand(lower) ||
                 isGitHubCommand(lower) ||
@@ -37,16 +36,6 @@ object ConnectorIntentHandler {
             securePrefs.setConnectorLastUsed("open_meteo")
             val res = ConnectorActions.getOpenMeteoWeather()
             return if (res.isSuccess) res.getOrThrow() else "Weather error: ${res.exceptionOrNull()?.message}"
-        }
-
-        // 2. Stock / Market Quote (Yahoo Finance — no token needed)
-        if (isStockCommand(lower)) {
-            val symbol = extractStockSymbol(lower)
-            if (symbol.isNotBlank()) {
-                securePrefs.setConnectorLastUsed("yahoo_finance")
-                val res = ConnectorActions.getYahooFinanceQuote(symbol)
-                return if (res.isSuccess) res.getOrThrow() else "Finance error: ${res.exceptionOrNull()?.message}"
-            }
         }
 
         // 3. Todoist: Add Task
@@ -269,32 +258,6 @@ object ConnectorIntentHandler {
                 lower.startsWith("how is the weather") ||
                 lower.startsWith("current weather") ||
                 lower.startsWith("weather forecast")
-    }
-
-    private fun isStockCommand(lower: String): Boolean {
-        return lower.startsWith("stock price of") ||
-                lower.startsWith("stock price") ||
-                lower.startsWith("stock of") ||
-                lower.startsWith("stock quote") ||
-                lower.startsWith("share price of") ||
-                lower.startsWith("price of ") ||
-                lower.startsWith("quote for ") ||
-                lower.startsWith("$")
-    }
-
-    private fun extractStockSymbol(lower: String): String {
-        return lower
-            .removePrefix("stock price of")
-            .removePrefix("stock price")
-            .removePrefix("stock of")
-            .removePrefix("stock quote")
-            .removePrefix("share price of")
-            .removePrefix("price of")
-            .removePrefix("quote for")
-            .removePrefix("$")
-            .trim()
-            .split("\\s+".toRegex())
-            .firstOrNull() ?: ""
     }
 
     private fun isTodoistAddCommand(lower: String): Boolean {

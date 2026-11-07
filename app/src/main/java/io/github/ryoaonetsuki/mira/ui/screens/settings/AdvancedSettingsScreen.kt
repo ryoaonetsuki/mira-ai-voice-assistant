@@ -49,7 +49,6 @@ fun AdvancedSettingsScreen(
     val securePrefs = remember { SecurePreferences(context) }
     val db = remember { MiraDatabase.getInstance(context) }
 
-    val themePalette by userPrefs.themePaletteFlow.collectAsState(initial = "Midnight")
     val orbStyle by userPrefs.orbStyleFlow.collectAsState(initial = "Mira Neon")
 
     val sosContacts by db.sosContactDao().getAllContacts().collectAsState(initial = emptyList())
@@ -75,7 +74,6 @@ fun AdvancedSettingsScreen(
     var sosNameInput by remember { mutableStateOf("") }
     var sosPhoneInput by remember { mutableStateOf("") }
 
-    val themesList = listOf("Midnight", "Obsidian", "Nocturne", "Ember", "Abyss", "Rosewood", "Daylight")
     val orbStylesList = listOf("Mira Neon", "Cyan Core", "Pulse Wave", "Deep Violet")
 
     Scaffold(
@@ -110,85 +108,6 @@ fun AdvancedSettingsScreen(
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Theme Palettes Card
-            item {
-                Text(
-                    text = "Appearance & Theming",
-                    fontSize = 13.5.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = palette.primary,
-                    modifier = Modifier.padding(start = 2.dp, top = 2.dp)
-                )
-
-                Spacer(modifier = Modifier.height(6.dp))
-
-                MiraCard(modifier = Modifier.fillMaxWidth()) {
-                    Text(
-                        text = "Color Palette (7 Themes)",
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = palette.textPrimary
-                    )
-                    Text(
-                        text = "Active theme applies across all screens and components",
-                        fontSize = 12.sp,
-                        color = palette.textSecondary
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        for (t in themesList.take(4)) {
-                            val isSelected = themePalette == t
-                            FilterChip(
-                                selected = isSelected,
-                                onClick = { scope.launch { userPrefs.setThemePalette(t) } },
-                                label = { Text(t, fontSize = 11.5.sp) },
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = palette.primary,
-                                    selectedLabelColor = if (palette.isDark) palette.background else Color.White
-                                ),
-                                border = FilterChipDefaults.filterChipBorder(
-                                    enabled = true,
-                                    selected = isSelected,
-                                    borderColor = palette.borderSubtle,
-                                    selectedBorderColor = palette.primary
-                                )
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        for (t in themesList.drop(4)) {
-                            val isSelected = themePalette == t
-                            FilterChip(
-                                selected = isSelected,
-                                onClick = { scope.launch { userPrefs.setThemePalette(t) } },
-                                label = { Text(t, fontSize = 11.5.sp) },
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = palette.primary,
-                                    selectedLabelColor = if (palette.isDark) palette.background else Color.White
-                                ),
-                                border = FilterChipDefaults.filterChipBorder(
-                                    enabled = true,
-                                    selected = isSelected,
-                                    borderColor = palette.borderSubtle,
-                                    selectedBorderColor = palette.primary
-                                )
-                            )
-                        }
-                    }
-                }
-            }
-
             // Orb Style Card
             item {
                 MiraCard(modifier = Modifier.fillMaxWidth()) {

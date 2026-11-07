@@ -1,24 +1,26 @@
 package io.github.ryoaonetsuki.mira.ui.screens.settings
 
-import androidx.compose.ui.res.painterResource
-import io.github.ryoaonetsuki.mira.R
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
-import io.github.ryoaonetsuki.mira.ui.components.MiraSwitch
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import io.github.ryoaonetsuki.mira.data.model.PersonaType
+import io.github.ryoaonetsuki.mira.R
 import io.github.ryoaonetsuki.mira.data.model.VoiceCatalog
 import io.github.ryoaonetsuki.mira.data.preferences.UserPreferences
 import io.github.ryoaonetsuki.mira.ui.components.MiraCard
@@ -49,10 +51,21 @@ fun MayaSettingsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Mira & Persona", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
+                title = {
+                    Text(
+                        text = "Mira & Persona",
+                        fontSize = 19.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = palette.textPrimary
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(painter = painterResource(id = R.drawable.ic_fluent_arrow_left_24_regular), contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_fluent_arrow_left_24_regular),
+                            contentDescription = "Back",
+                            tint = palette.textPrimary
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -65,19 +78,20 @@ fun MayaSettingsScreen(
                 .fillMaxSize()
                 .padding(padding)
                 .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             item {
+                Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = "Persona Archetype",
-                    fontSize = 14.sp,
+                    fontSize = 13.5.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = palette.primary
                 )
-            }
 
-            // Persona Cards (Only 2: Mira and Orion)
-            item {
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // Persona Cards (Mira and Orion)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -86,7 +100,10 @@ fun MayaSettingsScreen(
                     MiraCard(
                         modifier = Modifier
                             .weight(1f)
-                            .clip(RoundedCornerShape(14.dp)),
+                            .then(
+                                if (isMira) Modifier.border(1.5.dp, palette.primary, RoundedCornerShape(16.dp))
+                                else Modifier
+                            ),
                         onClick = {
                             scope.launch {
                                 userPrefs.setPersona("Mira")
@@ -94,17 +111,32 @@ fun MayaSettingsScreen(
                             }
                         }
                     ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = "Mira (Default)",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isMira) palette.primary else palette.textPrimary,
+                                modifier = Modifier.weight(1f)
+                            )
+                            if (isMira) {
+                                Icon(
+                                    painter = painterResource(id = R.drawable.ic_fluent_checkmark_circle_24_filled),
+                                    contentDescription = "Selected",
+                                    tint = palette.primary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = "Mira (Default)",
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (isMira) palette.primary else palette.textPrimary
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "Female, warm companion. Default voice: Aoede.",
-                            fontSize = 11.sp,
-                            color = palette.textSecondary
+                            text = "Warm, empathetic companion. Default voice: Aoede.",
+                            fontSize = 12.sp,
+                            color = palette.textSecondary,
+                            lineHeight = 16.sp
                         )
                     }
 
@@ -112,7 +144,10 @@ fun MayaSettingsScreen(
                     MiraCard(
                         modifier = Modifier
                             .weight(1f)
-                            .clip(RoundedCornerShape(14.dp)),
+                            .then(
+                                if (isOrion) Modifier.border(1.5.dp, palette.secondary, RoundedCornerShape(16.dp))
+                                else Modifier
+                            ),
                         onClick = {
                             scope.launch {
                                 userPrefs.setPersona("Orion")
@@ -120,34 +155,48 @@ fun MayaSettingsScreen(
                             }
                         }
                     ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = "Orion",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isOrion) palette.secondary else palette.textPrimary,
+                                modifier = Modifier.weight(1f)
+                            )
+                            if (isOrion) {
+                                Icon(
+                                    painter = painterResource(id = R.drawable.ic_fluent_checkmark_circle_24_filled),
+                                    contentDescription = "Selected",
+                                    tint = palette.secondary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = "Orion",
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (isOrion) palette.primary else palette.textPrimary
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "Male, sharp & concise. Default voice: Charon.",
-                            fontSize = 11.sp,
-                            color = palette.textSecondary
+                            text = "Sharp, focused & concise. Default voice: Charon.",
+                            fontSize = 12.sp,
+                            color = palette.textSecondary,
+                            lineHeight = 16.sp
                         )
                     }
                 }
             }
 
             item {
-                Spacer(modifier = Modifier.height(6.dp))
                 Text(
                     text = "Identity & Communication",
-                    fontSize = 14.sp,
+                    fontSize = 13.5.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = palette.primary
                 )
-            }
 
-            // Assistant Name
-            item {
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // Assistant Name Card
                 MiraCard(
                     modifier = Modifier.fillMaxWidth(),
                     onClick = {
@@ -159,17 +208,45 @@ fun MayaSettingsScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Assistant Name", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
-                            Text("What you call her: \"$assistantName\"", fontSize = 12.sp, color = palette.textSecondary)
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .background(palette.primary.copy(alpha = 0.15f))
+                        ) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_fluent_bot_sparkle_24_regular),
+                                contentDescription = null,
+                                tint = palette.primary,
+                                modifier = Modifier.size(20.dp)
+                            )
                         }
-                        Icon(painter = painterResource(id = R.drawable.ic_fluent_chevron_right_24_regular), contentDescription = null, tint = palette.textSecondary)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Assistant Name",
+                                fontSize = 14.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = palette.textPrimary
+                            )
+                            Text(
+                                text = "What you call her: “$assistantName”",
+                                fontSize = 12.sp,
+                                color = palette.textSecondary
+                            )
+                        }
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_fluent_chevron_right_24_regular),
+                            contentDescription = null,
+                            tint = palette.textSecondary
+                        )
                     }
                 }
-            }
 
-            // Spoken Language
-            item {
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Spoken Language Card
                 MiraCard(
                     modifier = Modifier.fillMaxWidth(),
                     onClick = { showLanguageDialog = true }
@@ -178,16 +255,44 @@ fun MayaSettingsScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Spoken Language", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
-                            Text(language, fontSize = 12.sp, color = palette.textSecondary)
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .background(palette.secondary.copy(alpha = 0.15f))
+                        ) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_fluent_globe_24_regular),
+                                contentDescription = null,
+                                tint = palette.secondary,
+                                modifier = Modifier.size(20.dp)
+                            )
                         }
-                        Icon(painter = painterResource(id = R.drawable.ic_fluent_chevron_right_24_regular), contentDescription = null, tint = palette.textSecondary)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Spoken Language",
+                                fontSize = 14.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = palette.textPrimary
+                            )
+                            Text(
+                                text = language,
+                                fontSize = 12.sp,
+                                color = palette.textSecondary
+                            )
+                        }
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_fluent_chevron_right_24_regular),
+                            contentDescription = null,
+                            tint = palette.textSecondary
+                        )
                     }
                 }
             }
 
-            // Secret Settings Shortcut
+            // Secret Settings Shortcut Card
             item {
                 MiraCard(
                     modifier = Modifier.fillMaxWidth(),
@@ -197,13 +302,45 @@ fun MayaSettingsScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Secret Settings", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = palette.primary)
-                            Text("Friendly vs Romantic companion mode with age gate", fontSize = 12.sp, color = palette.textSecondary)
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFFF43F5E).copy(alpha = 0.15f))
+                        ) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_fluent_heart_24_regular),
+                                contentDescription = null,
+                                tint = Color(0xFFF43F5E),
+                                modifier = Modifier.size(20.dp)
+                            )
                         }
-                        Icon(painter = painterResource(id = R.drawable.ic_fluent_chevron_right_24_regular), contentDescription = null, tint = palette.primary)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Secret Settings",
+                                fontSize = 14.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = palette.textPrimary
+                            )
+                            Text(
+                                text = "Friendly vs Romantic companion mode with age gate",
+                                fontSize = 12.sp,
+                                color = palette.textSecondary
+                            )
+                        }
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_fluent_chevron_right_24_regular),
+                            contentDescription = null,
+                            tint = palette.textSecondary
+                        )
                     }
                 }
+            }
+
+            item {
+                Spacer(modifier = Modifier.height(20.dp))
             }
         }
 
@@ -211,12 +348,13 @@ fun MayaSettingsScreen(
         if (showNameDialog) {
             AlertDialog(
                 onDismissRequest = { showNameDialog = false },
-                title = { Text("Rename Assistant") },
+                title = { Text("Rename Assistant", fontWeight = FontWeight.Bold) },
                 text = {
                     OutlinedTextField(
                         value = nameInput,
                         onValueChange = { nameInput = it },
                         singleLine = true,
+                        shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth()
                     )
                 },
@@ -227,11 +365,13 @@ fun MayaSettingsScreen(
                             showNameDialog = false
                         }
                     }) {
-                        Text("Save")
+                        Text("Save", fontWeight = FontWeight.Bold, color = palette.primary)
                     }
                 },
                 dismissButton = {
-                    TextButton(onClick = { showNameDialog = false }) { Text("Cancel") }
+                    TextButton(onClick = { showNameDialog = false }) {
+                        Text("Cancel", color = palette.textSecondary)
+                    }
                 },
                 containerColor = palette.surface,
                 titleContentColor = palette.textPrimary,
@@ -243,7 +383,7 @@ fun MayaSettingsScreen(
         if (showLanguageDialog) {
             AlertDialog(
                 onDismissRequest = { showLanguageDialog = false },
-                title = { Text("Select Spoken Language") },
+                title = { Text("Select Spoken Language", fontWeight = FontWeight.Bold) },
                 text = {
                     LazyColumn(modifier = Modifier.height(300.dp)) {
                         items(VoiceCatalog.supportedLanguages) { lang ->
@@ -259,6 +399,7 @@ fun MayaSettingsScreen(
                                 Text(
                                     text = lang,
                                     fontSize = 14.sp,
+                                    fontWeight = if (language == lang) FontWeight.Bold else FontWeight.Normal,
                                     color = if (language == lang) palette.primary else palette.textPrimary
                                 )
                             }
@@ -266,7 +407,9 @@ fun MayaSettingsScreen(
                     }
                 },
                 confirmButton = {
-                    TextButton(onClick = { showLanguageDialog = false }) { Text("Close") }
+                    TextButton(onClick = { showLanguageDialog = false }) {
+                        Text("Close", color = palette.textSecondary)
+                    }
                 },
                 containerColor = palette.surface,
                 titleContentColor = palette.textPrimary,

@@ -12,6 +12,12 @@ interface MemoryDao {
     @Query("SELECT * FROM memories WHERE content LIKE '%' || :query || '%' ORDER BY createdAt DESC")
     fun searchMemories(query: String): Flow<List<MemoryEntity>>
 
+    @Query("SELECT * FROM memories WHERE conversationId = :convId LIMIT 1")
+    suspend fun getMemoryByConversationId(convId: String): MemoryEntity?
+
+    @Query("DELETE FROM memories WHERE conversationId = :convId")
+    suspend fun deleteMemoryByConversationId(convId: String)
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMemory(memory: MemoryEntity): Long
 

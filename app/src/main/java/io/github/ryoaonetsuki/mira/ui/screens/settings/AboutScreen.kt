@@ -1,7 +1,9 @@
 package io.github.ryoaonetsuki.mira.ui.screens.settings
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -12,6 +14,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -42,10 +45,21 @@ fun AboutScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("About Mira AI", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
+                title = {
+                    Text(
+                        text = "About Mira AI",
+                        fontSize = 19.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = palette.textPrimary
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(painter = painterResource(id = R.drawable.ic_fluent_arrow_left_24_regular), contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_fluent_arrow_left_24_regular),
+                            contentDescription = "Back",
+                            tint = palette.textPrimary
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -62,55 +76,102 @@ fun AboutScreen(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             item {
-                Spacer(modifier = Modifier.height(8.dp))
-                Image(
-                    painter = painterResource(id = R.drawable.logo_chosen),
-                    contentDescription = "Mira Logo",
+                Spacer(modifier = Modifier.height(10.dp))
+                Box(
+                    contentAlignment = Alignment.Center,
                     modifier = Modifier
-                        .size(86.dp)
+                        .size(92.dp)
                         .clip(CircleShape)
-                )
+                        .border(1.5.dp, palette.primary.copy(alpha = 0.4f), CircleShape)
+                ) {
+                    Image(
+                        painter = painterResource(id = R.drawable.logo_chosen),
+                        contentDescription = "Mira Logo",
+                        modifier = Modifier
+                            .size(86.dp)
+                            .clip(CircleShape)
+                    )
+                }
+
                 Spacer(modifier = Modifier.height(12.dp))
+
                 Text(
                     text = "Mira AI",
                     fontSize = 24.sp,
                     fontWeight = FontWeight.Bold,
                     color = palette.textPrimary
                 )
-                Text(
-                    text = "Version 1.0.0 (Build 1)",
-                    fontSize = 13.sp,
-                    color = palette.textSecondary
-                )
-                Spacer(modifier = Modifier.height(4.dp))
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = palette.surfaceVariant.copy(alpha = 0.6f),
+                    border = BorderStroke(1.dp, palette.borderSubtle)
+                ) {
+                    Text(
+                        text = "Version 1.0.0 (Build 1)",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = palette.textSecondary,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
                 Text(
                     text = "Developed by Salman Biswas",
-                    fontSize = 14.sp,
+                    fontSize = 13.5.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = palette.primary
                 )
+
+                Spacer(modifier = Modifier.height(8.dp))
             }
 
             // Privacy Card
             item {
                 MiraCard(modifier = Modifier.fillMaxWidth()) {
-                    Text(
-                        text = "Device-First Privacy",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = palette.textPrimary
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(palette.primary.copy(alpha = 0.15f))
+                        ) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_fluent_shield_keyhole_24_regular),
+                                contentDescription = null,
+                                tint = palette.primary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            text = "Device-First Privacy",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = palette.textPrimary
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
                     Text(
                         text = "Mira is built with user privacy as a foundation. All API keys and connector credentials are encrypted using Android Keystore AES256-GCM hardware security. Voice sessions connect directly via secure low-latency WebSocket without intermediary proxy logging.",
-                        fontSize = 12.sp,
+                        fontSize = 12.5.sp,
                         color = palette.textSecondary,
                         lineHeight = 18.sp
                     )
                 }
             }
 
-            // Open-Source Licenses
+            // Open-Source Licenses Section Header
             item {
                 Column(modifier = Modifier.fillMaxWidth()) {
                     Text(
@@ -118,7 +179,7 @@ fun AboutScreen(
                         fontSize = 14.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = palette.primary,
-                        modifier = Modifier.padding(bottom = 6.dp)
+                        modifier = Modifier.padding(start = 2.dp, top = 4.dp)
                     )
                 }
             }
@@ -131,13 +192,17 @@ fun AboutScreen(
                         fontWeight = FontWeight.SemiBold,
                         color = palette.textPrimary
                     )
-                    Spacer(modifier = Modifier.height(2.dp))
+                    Spacer(modifier = Modifier.height(3.dp))
                     Text(
                         text = "${item.author} • Licensed under ${item.license}",
-                        fontSize = 11.sp,
+                        fontSize = 11.5.sp,
                         color = palette.textSecondary
                     )
                 }
+            }
+
+            item {
+                Spacer(modifier = Modifier.height(20.dp))
             }
         }
     }

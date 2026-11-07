@@ -1,5 +1,4 @@
 // mira-gemini-live-relay Cloudflare Worker
-// Mirroring the Supabase gemini-live-relay Edge Function
 // Upstream WebSocket proxy to Google Gemini Live API
 // NEVER logs API keys or payload frame content.
 
@@ -13,12 +12,17 @@ addEventListener("fetch", (event) => {
 async function handleRequest(request) {
   const url = new URL(request.url);
 
-  // Health probe: GET ?action=health
-  if (url.searchParams.get("action") === "health") {
+  // Health probe: GET ?action=health or /health
+  if (url.searchParams.get("action") === "health" || url.pathname === "/health") {
     return new Response(
       JSON.stringify({ service: "gemini-live-relay", version: "1.0.0", ok: true }),
       { headers: { "Content-Type": "application/json" }, status: 200 }
     );
+  }
+
+  // Restrict WebSocket upgrade to /live
+  if (url.pathname !== "/live") {
+    return new Response("Not Found", { status: 404 });
   }
 
   // WebSocket upgrade validation
@@ -27,21 +31,28 @@ async function handleRequest(request) {
     return new Response("WebSocket upgrade required", { status: 426 });
   }
 
-  // Extract BYOK key from x-mira-key header
-  const apiKey = (request.headers.get("x-mira-key") || "").trim();
+  // Extract BYOK key from x-mira-gemini-key (primary) or x-mira-key (legacy fallback)
+  const apiKey = (
+    request.headers.get("x-mira-gemini-key") ||
+    request.headers.get("x-mira-key") ||
+    ""
+  ).trim();
+
   if (!apiKey) {
-    return new Response(JSON.stringify({ error: "Missing x-mira-key header" }), {
+    return new Response(JSON.stringify({ error: "Missing x-mira-gemini-key header" }), {
       headers: { "Content-Type": "application/json" },
       status: 401,
     });
   }
 
-  // Connect upstream to Google Live
-  const upstreamUrl = `${GOOGLE_LIVE_WS_URL}?key=${encodeURIComponent(apiKey)}`;
+  // Connect upstream to Google Live with x-goog-api-key header and NO query param
   let upstreamResponse;
   try {
-    upstreamResponse = await fetch(upstreamUrl, {
-      headers: { Upgrade: "websocket" },
+    upstreamResponse = await fetch(GOOGLE_LIVE_WS_URL, {
+      headers: {
+        Upgrade: "websocket",
+        "x-goog-api-key": apiKey,
+      },
     });
   } catch (err) {
     return new Response(`Upstream connect failed: ${err.message}`, { status: 502 });

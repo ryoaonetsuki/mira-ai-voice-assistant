@@ -1,21 +1,12 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Alarm
-import androidx.compose.material.icons.rounded.Book
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.CalendarToday
-import androidx.compose.material.icons.rounded.CenterFocusStrong
 import androidx.compose.material.icons.rounded.Chat
-import androidx.compose.material.icons.rounded.CheckCircle
-import androidx.compose.material.icons.rounded.Extension
-import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.Mic
-import androidx.compose.material.icons.rounded.Mood
-import androidx.compose.material.icons.rounded.MusicNote
-import androidx.compose.material.icons.rounded.Newspaper
 import androidx.compose.material.icons.rounded.QrCodeScanner
-import androidx.compose.material.icons.rounded.School
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.WbSunny
 import android.Manifest
@@ -27,8 +18,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -59,8 +48,6 @@ import io.github.ryoaonetsuki.mira.ui.navigation.Screen
 import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
 import java.text.SimpleDateFormat
 import java.util.*
-
-data class QuickChip(val label: String, val icon: ImageVector, val prompt: String)
 
 @Composable
 fun HomeScreen(
@@ -99,17 +86,6 @@ fun HomeScreen(
         val sdf = SimpleDateFormat("EEE, d MMM", Locale.getDefault())
         sdf.format(Date())
     }
-
-    val quickChips = listOf(
-        QuickChip("Music", Icons.Rounded.MusicNote, "Let's play some music to match the mood."),
-        QuickChip("Study", Icons.Rounded.School, "Help me study and explain key concepts."),
-        QuickChip("Journal", Icons.Rounded.Book, "Let's do a quick journal entry about today."),
-        QuickChip("News", Icons.Rounded.Newspaper, "What are the top news headlines right now?"),
-        QuickChip("Tasks", Icons.Rounded.CheckCircle, "What tasks should I focus on next?"),
-        QuickChip("Reminder", Icons.Rounded.Alarm, "Set a reminder for my upcoming schedule."),
-        QuickChip("Focus", Icons.Rounded.CenterFocusStrong, "Let's begin a 25-minute Pomodoro focus session."),
-        QuickChip("Vent", Icons.Rounded.Favorite, "I need someone to listen and talk things through.")
-    )
 
     val isLive = liveState == LiveState.CONNECTING || liveState == LiveState.LISTENING || liveState == LiveState.SPEAKING
     val orbDisplayState = if (liveState == LiveState.ERROR) LiveState.IDLE else liveState
@@ -202,30 +178,6 @@ fun HomeScreen(
                     )
                 }
 
-                // Mood
-                MiraCard(
-                    modifier = Modifier.weight(1f),
-                    cornerRadius = 14.dp
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Mood,
-                        contentDescription = "Mood",
-                        tint = Color(0xFF10B981),
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Upbeat",
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = palette.textPrimary
-                    )
-                    Text(
-                        text = "All good",
-                        fontSize = 11.sp,
-                        color = palette.textSecondary
-                    )
-                }
             }
 
             Spacer(modifier = Modifier.height(20.dp))
@@ -259,43 +211,7 @@ fun HomeScreen(
             Spacer(modifier = Modifier.height(16.dp))
         }
 
-        // Fixed chips row footer pinned directly above HomeBottomNavBar (never floats mid-screen)
-        LazyRow(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 18.dp)
-                .padding(top = 8.dp, bottom = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            items(quickChips) { chip ->
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(palette.surface)
-                        .clickable {
-                            onNavigate(Screen.Chat.route)
-                        }
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
-                ) {
-                    Icon(
-                        imageVector = chip.icon,
-                        contentDescription = chip.label,
-                        tint = palette.primary,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = chip.label,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = palette.textPrimary
-                    )
-                }
-            }
-        }
-
-        // Bottom Navigation Bar (Home | Scan | BIG centre Voice | Extensions | Chat)
+        // Floating Bottom Navigation Bar (Home | Vision | BIG centre Voice | Memory | Chat)
         HomeBottomNavBar(
             isLive = isLive,
             context = context,
@@ -332,87 +248,94 @@ private fun HomeBottomNavBar(
         Brush.verticalGradient(listOf(Color(0xFF22D3EE), Color(0xFF8B5CF6)))
     }
 
-    Surface(
-        color = palette.surface,
-        shadowElevation = 12.dp,
-        modifier = Modifier.fillMaxWidth()
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .navigationBarsPadding()
+            .padding(horizontal = 16.dp, vertical = 10.dp)
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .navigationBarsPadding()
-                .height(64.dp)
-                .padding(horizontal = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceEvenly
+        Surface(
+            color = palette.surface.copy(alpha = 0.97f),
+            shadowElevation = 18.dp,
+            shape = RoundedCornerShape(30.dp),
+            modifier = Modifier.fillMaxWidth()
         ) {
-            // Home tab
-            BottomNavItem(
-                icon = Icons.Rounded.Home,
-                label = "Home",
-                selected = true,
-                palette = palette,
-                onClick = { /* already on home */ }
-            )
-
-            // Scan tab
-            BottomNavItem(
-                icon = Icons.Rounded.QrCodeScanner,
-                label = "Scan",
-                selected = false,
-                palette = palette,
-                onClick = { onNavigate(Screen.Scan.route) }
-            )
-
-            // Centre BIG Voice button
-            Box(
-                contentAlignment = Alignment.Center,
+            Row(
                 modifier = Modifier
-                    .size(56.dp)
-                    .shadow(elevation = 8.dp, shape = CircleShape)
-                    .clip(CircleShape)
-                    .background(micButtonGradient)
-                    .clickable {
-                        if (isLive) {
-                            MicService.stopService(context)
-                        } else {
-                            val hasMicPermission = ContextCompat.checkSelfPermission(
-                                context,
-                                Manifest.permission.RECORD_AUDIO
-                            ) == PackageManager.PERMISSION_GRANTED
-                            if (hasMicPermission) {
-                                MicService.startService(context)
+                    .fillMaxWidth()
+                    .height(68.dp)
+                    .padding(horizontal = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                // Home tab
+                BottomNavItem(
+                    icon = Icons.Rounded.Home,
+                    label = "Home",
+                    selected = true,
+                    palette = palette,
+                    onClick = { /* already on home */ }
+                )
+
+                // Vision tab
+                BottomNavItem(
+                    icon = Icons.Rounded.QrCodeScanner,
+                    label = "Vision",
+                    selected = false,
+                    palette = palette,
+                    onClick = { onNavigate(Screen.Scan.route) }
+                )
+
+                // Centre BIG Voice button (behaviour unchanged)
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .size(56.dp)
+                        .shadow(elevation = 8.dp, shape = CircleShape)
+                        .clip(CircleShape)
+                        .background(micButtonGradient)
+                        .clickable {
+                            if (isLive) {
+                                MicService.stopService(context)
                             } else {
-                                micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                val hasMicPermission = ContextCompat.checkSelfPermission(
+                                    context,
+                                    Manifest.permission.RECORD_AUDIO
+                                ) == PackageManager.PERMISSION_GRANTED
+                                if (hasMicPermission) {
+                                    MicService.startService(context)
+                                } else {
+                                    micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                }
                             }
                         }
-                    }
-            ) {
-                Icon(
-                    imageVector = if (isLive) Icons.Rounded.Stop else Icons.Rounded.Mic,
-                    contentDescription = if (isLive) "Stop Session" else "Talk to Mira",
-                    tint = Color.White,
-                    modifier = Modifier.size(26.dp)
+                ) {
+                    Icon(
+                        imageVector = if (isLive) Icons.Rounded.Stop else Icons.Rounded.Mic,
+                        contentDescription = if (isLive) "Stop Session" else "Talk to Mira",
+                        tint = Color.White,
+                        modifier = Modifier.size(26.dp)
+                    )
+                }
+
+                // Memory tab
+                BottomNavItem(
+                    icon = Icons.Rounded.AutoAwesome,
+                    label = "Memory",
+                    selected = false,
+                    palette = palette,
+                    onClick = { onNavigate(Screen.Memories.route) }
+                )
+
+                // Chat tab
+                BottomNavItem(
+                    icon = Icons.Rounded.Chat,
+                    label = "Chat",
+                    selected = false,
+                    palette = palette,
+                    onClick = { onNavigate(Screen.Chat.route) }
                 )
             }
-
-            // Extensions tab
-            BottomNavItem(
-                icon = Icons.Rounded.Extension,
-                label = "Extensions",
-                selected = false,
-                palette = palette,
-                onClick = { onNavigate(Screen.Extensions.route) }
-            )
-
-            // Chat tab
-            BottomNavItem(
-                icon = Icons.Rounded.Chat,
-                label = "Chat",
-                selected = false,
-                palette = palette,
-                onClick = { onNavigate(Screen.Chat.route) }
-            )
         }
     }
 }

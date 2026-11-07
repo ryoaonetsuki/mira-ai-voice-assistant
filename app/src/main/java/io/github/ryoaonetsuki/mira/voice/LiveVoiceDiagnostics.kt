@@ -66,6 +66,10 @@ object LiveVoiceDiagnostics {
         _data.value = _data.value.copy(liveCapabilityResult = result)
     }
 
+    fun updateActiveRoute(route: String) {
+        _data.value = _data.value.copy(activeRoute = route)
+    }
+
     fun setDiagnosticRunning(running: Boolean) {
         _data.value = _data.value.copy(isDiagnosticRunning = running)
     }

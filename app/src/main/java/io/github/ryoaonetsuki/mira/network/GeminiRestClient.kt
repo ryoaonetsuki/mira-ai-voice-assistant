@@ -895,7 +895,8 @@ class GeminiRestClient(
         enableThinking: Boolean = true,
         isChatCall: Boolean = true,
         attachments: List<ChatAttachment> = emptyList(),
-        onSourcesReceived: ((List<GroundingSource>) -> Unit)? = null
+        onSourcesReceived: ((List<GroundingSource>) -> Unit)? = null,
+        onThoughtChunk: ((String) -> Unit)? = null
     ): Flow<String> = flow {
         val key = normalizeApiKey(apiKey)
         val prepared = prepareChatInput(
@@ -1068,9 +1069,14 @@ class GeminiRestClient(
                                             val chunkBuilder = StringBuilder()
                                             for (p in 0 until parts.length()) {
                                                 val part = parts.getJSONObject(p)
+                                                val isThought = part.optBoolean("thought", false)
                                                 val text = part.optString("text", "")
                                                 if (text.isNotEmpty()) {
-                                                    chunkBuilder.append(text)
+                                                    if (isThought) {
+                                                        onThoughtChunk?.invoke(text)
+                                                    } else {
+                                                        chunkBuilder.append(text)
+                                                    }
                                                 }
                                             }
                                             val chunk = chunkBuilder.toString()

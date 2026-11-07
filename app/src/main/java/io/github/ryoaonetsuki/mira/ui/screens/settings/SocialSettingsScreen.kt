@@ -93,28 +93,6 @@ fun SocialSettingsScreen(
                     )
                 }
             }
-
-            item {
-                Text("Automation", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.primary)
-            }
-
-            item {
-                MiraCard(modifier = Modifier.fillMaxWidth()) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Daily Story Ideas", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
-                            Text("Prepares a fresh quote and story caption every morning", fontSize = 12.sp, color = palette.textSecondary)
-                        }
-                        MiraSwitch(
-                            checked = dailyStoryEnabled,
-                            onCheckedChange = {
-                                dailyStoryEnabled = it
-                                scope.launch { userPrefs.setDailyStory(it) }
-                            }
-                        )
-                    }
-                }
-            }
         }
     }
 }

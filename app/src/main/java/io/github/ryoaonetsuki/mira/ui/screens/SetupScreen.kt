@@ -366,36 +366,23 @@ fun SetupScreen(
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // Gemini Action Buttons
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                // Get Free Key helper (not a save action — opens AI Studio)
+                OutlinedButton(
+                    onClick = {
+                        val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://aistudio.google.com/apikey"))
+                        browserIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                        context.startActivity(browserIntent)
+                    },
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = palette.primary),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    OutlinedButton(
-                        onClick = {
-                            val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://aistudio.google.com/apikey"))
-                            browserIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                            context.startActivity(browserIntent)
-                        },
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = palette.primary),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("Get Free Key")
-                    }
-
-                    MiraButton(
-                        text = "Test & Save",
-                        onClick = testAndSaveKeys,
-                        isLoading = isCheckingKey,
-                        modifier = Modifier.weight(1f)
-                    )
+                    Text("Get Free Key")
                 }
-
 
                 Spacer(modifier = Modifier.height(24.dp))
 
-                // Primary Save & Continue Button
+                // The single save action: tests the key, saves it, continues.
                 MiraButton(
                     text = "Save Key & Continue →",
                     onClick = testAndSaveKeys,

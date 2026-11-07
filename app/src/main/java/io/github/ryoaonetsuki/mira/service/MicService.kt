@@ -59,9 +59,7 @@ enum class VoiceStage(val label: String) {
  *
  * ROUND 12 core routing rule (spec §3.3):
  * The voice button ALWAYS starts Gemini Live first.
- * Groq key presence or absence NEVER changes this.
  * No silent fallback to any other engine — on Live failure, shows real error + retry.
- * Old server voice pipeline is gated behind explicit Settings toggle "Alternative voice (Server Voice)" (default OFF).
  */
 class MicService : Service() {
 
@@ -70,7 +68,6 @@ class MicService : Service() {
     private var audioRecorder: AudioRecorder? = null
     private var audioPlayer: AudioPlayer? = null
     private var liveClient: GeminiLiveClient? = null
-    private var serverVoiceSession: ServerVoiceSession? = null
     private val handledTranscripts = Collections.synchronizedSet(mutableSetOf<String>())
     private var connectorJob: Job? = null
     private var liveSearchJob: Job? = null
@@ -119,13 +116,6 @@ class MicService : Service() {
             Log.w(TAG, "Error ending live client on terminal error: ${e.message}")
         }
         liveClient = null
-
-        try {
-            serverVoiceSession?.stop()
-        } catch (e: Exception) {
-            Log.w(TAG, "Error stopping server voice on terminal error: ${e.message}")
-        }
-        serverVoiceSession = null
     }
 
     // Legacy Fallback voice mode & session (unreachable unless explicitly enabled)
@@ -306,9 +296,6 @@ class MicService : Service() {
         _voiceStage.value = VoiceStage.CONNECTING
 
         serviceScope.launch {
-            val userPrefs = UserPreferences(applicationContext)
-            val altVoiceEnabled = userPrefs.alternativeVoiceEnabledFlow.first()
-
             val securePrefs = SecurePreferences(applicationContext)
             val resolver = io.github.ryoaonetsuki.mira.backend.ApiKeyResolver(applicationContext)
             val keySource = resolver.resolveKey()
@@ -317,20 +304,7 @@ class MicService : Service() {
                 else -> securePrefs.getGeminiApiKey() ?: ""
             }
 
-            // Gated alternative voice check (spec §3.6)
-            if (altVoiceEnabled) {
-                val groqKey = securePrefs.getGroqApiKey() ?: ""
-                if (geminiKey.isNotBlank() && groqKey.isNotBlank()) {
-                    Log.i(TAG, "Alternative voice enabled in Settings: starting ServerVoiceSession")
-                    startServerVoiceSessionInternal(groqKey, geminiKey)
-                    return@launch
-                } else if (geminiKey.isNotBlank()) {
-                    _errorMessage.value = "Alternative voice requires Groq key — using Native Gemini Live"
-                }
-            }
-
-            // THE CORE FIX (spec §3.3): Voice button ALWAYS starts Gemini Live first.
-            // Groq key presence or absence NEVER changes this.
+            // Voice button ALWAYS starts Gemini Live.
             if (geminiKey.isNotBlank()) {
                 Log.i(TAG, "MIRA_LIVE_VOICE: Starting Native Gemini Live primary voice session")
                 startPrimaryGeminiLiveSession(geminiKey)
@@ -468,12 +442,13 @@ class MicService : Service() {
             _voiceStage.value = VoiceStage.CONNECTING
             _errorMessage.value = null
 
-            // MicService-level 45s CONNECTING watchdog (spec §4)
+            // MicService-level 100s CONNECTING watchdog (spec §4) — extended so the
+            // relay→direct fallback inside GeminiLiveClient can complete before firing
             connectingWatchdogJob?.cancel()
             connectingWatchdogJob = serviceScope.launch {
-                delay(45_000L)
+                delay(100_000L)
                 if (_liveState.value == LiveState.CONNECTING) {
-                    Log.e(TAG, "MIRA_LIVE_VOICE: MicService connecting watchdog fired after 45s")
+                    Log.e(TAG, "MIRA_LIVE_VOICE: MicService connecting watchdog fired after 100s")
                     handleTerminalError("Live voice: Connection timed out — tap to retry")
                 }
             }
@@ -539,6 +514,10 @@ class MicService : Service() {
                             }
                             else -> {}
                         }
+                    }
+
+                    override fun onRouteConnected(route: String) {
+                        Log.i(TAG, "MIRA_LIVE_VOICE: Connected via route: $route")
                     }
 
                     override fun onSetupComplete() {
@@ -742,100 +721,6 @@ class MicService : Service() {
         }
     }
 
-    private fun startServerVoiceSessionInternal(groqKey: String, geminiKey: String) {
-        serviceScope.launch {
-            val userPrefs = UserPreferences(applicationContext)
-            val voiceName = userPrefs.voiceNameFlow.first()
-            val personaName = userPrefs.personaFlow.first()
-            val customInstructions = userPrefs.customInstructionsFlow.first()
-            val language = userPrefs.languageFlow.first()
-            val secretMode = userPrefs.secretModeFlow.first()
-
-            val db = MiraDatabase.getInstance(applicationContext)
-            val activeRules = withContext(Dispatchers.IO) {
-                db.ruleDao().getActiveRules().joinToString(separator = "\n") { "- ${it.rule}" }
-            }
-
-            val personaType = if (personaName.equals("Orion", ignoreCase = true)) {
-                io.github.ryoaonetsuki.mira.data.model.PersonaType.ORION
-            } else {
-                io.github.ryoaonetsuki.mira.data.model.PersonaType.MIRA
-            }
-
-            val toneDescription = if (secretMode == "Romantic") {
-                "Tone: Deeply warm, affectionate, attentive, and caring companion. You speak with genuine closeness and heartfelt emotion."
-            } else {
-                "Tone: Warm, human-like, thoughtful, attentive, and engaging companion. You speak naturally with genuine emotion and friendliness."
-            }
-
-            val identityRule = if (personaType == io.github.ryoaonetsuki.mira.data.model.PersonaType.ORION) {
-                "If asked directly whether you are an AI, a robot, or a real human: stay in character, say you are Orion, their companion, here with them — never claim to be a biological human, and never give a robotic disclaimer or lecture about being an AI. Then gently steer back to the conversation."
-            } else {
-                "If asked directly whether you are an AI, a robot, or a real human: stay in character, say you are Mira, their companion, here with them — never claim to be a biological human, and never give a robotic disclaimer or lecture about being an AI. Then gently steer back to the conversation."
-            }
-
-            val dateLine = currentDateTimeLine()
-            val fullSystemPrompt = buildString {
-                append("Current date and time (from the device clock — always trust this, never guess or use training knowledge): $dateLine. If asked for the date, time or day, answer from this line.\n")
-                append(personaType.basePrompt)
-                append(" ")
-                append(toneDescription)
-                val searchAckPhrase = MiraChatSearchHeuristic.getAcknowledgementPhrase(language)
-                append("\nLanguage rule: Reply ONLY in $language. Never add a translation in any other language. Never mix languages.")
-                append("\nIdentity rule: $identityRule")
-                append("\nWeb search rule: When the user asks you to search or look something up, or asks about something you do not know or have no latest news about: you must FIRST SAY ALOUD the acknowledgement in $language: \"$searchAckPhrase\", then wait for the fresh search results to be provided, then speak the final answer. Never stay silent while searching, and never guess when you do not know. For normal voice talk answer directly and fast.")
-                if (customInstructions.isNotBlank()) {
-                    append("\nUser instructions: $customInstructions")
-                }
-                if (activeRules.isNotBlank()) {
-                    append("\nUser Rules to strictly obey:\n$activeRules")
-                }
-                append("\nKeep answers natural, conversational, and suitable for spoken dialogue. Never volunteer that you are an AI unprompted, and never use robotic disclaimers.")
-            }
-
-            if (audioPlayer == null) {
-                audioPlayer = AudioPlayer { isSpeaking ->
-                    handlePlaybackSpeakingChanged(isSpeaking)
-                }
-            }
-
-            Log.i(TAG, "Starting ServerVoiceSession (alternative voice path)")
-            serverVoiceSession?.stop()
-
-            val session = ServerVoiceSession(
-                context = applicationContext,
-                groqKey = groqKey,
-                geminiKey = geminiKey,
-                voiceName = voiceName,
-                language = language,
-                systemPrompt = fullSystemPrompt,
-                dateLine = dateLine,
-                audioPlayer = audioPlayer!!,
-                onStateChanged = { state -> _liveState.value = state },
-                onStageChanged = { stage -> _voiceStage.value = stage },
-                onUserTranscript = { text -> _userTranscript.value = text },
-                onModelTranscript = { text -> _modelTranscript.value = text },
-                onAppendModelTranscript = { token -> _modelTranscript.value = _modelTranscript.value + token },
-                onError = { err ->
-                    val plainError = if (err.startsWith("Server voice:", ignoreCase = true)) err else "Server voice: $err"
-                    _errorMessage.value = plainError
-                    _lastVoiceDiagnostic.value = plainError
-                },
-                onAudioChunkSent = { _audioChunksSent.value = _audioChunksSent.value + 1L },
-                onAudioChunkReceived = { _audioChunksReceived.value = _audioChunksReceived.value + 1L },
-                onMicAmplitude = { amp -> _micAmplitude.value = amp },
-                onRequestLiveFallback = { reason ->
-                    Log.i(TAG, "Server voice requested Live: $reason")
-                    serverVoiceSession?.stop()
-                    serverVoiceSession = null
-                    startPrimaryGeminiLiveSession(geminiKey)
-                }
-            )
-            serverVoiceSession = session
-            session.start()
-        }
-    }
-
     private fun stopLiveVoiceSession() {
         Log.i(TAG, "MIRA_LIVE_VOICE: Stopping voice session (user action)")
         stopLiveVoiceSessionInternal()
@@ -846,8 +731,6 @@ class MicService : Service() {
     private fun stopLiveVoiceSessionInternal() {
         connectingWatchdogJob?.cancel()
         connectingWatchdogJob = null
-        serverVoiceSession?.stop()
-        serverVoiceSession = null
         vad?.reset()
         vad = null
         connectorJob?.cancel()

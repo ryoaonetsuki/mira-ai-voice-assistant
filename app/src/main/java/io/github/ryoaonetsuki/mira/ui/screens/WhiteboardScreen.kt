@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
 import android.widget.Toast
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -20,12 +21,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.asAndroidPath
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -35,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.ryoaonetsuki.mira.R
 import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
+import io.github.ryoaonetsuki.mira.ui.theme.MiraMotion
 
 data class DrawPath(val path: androidx.compose.ui.graphics.Path, val color: Color, val strokeWidth: Float)
 
@@ -47,18 +49,22 @@ fun WhiteboardScreen(
     val palette = LocalMiraPalette.current
 
     val paths = remember { mutableStateListOf<DrawPath>() }
+    val undonePaths = remember { mutableStateListOf<DrawPath>() }
     var currentPath by remember { mutableStateOf<androidx.compose.ui.graphics.Path?>(null) }
     var selectedColor by remember { mutableStateOf(Color(0xFF22D3EE)) }
     var strokeWidth by remember { mutableFloatStateOf(8f) }
+    var isEraser by remember { mutableStateOf(false) }
 
-    val colors = listOf(
-        Color(0xFF22D3EE), // Cyan
-        Color(0xFF8B5CF6), // Violet
-        Color(0xFFFFFFFF), // White
-        Color(0xFFFBBF24), // Yellow
-        Color(0xFF10B981), // Green
-        Color(0xFFF43F5E), // Pink
-        Color(0xFF000000)  // Eraser/Dark
+    val canvasBackgroundColor = palette.surfaceSubtle
+
+    val primarySwatches = listOf(
+        Color(0xFF22D3EE), // Cyan Accent
+        Color(0xFF8B5CF6), // Violet Accent
+        Color(0xFFFFFFFF), // Crisp White
+        Color(0xFFFBBF24), // Warm Amber
+        Color(0xFF10B981), // Emerald Green
+        Color(0xFFF43F5E), // Rose Pink
+        Color(0xFF38BDF8)  // Sky Blue
     )
 
     fun saveWhiteboardToGallery() {
@@ -67,7 +73,7 @@ fun WhiteboardScreen(
             val height = 1920
             val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
             val canvas = android.graphics.Canvas(bitmap)
-            canvas.drawColor(android.graphics.Color.rgb(10, 10, 18)) // Mira dark background
+            canvas.drawColor(android.graphics.Color.rgb(13, 21, 34)) // Dark canvas surface
 
             val paint = Paint().apply {
                 isAntiAlias = true
@@ -111,24 +117,81 @@ fun WhiteboardScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Whiteboard", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
+                title = {
+                    Text(
+                        text = "Whiteboard",
+                        fontSize = 19.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = palette.textPrimary
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(painter = painterResource(id = R.drawable.ic_fluent_arrow_left_24_regular), contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_fluent_arrow_left_24_regular),
+                            contentDescription = "Back",
+                            tint = palette.textPrimary
+                        )
                     }
                 },
                 actions = {
                     // Undo
-                    IconButton(onClick = { if (paths.isNotEmpty()) paths.removeAt(paths.size - 1) }) {
-                        Icon(painter = painterResource(id = R.drawable.ic_fluent_arrow_undo_24_regular), contentDescription = "Undo", tint = palette.textPrimary)
+                    IconButton(
+                        onClick = {
+                            if (paths.isNotEmpty()) {
+                                val last = paths.removeAt(paths.size - 1)
+                                undonePaths.add(last)
+                            }
+                        },
+                        enabled = paths.isNotEmpty()
+                    ) {
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_fluent_arrow_undo_24_regular),
+                            contentDescription = "Undo",
+                            tint = if (paths.isNotEmpty()) palette.textPrimary else palette.textSecondary.copy(alpha = 0.35f)
+                        )
+                    }
+                    // Redo (Mirrored Undo icon)
+                    IconButton(
+                        onClick = {
+                            if (undonePaths.isNotEmpty()) {
+                                val restored = undonePaths.removeAt(undonePaths.size - 1)
+                                paths.add(restored)
+                            }
+                        },
+                        enabled = undonePaths.isNotEmpty()
+                    ) {
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_fluent_arrow_undo_24_regular),
+                            contentDescription = "Redo",
+                            tint = if (undonePaths.isNotEmpty()) palette.textPrimary else palette.textSecondary.copy(alpha = 0.35f),
+                            modifier = Modifier.graphicsLayer(scaleX = -1f)
+                        )
                     }
                     // Clear
-                    IconButton(onClick = { paths.clear() }) {
-                        Icon(painter = painterResource(id = R.drawable.ic_fluent_delete_24_regular), contentDescription = "Clear", tint = palette.textSecondary)
+                    IconButton(
+                        onClick = {
+                            if (paths.isNotEmpty()) {
+                                undonePaths.clear()
+                                undonePaths.addAll(paths)
+                                paths.clear()
+                            }
+                        },
+                        enabled = paths.isNotEmpty()
+                    ) {
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_fluent_delete_24_regular),
+                            contentDescription = "Clear Canvas",
+                            tint = if (paths.isNotEmpty()) palette.textSecondary else palette.textSecondary.copy(alpha = 0.35f)
+                        )
                     }
-                    // Save
+                    // Save to Gallery
                     IconButton(onClick = { saveWhiteboardToGallery() }) {
-                        Icon(painter = painterResource(id = R.drawable.ic_fluent_save_24_regular), contentDescription = "Save to Gallery", tint = palette.primary)
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_fluent_save_24_regular),
+                            contentDescription = "Save to Gallery",
+                            tint = palette.primary
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -136,25 +199,24 @@ fun WhiteboardScreen(
         },
         containerColor = palette.background
     ) { padding ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            // Drawing Canvas
+            // Drawing Canvas Surface
             Box(
                 modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .padding(8.dp)
+                    .fillMaxSize()
+                    .padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 120.dp)
                     .clip(RoundedCornerShape(16.dp))
-                    .background(Color(0xFF0D0D18))
-                    .border(1.dp, palette.surfaceVariant.copy(alpha = 0.5f), RoundedCornerShape(16.dp))
+                    .background(canvasBackgroundColor)
+                    .border(1.dp, palette.borderSubtle, RoundedCornerShape(16.dp))
             ) {
                 Canvas(
                     modifier = Modifier
                         .fillMaxSize()
-                        .pointerInput(Unit) {
+                        .pointerInput(isEraser, selectedColor, strokeWidth) {
                             detectDragGestures(
                                 onDragStart = { offset ->
                                     val newP = androidx.compose.ui.graphics.Path()
@@ -166,7 +228,10 @@ fun WhiteboardScreen(
                                 },
                                 onDragEnd = {
                                     currentPath?.let {
-                                        paths.add(DrawPath(it, selectedColor, strokeWidth))
+                                        val strokeColor = if (isEraser) canvasBackgroundColor else selectedColor
+                                        val actualWidth = if (isEraser) strokeWidth * 2.5f else strokeWidth
+                                        paths.add(DrawPath(it, strokeColor, actualWidth))
+                                        undonePaths.clear()
                                     }
                                     currentPath = null
                                 },
@@ -188,11 +253,13 @@ fun WhiteboardScreen(
                         )
                     }
                     currentPath?.let {
+                        val activeColor = if (isEraser) canvasBackgroundColor else selectedColor
+                        val activeWidth = if (isEraser) strokeWidth * 2.5f else strokeWidth
                         drawPath(
                             path = it,
-                            color = selectedColor,
+                            color = activeColor,
                             style = Stroke(
-                                width = strokeWidth,
+                                width = activeWidth,
                                 cap = StrokeCap.Round,
                                 join = StrokeJoin.Round
                             )
@@ -201,66 +268,144 @@ fun WhiteboardScreen(
                 }
             }
 
-            // Toolbar Controls
-            Column(
+            // Floating Tool Dock (Material 3 Expressive floating toolbar)
+            Surface(
+                shape = RoundedCornerShape(22.dp),
+                color = palette.surface,
+                tonalElevation = 6.dp,
+                shadowElevation = 8.dp,
+                border = androidx.compose.foundation.BorderStroke(1.dp, palette.borderSubtle),
                 modifier = Modifier
+                    .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .background(palette.surface)
-                    .padding(horizontal = 16.dp, vertical = 10.dp)
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
             ) {
-                // Color choices
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 12.dp)
                 ) {
-                    for (col in colors) {
-                        val isSelected = selectedColor == col
+                    // Tool Selection & Swatch Picker Row
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        // Pen Mode Button
+                        Surface(
+                            shape = CircleShape,
+                            color = if (!isEraser) palette.primary.copy(alpha = 0.2f) else Color.Transparent,
+                            border = if (!isEraser) androidx.compose.foundation.BorderStroke(1.dp, palette.primary) else null,
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .clickable { isEraser = false }
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    painter = painterResource(id = R.drawable.ic_fluent_paint_brush_24_regular),
+                                    contentDescription = "Pen Tool",
+                                    tint = if (!isEraser) palette.primary else palette.textSecondary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+
+                        // Eraser Mode Button
+                        Surface(
+                            shape = CircleShape,
+                            color = if (isEraser) palette.primary.copy(alpha = 0.2f) else Color.Transparent,
+                            border = if (isEraser) androidx.compose.foundation.BorderStroke(1.dp, palette.primary) else null,
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .clickable { isEraser = true }
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    painter = painterResource(id = R.drawable.ic_fluent_broom_24_regular),
+                                    contentDescription = "Eraser Tool",
+                                    tint = if (isEraser) palette.primary else palette.textSecondary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+
                         Box(
                             modifier = Modifier
-                                .size(32.dp)
-                                .clip(CircleShape)
-                                .background(col)
-                                .border(
-                                    width = if (isSelected) 3.dp else 1.dp,
-                                    color = if (isSelected) palette.primary else Color.Gray.copy(alpha = 0.5f),
-                                    shape = CircleShape
+                                .height(24.dp)
+                                .width(1.dp)
+                                .background(palette.borderSubtle)
+                        )
+
+                        // 6 Primary Swatches
+                        for (col in primarySwatches) {
+                            val isSelected = !isEraser && selectedColor == col
+                            val animatedBorderColor by animateColorAsState(
+                                targetValue = if (isSelected) palette.primary else palette.borderSubtle.copy(alpha = 0.6f),
+                                animationSpec = MiraMotion.EffectsFloat,
+                                label = "SwatchBorder"
+                            )
+
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .clip(CircleShape)
+                                    .clickable {
+                                        selectedColor = col
+                                        isEraser = false
+                                    }
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(if (isSelected) 30.dp else 26.dp)
+                                        .clip(CircleShape)
+                                        .background(col)
+                                        .border(
+                                            width = if (isSelected) 2.5.dp else 1.dp,
+                                            color = animatedBorderColor,
+                                            shape = CircleShape
+                                        )
                                 )
-                                .clickable { selectedColor = col }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Stroke Width Slider Row
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_fluent_line_thickness_24_regular),
+                            contentDescription = "Stroke Width",
+                            tint = palette.textSecondary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Slider(
+                            value = strokeWidth,
+                            onValueChange = { strokeWidth = it },
+                            valueRange = 3f..36f,
+                            colors = SliderDefaults.colors(
+                                thumbColor = palette.primary,
+                                activeTrackColor = palette.primary,
+                                inactiveTrackColor = palette.surfaceVariant
+                            ),
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = "${strokeWidth.toInt()}px",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = palette.textSecondary,
+                            modifier = Modifier.width(36.dp)
                         )
                     }
-                }
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                // Stroke Width Slider
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(
-                        painter = painterResource(id = R.drawable.ic_fluent_line_thickness_24_regular),
-                        contentDescription = null,
-                        tint = palette.textSecondary,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Slider(
-                        value = strokeWidth,
-                        onValueChange = { strokeWidth = it },
-                        valueRange = 3f..36f,
-                        colors = SliderDefaults.colors(
-                            thumbColor = palette.primary,
-                            activeTrackColor = palette.primary
-                        ),
-                        modifier = Modifier.weight(1f)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "${strokeWidth.toInt()}px",
-                        fontSize = 12.sp,
-                        color = palette.textSecondary
-                    )
                 }
             }
         }

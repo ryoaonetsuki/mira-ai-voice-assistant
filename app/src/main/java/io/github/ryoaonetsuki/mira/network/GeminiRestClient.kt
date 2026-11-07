@@ -751,17 +751,22 @@ class GeminiRestClient(
         history: List<ChatMessageEntity>,
         systemPrompt: String,
         isChatCall: Boolean,
-        enableGrounding: Boolean?
+        enableGrounding: Boolean?,
+        enableThinking: Boolean
     ): PreparedChatInput = withContext(Dispatchers.IO) {
         val lastUserMessage = history.lastOrNull { it.role == "user" }?.content ?: ""
         val isBuild = MiraChatSearchHeuristic.isBuildRequest(lastUserMessage)
         val shouldSearch = enableGrounding ?: if (isChatCall) {
-            MiraChatSearchHeuristic.isChatSearchWorthy(lastUserMessage)
+            MiraChatSearchHeuristic.isChatSearchWorthy(lastUserMessage) ||
+                (enableThinking && MiraChatSearchHeuristic.isSearchRequest(lastUserMessage))
         } else {
             MiraChatSearchHeuristic.isSearchRequest(lastUserMessage)
         }
 
-        var effectiveSysPrompt = systemPrompt
+        var effectiveSysPrompt = listOf(
+            systemPrompt.trim(),
+            "Reply using exactly one language: the user's primary/default language. If it is not specified, use Bangla. Never add a translation or a second-language version underneath."
+        ).filter { it.isNotBlank() }.joinToString("\n\n")
         val allSources = mutableListOf<GroundingSource>()
 
         // 1. Research-first for build requests (gated on shouldSearch)
@@ -827,7 +832,13 @@ class GeminiRestClient(
         attachments: List<ChatAttachment> = emptyList()
     ): Result<GroundedChatResult> = withContext(Dispatchers.IO) {
         val key = normalizeApiKey(apiKey)
-        val prepared = prepareChatInput(history, systemPrompt, isChatCall = isChatCall, enableGrounding = enableGrounding)
+        val prepared = prepareChatInput(
+            history,
+            systemPrompt,
+            isChatCall = isChatCall,
+            enableGrounding = enableGrounding,
+            enableThinking = enableThinking
+        )
 
         // Server-proxy mode handling for attachments:
         // Respect server-proxy mode: if useServerProxy and attachments are present,
@@ -887,7 +898,13 @@ class GeminiRestClient(
         onSourcesReceived: ((List<GroundingSource>) -> Unit)? = null
     ): Flow<String> = flow {
         val key = normalizeApiKey(apiKey)
-        val prepared = prepareChatInput(history, systemPrompt, isChatCall = isChatCall, enableGrounding = enableGrounding)
+        val prepared = prepareChatInput(
+            history,
+            systemPrompt,
+            isChatCall = isChatCall,
+            enableGrounding = enableGrounding,
+            enableThinking = enableThinking
+        )
 
         if (prepared.sources.isNotEmpty()) {
             onSourcesReceived?.invoke(prepared.sources.take(4))

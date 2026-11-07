@@ -10,8 +10,10 @@ class RelayLiveClientTest {
         val testKey = "AIzaSyTestRelayKey987654321"
         val request = RelayLiveClient.buildRelayRequest(testKey)
 
-        // URL must be the Cloudflare relay /live endpoint
-        assertEquals("wss://mira-gemini-live-relay.salman-dev.workers.dev/live", request.url.toString())
+        // URL must be the Cloudflare relay /live endpoint.
+        // NOTE: OkHttp normalizes wss:// to https:// in HttpUrl.toString()
+        // (newWebSocket upgrades the https URL to a WebSocket internally).
+        assertEquals("https://mira-gemini-live-relay.salman-dev.workers.dev/live", request.url.toString())
 
         // NEVER pass key in query parameter
         assertNull("Query parameter 'key' must not be present in relay URL", request.url.queryParameter("key"))
@@ -27,7 +29,8 @@ class RelayLiveClientTest {
         val request = RelayLiveClient.buildDirectRequest(GeminiLiveClient.LIVE_WS_URL, testKey)
 
         // URL must be Google Live BidiGenerateContent endpoint
-        assertEquals(GeminiLiveClient.LIVE_WS_URL, request.url.toString())
+        // (OkHttp normalizes wss:// to https:// in HttpUrl.toString()).
+        assertEquals(GeminiLiveClient.LIVE_WS_URL.replace("wss://", "https://"), request.url.toString())
 
         // NEVER pass key in query parameter
         assertNull("Query parameter 'key' must not be present in direct URL", request.url.queryParameter("key"))

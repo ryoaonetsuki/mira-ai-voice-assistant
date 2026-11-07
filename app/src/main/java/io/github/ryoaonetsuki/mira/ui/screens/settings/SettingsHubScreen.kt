@@ -1,21 +1,6 @@
 package io.github.ryoaonetsuki.mira.ui.screens.settings
 
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.AutoAwesome
-import androidx.compose.material.icons.rounded.Backup
-import androidx.compose.material.icons.rounded.Chat
-import androidx.compose.material.icons.rounded.ChevronRight
-import androidx.compose.material.icons.rounded.Email
-import androidx.compose.material.icons.rounded.Face
-import androidx.compose.material.icons.rounded.Favorite
-import androidx.compose.material.icons.rounded.GraphicEq
-import androidx.compose.material.icons.rounded.Info
-import androidx.compose.material.icons.rounded.Link
-import androidx.compose.material.icons.rounded.Person
-import androidx.compose.material.icons.rounded.Security
-import androidx.compose.material.icons.rounded.Share
-import androidx.compose.material.icons.rounded.Tune
+import androidx.annotation.DrawableRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -28,17 +13,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.ryoaonetsuki.mira.R
 import io.github.ryoaonetsuki.mira.ui.navigation.Screen
 import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
 
 data class SettingsHubRow(
     val title: String,
     val subtitle: String,
-    val icon: ImageVector,
+    @DrawableRes val iconRes: Int,
     val route: String,
     val group: String
 )
@@ -52,18 +38,18 @@ fun SettingsHubScreen(
     val palette = LocalMiraPalette.current
 
     val rows = listOf(
-        SettingsHubRow("Mira & Persona", "Persona, assistant name, language", Icons.Rounded.Face, Screen.SettingsMaya.route, "Assistant"),
-        SettingsHubRow("Personal Profile", "Your name, API key, music app & song", Icons.Rounded.Person, Screen.SettingsPersonal.route, "Assistant"),
-        SettingsHubRow("Secret Settings", "Friendly vs Romantic tone with age confirmation", Icons.Rounded.Favorite, Screen.SettingsSecret.route, "Assistant"),
-        SettingsHubRow("Voice Engine", "Live capability, diagnostics, 30 voices", Icons.Rounded.GraphicEq, Screen.SettingsVoice.route, "Voice"),
-        SettingsHubRow("Advanced & Security", "Themes, orb styles, Face Lock, SOS, Touch Guard", Icons.Rounded.Security, Screen.SettingsAdvanced.route, "System"),
-        SettingsHubRow("Connectors", "GitHub, Telegram, Notion, Spotify, Linear, Todoist", Icons.Rounded.Link, Screen.SettingsConnectors.route, "Integrations"),
-        SettingsHubRow("Email", "Send-as address, signature, AI email composer", Icons.Rounded.Email, Screen.SettingsEmail.route, "Integrations"),
-        SettingsHubRow("Messages & WhatsApp", "Auto-reply template, Notification listener", Icons.Rounded.Chat, Screen.SettingsMessages.route, "Integrations"),
-        SettingsHubRow("Social Media", "Handle, caption voice", Icons.Rounded.Share, Screen.SettingsSocial.route, "Integrations"),
-        SettingsHubRow("Optional Integrations", "Maps API key", Icons.Rounded.Tune, Screen.SettingsOptional.route, "Integrations"),
-        SettingsHubRow("Backup & Restore", "Export & restore memories and chats via SAF", Icons.Rounded.Backup, Screen.SettingsBackup.route, "System"),
-        SettingsHubRow("About Mira AI", "Version, developer info, open-source licenses", Icons.Rounded.Info, Screen.About.route, "System")
+        SettingsHubRow("Mira & Persona", "Persona, assistant name, language", R.drawable.ic_fluent_bot_sparkle_24_regular, Screen.SettingsMaya.route, "Assistant"),
+        SettingsHubRow("Personal Profile", "Your name, API key, music app & song", R.drawable.ic_fluent_person_24_regular, Screen.SettingsPersonal.route, "Assistant"),
+        SettingsHubRow("Secret Settings", "Friendly vs Romantic tone with age confirmation", R.drawable.ic_fluent_heart_24_regular, Screen.SettingsSecret.route, "Assistant"),
+        SettingsHubRow("Voice Engine", "Live capability, diagnostics, 30 voices", R.drawable.ic_fluent_sound_wave_circle_24_regular, Screen.SettingsVoice.route, "Voice"),
+        SettingsHubRow("Advanced & Security", "Themes, orb styles, Face Lock, SOS, Touch Guard", R.drawable.ic_fluent_shield_keyhole_24_regular, Screen.SettingsAdvanced.route, "System"),
+        SettingsHubRow("Connectors", "GitHub, Telegram, Notion, Spotify, Linear, Todoist", R.drawable.ic_fluent_link_24_regular, Screen.SettingsConnectors.route, "Integrations"),
+        SettingsHubRow("Email", "Send-as address, signature, AI email composer", R.drawable.ic_fluent_mail_24_regular, Screen.SettingsEmail.route, "Integrations"),
+        SettingsHubRow("Messages & WhatsApp", "Auto-reply template, Notification listener", R.drawable.ic_fluent_chat_24_regular, Screen.SettingsMessages.route, "Integrations"),
+        SettingsHubRow("Social Media", "Handle, caption voice", R.drawable.ic_fluent_share_24_regular, Screen.SettingsSocial.route, "Integrations"),
+        SettingsHubRow("Optional Integrations", "Maps API key", R.drawable.ic_fluent_options_24_regular, Screen.SettingsOptional.route, "Integrations"),
+        SettingsHubRow("Backup & Restore", "Export & restore memories and chats via SAF", R.drawable.ic_fluent_cloud_sync_24_regular, Screen.SettingsBackup.route, "System"),
+        SettingsHubRow("About Mira AI", "Version, developer info, open-source licenses", R.drawable.ic_fluent_info_24_regular, Screen.About.route, "System")
     )
 
     Scaffold(
@@ -72,7 +58,11 @@ fun SettingsHubScreen(
                 title = { Text("Settings", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(
+                            painter = painterResource(R.drawable.ic_fluent_arrow_left_24_regular),
+                            contentDescription = "Back",
+                            tint = palette.textPrimary
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -114,7 +104,7 @@ fun SettingsHubScreen(
                             .background(palette.primary.copy(alpha = 0.15f))
                     ) {
                         Icon(
-                            imageVector = row.icon,
+                            painter = painterResource(row.iconRes),
                             contentDescription = row.title,
                             tint = palette.primary,
                             modifier = Modifier.size(20.dp)
@@ -138,7 +128,7 @@ fun SettingsHubScreen(
                     }
 
                     Icon(
-                        imageVector = Icons.Rounded.ChevronRight,
+                        painter = painterResource(R.drawable.ic_fluent_chevron_right_24_regular),
                         contentDescription = null,
                         tint = palette.textSecondary
                     )

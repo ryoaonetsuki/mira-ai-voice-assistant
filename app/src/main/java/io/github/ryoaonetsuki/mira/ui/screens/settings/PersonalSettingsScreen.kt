@@ -47,13 +47,11 @@ fun PersonalSettingsScreen(
     val restClient = remember { GeminiRestClient() }
     val resolver = remember { io.github.ryoaonetsuki.mira.backend.ApiKeyResolver(context) }
 
-    val savedName by userPrefs.userNameFlow.collectAsState(initial = "Alex")
-    val savedPhone by userPrefs.userPhoneFlow.collectAsState(initial = "")
+    val savedName by userPrefs.userNameFlow.collectAsState(initial = "User")
     val savedMusicApp by userPrefs.musicAppFlow.collectAsState(initial = "Spotify")
     val savedSong by userPrefs.favoriteSongFlow.collectAsState(initial = "Starboy")
 
     var nameInput by remember { mutableStateOf(savedName) }
-    var phoneInput by remember { mutableStateOf(savedPhone) }
     var apiKeyInput by remember { mutableStateOf(securePrefs.getGeminiApiKey() ?: "") }
     var favoriteSongInput by remember { mutableStateOf(savedSong) }
 
@@ -117,22 +115,7 @@ fun PersonalSettingsScreen(
                         scope.launch { userPrefs.setUserName(it.trim()) }
                     },
                     label = { Text("Your Name") },
-                    placeholder = { Text("e.g. Alex") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-
-            // Phone
-            item {
-                OutlinedTextField(
-                    value = phoneInput,
-                    onValueChange = {
-                        phoneInput = it
-                        scope.launch { userPrefs.setUserPhone(it.trim()) }
-                    },
-                    label = { Text("Phone Number (Optional)") },
-                    placeholder = { Text("+1 ...") },
+                    placeholder = { Text("Your name") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )

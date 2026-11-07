@@ -1,25 +1,28 @@
 package io.github.ryoaonetsuki.mira.ui.screens.settings
 
-import androidx.compose.ui.res.painterResource
-import io.github.ryoaonetsuki.mira.R
 import android.content.Intent
 import android.provider.Settings
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
-import io.github.ryoaonetsuki.mira.ui.components.MiraSwitch
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.ryoaonetsuki.mira.R
 import io.github.ryoaonetsuki.mira.data.preferences.UserPreferences
 import io.github.ryoaonetsuki.mira.ui.components.MiraCard
+import io.github.ryoaonetsuki.mira.ui.components.MiraSwitch
 import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
 import kotlinx.coroutines.launch
 
@@ -45,10 +48,21 @@ fun MessagesSettingsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Messages & WhatsApp", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
+                title = {
+                    Text(
+                        text = "Messages & WhatsApp",
+                        fontSize = 19.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = palette.textPrimary
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(painter = painterResource(id = R.drawable.ic_fluent_arrow_left_24_regular), contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_fluent_arrow_left_24_regular),
+                            contentDescription = "Back",
+                            tint = palette.textPrimary
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -61,20 +75,51 @@ fun MessagesSettingsScreen(
                 .fillMaxSize()
                 .padding(padding)
                 .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             item {
-                Text("WhatsApp Auto-Reply", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.primary)
-            }
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "WhatsApp Automation",
+                    fontSize = 13.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = palette.primary
+                )
 
-            // Master Toggle
-            item {
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // Master Toggle
                 MiraCard(modifier = Modifier.fillMaxWidth()) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Auto-Reply to WhatsApp", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
-                            Text("Mira answers incoming chats when you are busy or screen is off", fontSize = 12.sp, color = palette.textSecondary)
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .background(palette.primary.copy(alpha = 0.15f))
+                        ) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_fluent_chat_24_regular),
+                                contentDescription = null,
+                                tint = palette.primary,
+                                modifier = Modifier.size(20.dp)
+                            )
                         }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Auto-Reply to WhatsApp",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = palette.textPrimary
+                            )
+                            Text(
+                                text = "Answers incoming chats when you are busy or screen is off",
+                                fontSize = 12.sp,
+                                color = palette.textSecondary
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
                         MiraSwitch(
                             checked = isAutoReplyEnabled,
                             onCheckedChange = { scope.launch { userPrefs.setWhatsappAutoReply(it) } }
@@ -87,25 +132,47 @@ fun MessagesSettingsScreen(
             item {
                 MiraCard(modifier = Modifier.fillMaxWidth()) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            painter = painterResource(id = R.drawable.ic_fluent_checkmark_circle_24_filled),
-                            contentDescription = null,
-                            tint = Color(0xFF10B981),
-                            modifier = Modifier.size(24.dp)
-                        )
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFF10B981).copy(alpha = 0.15f))
+                        ) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_fluent_checkmark_circle_24_filled),
+                                contentDescription = null,
+                                tint = Color(0xFF10B981),
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
                         Spacer(modifier = Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("Notification Listener Service", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
-                            Text("Requires Android Notification Access to intercept and respond to WhatsApp messages.", fontSize = 12.sp, color = palette.textSecondary)
+                            Text(
+                                text = "Notification Listener Service",
+                                fontSize = 14.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = palette.textPrimary
+                            )
+                            Text(
+                                text = "Requires Android Notification Access to intercept and respond to WhatsApp messages.",
+                                fontSize = 12.sp,
+                                color = palette.textSecondary,
+                                lineHeight = 16.sp
+                            )
                         }
                     }
-                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
                     OutlinedButton(
                         onClick = {
                             val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
                             context.startActivity(intent)
                         },
-                        shape = RoundedCornerShape(10.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = palette.primary),
+                        border = BorderStroke(1.dp, palette.borderSubtle),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text("Open Notification Access Settings")
@@ -113,12 +180,30 @@ fun MessagesSettingsScreen(
                 }
             }
 
-            // Template Field
+            // Auto-Reply Template Card
             item {
+                Text(
+                    text = "Message Template",
+                    fontSize = 13.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = palette.primary
+                )
+
+                Spacer(modifier = Modifier.height(6.dp))
+
                 MiraCard(modifier = Modifier.fillMaxWidth()) {
-                    Text("Auto-Reply Template", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
+                    Text(
+                        text = "Auto-Reply Template",
+                        fontSize = 14.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = palette.textPrimary
+                    )
                     Spacer(modifier = Modifier.height(4.dp))
-                    Text("The message sent via RemoteInput when you receive a chat.", fontSize = 12.sp, color = palette.textSecondary)
+                    Text(
+                        text = "The reply text sent via RemoteInput when you receive a chat.",
+                        fontSize = 12.sp,
+                        color = palette.textSecondary
+                    )
                     Spacer(modifier = Modifier.height(10.dp))
                     OutlinedTextField(
                         value = templateInput,
@@ -127,9 +212,18 @@ fun MessagesSettingsScreen(
                             scope.launch { userPrefs.setAutoReplyTemplate(it) }
                         },
                         minLines = 3,
+                        shape = RoundedCornerShape(12.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = palette.primary,
+                            unfocusedBorderColor = palette.borderSubtle
+                        ),
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
+            }
+
+            item {
+                Spacer(modifier = Modifier.height(20.dp))
             }
         }
     }

@@ -55,9 +55,6 @@ fun AdvancedSettingsScreen(
 
     val themePalette by userPrefs.themePaletteFlow.collectAsState(initial = "Midnight")
     val orbStyle by userPrefs.orbStyleFlow.collectAsState(initial = "Mira Neon")
-    val earpieceMode by userPrefs.earpieceModeFlow.collectAsState(initial = false)
-    val batterySaver by userPrefs.batterySaverFlow.collectAsState(initial = false)
-    val touchGuard by userPrefs.touchGuardFlow.collectAsState(initial = false)
 
     val sosContacts by db.sosContactDao().getAllContacts().collectAsState(initial = emptyList())
 
@@ -163,35 +160,7 @@ fun AdvancedSettingsScreen(
                 Text("Device Behaviour", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.primary)
             }
 
-            item {
-                MiraCard(modifier = Modifier.fillMaxWidth()) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Earpiece Mode", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
-                            Text("Talk to Mira like a private phone call against your ear", fontSize = 12.sp, color = palette.textSecondary)
-                        }
-                        MiraSwitch(
-                            checked = earpieceMode,
-                            onCheckedChange = { scope.launch { userPrefs.setEarpieceMode(it) } }
-                        )
-                    }
-                }
-            }
 
-            item {
-                MiraCard(modifier = Modifier.fillMaxWidth()) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Battery Saver Mode", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
-                            Text("Reduces background CPU cycles and lowers visual frame rate", fontSize = 12.sp, color = palette.textSecondary)
-                        }
-                        MiraSwitch(
-                            checked = batterySaver,
-                            onCheckedChange = { scope.launch { userPrefs.setBatterySaver(it) } }
-                        )
-                    }
-                }
-            }
 
             // Automation & Accessibility
             item {
@@ -271,20 +240,6 @@ fun AdvancedSettingsScreen(
             }
 
             // Touch Guard
-            item {
-                MiraCard(modifier = Modifier.fillMaxWidth()) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Touch Guard", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
-                            Text("Alerts when someone moves or touches the phone while away", fontSize = 12.sp, color = palette.textSecondary)
-                        }
-                        MiraSwitch(
-                            checked = touchGuard,
-                            onCheckedChange = { scope.launch { userPrefs.setTouchGuard(it) } }
-                        )
-                    }
-                }
-            }
 
             // Emergency SOS
             item {
@@ -296,7 +251,7 @@ fun AdvancedSettingsScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("SOS Contacts (${sosContacts.size})", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
-                            Text("Quick contacts notified during emergencies", fontSize = 12.sp, color = palette.textSecondary)
+                            Text("Saved emergency contacts (stored on this device)", fontSize = 12.sp, color = palette.textSecondary)
                         }
                         IconButton(onClick = { showSosDialog = true }) {
                             Icon(Icons.Rounded.Add, contentDescription = "Add SOS", tint = palette.primary)

@@ -1,24 +1,33 @@
 package io.github.ryoaonetsuki.mira.ui.screens.settings
 
 import androidx.annotation.DrawableRes
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.ryoaonetsuki.mira.R
+import io.github.ryoaonetsuki.mira.data.preferences.UserPreferences
 import io.github.ryoaonetsuki.mira.ui.components.MiraCard
 import io.github.ryoaonetsuki.mira.ui.navigation.Screen
 import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
+import kotlinx.coroutines.launch
 
 data class SettingsHubRow(
     val title: String,
@@ -68,11 +77,16 @@ fun SettingsHubScreen(
         SettingsHubGroup(
             categoryName = "System & Privacy",
             items = listOf(
-                SettingsHubRow("Advanced & Security", "Themes, orb styles, Face Lock, SOS contacts", R.drawable.ic_fluent_shield_keyhole_24_regular, Screen.SettingsAdvanced.route),
+                SettingsHubRow("Advanced & Security", "Orb styles, Face Lock, SOS contacts", R.drawable.ic_fluent_shield_keyhole_24_regular, Screen.SettingsAdvanced.route),
                 SettingsHubRow("Backup & Restore", "Export & restore memories and rules via SAF JSON", R.drawable.ic_fluent_cloud_sync_24_regular, Screen.SettingsBackup.route)
             )
         )
     )
+
+    val context = LocalContext.current
+    val userPrefs = remember { UserPreferences(context) }
+    val scope = rememberCoroutineScope()
+    val themeMode by userPrefs.themeModeFlow.collectAsState(initial = "System")
 
     Scaffold(
         topBar = {
@@ -113,6 +127,86 @@ fun SettingsHubScreen(
                     fontSize = 13.sp,
                     color = palette.textSecondary
                 )
+            }
+
+            // Appearance & Theme Mode Selector
+            item {
+                Text(
+                    text = "Appearance",
+                    fontSize = 13.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = palette.primary,
+                    modifier = Modifier.padding(start = 4.dp, bottom = 6.dp)
+                )
+
+                MiraCard(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(16.dp)
+                ) {
+                    Column {
+                        Text(
+                            text = "App Theme",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = palette.textPrimary
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = when (themeMode.lowercase()) {
+                                "dark" -> "Always Dark"
+                                "light" -> "Always Light"
+                                else -> "Follow System (${if (palette.isDark) "Dark" else "Light"})"
+                            },
+                            fontSize = 12.sp,
+                            color = palette.textSecondary
+                        )
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            listOf(
+                                Triple("System", "System", R.drawable.ic_fluent_phone_24_regular),
+                                Triple("Light", "Light", R.drawable.ic_fluent_weather_sunny_24_regular),
+                                Triple("Dark", "Dark", R.drawable.ic_fluent_weather_moon_24_regular)
+                            ).forEach { (mode, label, iconRes) ->
+                                val isSelected = themeMode.equals(mode, ignoreCase = true)
+                                Surface(
+                                    onClick = { scope.launch { userPrefs.setThemeMode(mode) } },
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = if (isSelected) palette.primary.copy(alpha = 0.15f) else palette.surfaceVariant.copy(alpha = 0.4f),
+                                    border = BorderStroke(
+                                        width = if (isSelected) 1.5.dp else 1.dp,
+                                        color = if (isSelected) palette.primary else palette.borderSubtle
+                                    )
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(vertical = 10.dp, horizontal = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.Center
+                                    ) {
+                                        Icon(
+                                            painter = painterResource(id = iconRes),
+                                            contentDescription = label,
+                                            modifier = Modifier.size(16.dp),
+                                            tint = if (isSelected) palette.primary else palette.textSecondary
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = label,
+                                            fontSize = 12.5.sp,
+                                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                                            color = if (isSelected) palette.primary else palette.textPrimary
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             for (group in groups) {

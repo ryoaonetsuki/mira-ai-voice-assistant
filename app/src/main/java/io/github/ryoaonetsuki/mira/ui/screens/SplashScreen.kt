@@ -17,6 +17,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -170,34 +171,43 @@ fun SplashScreen(
             modifier = Modifier.padding(24.dp)
         ) {
             // Logo Container with Breathing Volumetric Ambient Glow
+            val haloBrush = remember(palette.primary, palette.secondary) {
+                Brush.radialGradient(
+                    colors = listOf(
+                        palette.primary.copy(alpha = 0.5f),
+                        palette.secondary.copy(alpha = 0.25f),
+                        Color.Transparent
+                    )
+                )
+            }
+
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier.size(190.dp)
             ) {
-                // Volumetric outer halo
+                // Volumetric outer halo - draw phase animated
                 Box(
                     modifier = Modifier
                         .size(180.dp)
-                        .scale(scale)
+                        .graphicsLayer {
+                            scaleX = scale
+                            scaleY = scale
+                            this.alpha = glowAlpha
+                        }
                         .clip(CircleShape)
-                        .background(
-                            Brush.radialGradient(
-                                colors = listOf(
-                                    palette.primary.copy(alpha = glowAlpha * 0.45f),
-                                    palette.secondary.copy(alpha = glowAlpha * 0.2f),
-                                    Color.Transparent
-                                )
-                            )
-                        )
+                        .background(haloBrush)
                 )
 
-                // Logo image
+                // Logo image - draw phase animated
                 Image(
                     painter = painterResource(id = R.drawable.logo_chosen),
                     contentDescription = "Mira Logo",
                     modifier = Modifier
                         .size(136.dp)
-                        .scale(scale)
+                        .graphicsLayer {
+                            scaleX = scale
+                            scaleY = scale
+                        }
                         .clip(CircleShape)
                         .border(
                             width = 2.dp,

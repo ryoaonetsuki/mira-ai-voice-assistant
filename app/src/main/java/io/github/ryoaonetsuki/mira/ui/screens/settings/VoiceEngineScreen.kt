@@ -61,6 +61,7 @@ fun VoiceEngineScreen(
 
     val diagnosticsData by io.github.ryoaonetsuki.mira.voice.LiveVoiceDiagnostics.data.collectAsState()
     val restClient = remember { GeminiRestClient() }
+    val diagnosticRunner = remember { io.github.ryoaonetsuki.mira.voice.LiveDiagnosticRunner(context) }
 
     var isCheckingCapability by remember { mutableStateOf(false) }
     var capabilityMessage by remember { mutableStateOf<String?>(null) }
@@ -75,7 +76,7 @@ fun VoiceEngineScreen(
         }
         isCheckingCapability = true
         scope.launch {
-            val outcome = restClient.checkLiveCapability(key)
+            val outcome = restClient.checkLiveCapability(key, liveModel)
             isCheckingCapability = false
             isLiveCapable = outcome.isCapable
             capabilityMessage = outcome.message
@@ -523,7 +524,7 @@ fun VoiceEngineScreen(
                 }
             }
 
-            // Voice Diagnostics Card (spec §3.4)
+            // Voice Diagnostics Card (spec §2, §3.4)
             item {
                 MiraCard(modifier = Modifier.fillMaxWidth()) {
                     Text("Voice Diagnostics", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.primary)
@@ -536,8 +537,129 @@ fun VoiceEngineScreen(
                     Text("• Last Error: ${diagnosticsData.lastError ?: "None"}", fontSize = 12.sp, color = if (diagnosticsData.lastError != null) Color(0xFFEF4444) else palette.textSecondary)
                     Text("• Key Live Capability: ${diagnosticsData.liveCapabilityResult}", fontSize = 12.sp, color = palette.textSecondary)
                     Spacer(modifier = Modifier.height(4.dp))
-                    Text("• Model: models/gemini-3.8-live (Direct Native WebSocket)", fontSize = 12.sp, color = palette.textSecondary)
+                    Text("• Model: $liveModel (Direct Native WebSocket)", fontSize = 12.sp, color = palette.textSecondary)
                     Text("• Audio: Full-duplex 16kHz capture, 24kHz playback", fontSize = 12.sp, color = palette.textSecondary)
+
+                    Spacer(modifier = Modifier.height(14.dp))
+                    HorizontalDivider(color = palette.surfaceVariant.copy(alpha = 0.5f))
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Text("Isolated Live Diagnostic Test", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
+                    Text(
+                        text = "Tests WebSocket handshake, setup, text turn, and native 24kHz audio reply directly against Google without using the mic or relay.",
+                        fontSize = 11.sp,
+                        color = palette.textSecondary,
+                        lineHeight = 15.sp
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Button(
+                        onClick = {
+                            val key = securePrefs.getGeminiApiKey() ?: ""
+                            if (key.isBlank()) {
+                                io.github.ryoaonetsuki.mira.voice.LiveVoiceDiagnostics.finishDiagnostic("Failed: No Gemini API key saved — add one in Setup or Settings")
+                            } else {
+                                scope.launch {
+                                    diagnosticRunner.runDiagnostic(key, liveModel)
+                                }
+                            }
+                        },
+                        enabled = !diagnosticsData.isDiagnosticRunning && !isCheckingCapability,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        if (diagnosticsData.isDiagnosticRunning) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Running Live Diagnostic...")
+                        } else {
+                            Text("Run Live diagnostic")
+                        }
+                    }
+
+                    // Diagnostic stages list if stages are present
+                    if (diagnosticsData.diagnosticStages.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        diagnosticsData.diagnosticStages.forEach { stage ->
+                            val statusColor = when (stage.status) {
+                                io.github.ryoaonetsuki.mira.voice.StageStatus.SUCCESS -> Color(0xFF10B981)
+                                io.github.ryoaonetsuki.mira.voice.StageStatus.FAILED -> Color(0xFFEF4444)
+                                io.github.ryoaonetsuki.mira.voice.StageStatus.RUNNING -> palette.primary
+                                io.github.ryoaonetsuki.mira.voice.StageStatus.SKIPPED -> palette.textSecondary.copy(alpha = 0.5f)
+                                io.github.ryoaonetsuki.mira.voice.StageStatus.PENDING -> palette.textSecondary.copy(alpha = 0.5f)
+                            }
+                            val statusIcon = when (stage.status) {
+                                io.github.ryoaonetsuki.mira.voice.StageStatus.SUCCESS -> "✓"
+                                io.github.ryoaonetsuki.mira.voice.StageStatus.FAILED -> "✗"
+                                io.github.ryoaonetsuki.mira.voice.StageStatus.RUNNING -> "●"
+                                io.github.ryoaonetsuki.mira.voice.StageStatus.SKIPPED -> "○"
+                                io.github.ryoaonetsuki.mira.voice.StageStatus.PENDING -> "○"
+                            }
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 3.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = statusIcon,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = statusColor,
+                                    modifier = Modifier.width(18.dp)
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = "${stage.stageNumber}. ${stage.name}",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Medium,
+                                            color = palette.textPrimary
+                                        )
+                                        if (stage.durationMs != null) {
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(
+                                                text = "(${stage.durationMs}ms)",
+                                                fontSize = 10.sp,
+                                                color = palette.textSecondary
+                                            )
+                                        }
+                                    }
+                                    if (!stage.detail.isNullOrBlank()) {
+                                        Text(
+                                            text = stage.detail,
+                                            fontSize = 11.sp,
+                                            color = if (stage.status == io.github.ryoaonetsuki.mira.voice.StageStatus.FAILED) Color(0xFFEF4444) else palette.textSecondary,
+                                            lineHeight = 14.sp
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (!diagnosticsData.diagnosticOutcome.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        val isPass = diagnosticsData.diagnosticOutcome?.startsWith("PASSED", ignoreCase = true) == true
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (isPass) Color(0xFF10B981).copy(alpha = 0.15f) else Color(0xFFEF4444).copy(alpha = 0.15f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = diagnosticsData.diagnosticOutcome!!,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (isPass) Color(0xFF10B981) else Color(0xFFEF4444),
+                                modifier = Modifier.padding(10.dp)
+                            )
+                        }
+                    }
                 }
             }
         }

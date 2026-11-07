@@ -22,6 +22,8 @@ data class ProcessedChatResult(
 object WebsiteProjectManager {
     private const val TAG = "WebsiteProjectManager"
 
+    const val JUST_CODE_INSTRUCTION = """STRICT CODE-ONLY RULE: The user has requested ONLY code. You must output EXACTLY AND ONLY the markdown code block (```language ... ```). Do NOT include any introductory greetings, bullet points, explanations, advice, or concluding text. Absolutely nothing outside the code block."""
+
     const val CHAT_CODE_INSTRUCTION = """CODE GENERATION GUIDELINE:
 When the user asks to write, explain, or review code:
 1. Provide the complete code directly in clean markdown code blocks (e.g. ```kotlin, ```python, ```html, ```javascript).
@@ -52,6 +54,20 @@ When the user explicitly asks you to build, create, or save a website project, w
 4. FORMATTING: Use clean ChatGPT / README-style formatting (clear headings, concise paragraphs, clean lists). Never dump raw walls of text."""
 
     const val MULTI_PAGE_INSTRUCTION = FILE_BUILDING_INSTRUCTION
+
+    /**
+     * Determines whether the user request asks for strictly code with no explanation.
+     */
+    fun isJustCodeRequest(prompt: String): Boolean {
+        val p = prompt.lowercase().trim()
+        val keywords = listOf(
+            "give me just code", "only code", "just code", "code only", "code only please",
+            "just the code", "only the code", "pure code", "no explanation", "without explanation",
+            "code without explanation", "just write code", "no pleasantries",
+            "শুধু কোড", "শুধুমাত্র কোড", "কেবল কোড", "কোড ছাড়া কিছু না", "শুধু কোড দাও"
+        )
+        return keywords.any { p.contains(it) }
+    }
 
     /**
      * Determines whether the user request is explicitly asking to build a multi-file website project
@@ -245,9 +261,22 @@ When the user explicitly asks you to build, create, or save a website project, w
     fun processAndSaveGeneratedContent(
         context: Context,
         raw: String,
-        language: String = "Bangla"
+        language: String = "Bangla",
+        isJustCode: Boolean = false
     ): ProcessedChatResult {
         val isBangla = language.contains("Bangla", ignoreCase = true) || language.contains("Bengali", ignoreCase = true)
+
+        if (isJustCode || isJustCodeRequest(raw)) {
+            val firstBlock = extractFirstCodeBlock(raw)
+            if (firstBlock != null) {
+                val (lang, code) = firstBlock
+                return ProcessedChatResult(
+                    displayText = "```$lang\n$code\n```",
+                    isWebsite = false,
+                    isCode = true
+                )
+            }
+        }
 
         if (!hasFileOrProjectContent(raw)) {
             return ProcessedChatResult(
@@ -285,7 +314,7 @@ When the user explicitly asks you to build, create, or save a website project, w
                 } else {
                     "Your website is ready — open it and see how it looks:"
                 }
-                val link = "[Open Website](mira://project/$projectName)"
+                val link = "[Preview Website (http://localhost:8080/)](mira://project/$projectName)"
                 "$overview\n\n$friendlyMsg\n$link"
             }
 
@@ -311,11 +340,11 @@ When the user explicitly asks you to build, create, or save a website project, w
                 overview
             } else {
                 val friendlyMsg = if (isBangla) {
-                    "আপনার কোড ফাইলটি তৈরি হয়ে গেছে — এখানে ওপেন করে দেখুন:"
+                    "আপনার কোড ফাইলটি তৈরি হয়ে গেছে — এখান থেকে ডাউনলোড করে নিন:"
                 } else {
-                    "Here's your code file, open it and see how it looks:"
+                    "Here's your code file, download and view it here:"
                 }
-                val link = "[Open Code: $firstFileName](mira://file/$firstFileName)"
+                val link = "[Download $firstFileName](mira://file/$firstFileName)"
                 "$overview\n\n$friendlyMsg\n$link"
             }
 
@@ -357,6 +386,12 @@ When the user explicitly asks you to build, create, or save a website project, w
                 }
             }
             Log.i(TAG, "Saved website project '$sanitized' (${files.size} files) to internal & external storage")
+            try {
+                io.github.ryoaonetsuki.mira.server.LocalProjectServer.startServer(internalDir)
+                Log.i(TAG, "Auto-started LocalProjectServer for '$sanitized'")
+            } catch (serverErr: Exception) {
+                Log.w(TAG, "Could not auto-start LocalProjectServer: ${serverErr.message}")
+            }
             io.github.ryoaonetsuki.mira.notifications.TaskCompletionNotifier.notifyTaskComplete(
                 context = context,
                 targetName = sanitized,

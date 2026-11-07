@@ -1,15 +1,6 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.Celebration
-import androidx.compose.material.icons.rounded.CenterFocusStrong
-import androidx.compose.material.icons.rounded.ChevronRight
-import androidx.compose.material.icons.rounded.Coffee
-import androidx.compose.material.icons.rounded.FitnessCenter
-import androidx.compose.material.icons.rounded.Headphones
-import androidx.compose.material.icons.rounded.NightsStay
-import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.annotation.DrawableRes
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -26,11 +17,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.ryoaonetsuki.mira.R
 import io.github.ryoaonetsuki.mira.data.preferences.UserPreferences
 import io.github.ryoaonetsuki.mira.ui.components.MiraCard
 import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
@@ -38,7 +30,7 @@ import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
 data class VibePreset(
     val title: String,
     val subtitle: String,
-    val icon: ImageVector,
+    @DrawableRes val iconRes: Int,
     val query: String,
     val accentColor: Color
 )
@@ -56,12 +48,12 @@ fun VibesScreen(
     val favoriteSong by userPrefs.favoriteSongFlow.collectAsState(initial = "Starboy")
 
     val vibes = listOf(
-        VibePreset("Chill Lo-Fi", "Mellow beats to unwind and relax", Icons.Rounded.Headphones, "lofi hip hop radio beats to relax chill to", Color(0xFF22D3EE)),
-        VibePreset("Focus & Study", "Deep binaural and ambient flow state", Icons.Rounded.CenterFocusStrong, "deep focus ambient study music", Color(0xFF8B5CF6)),
-        VibePreset("Gym & Energy", "High BPM workout drive and pump", Icons.Rounded.FitnessCenter, "workout motivation high energy electronic gym music", Color(0xFFEF4444)),
-        VibePreset("Late Night Soul", "Moody RnB, jazz and atmospheric vibes", Icons.Rounded.NightsStay, "late night r&b and moody soul playlist", Color(0xFFA855F7)),
-        VibePreset("Acoustic Warmth", "Unplugged guitar, coffeehouse tunes", Icons.Rounded.Coffee, "acoustic guitar warm coffeehouse playlist", Color(0xFFF59E0B)),
-        VibePreset("Party & Dance", "Chart toppers, remixes and dancefloor hits", Icons.Rounded.Celebration, "party dance club hits playlist", Color(0xFF10B981))
+        VibePreset("Chill Lo-Fi", "Mellow beats to unwind and relax", R.drawable.ic_fluent_headphones_24_regular, "lofi hip hop radio beats to relax chill to", Color(0xFF22D3EE)),
+        VibePreset("Focus & Study", "Deep binaural and ambient flow state", R.drawable.ic_fluent_target_arrow_24_regular, "deep focus ambient study music", Color(0xFF8B5CF6)),
+        VibePreset("Gym & Energy", "High BPM workout drive and pump", R.drawable.ic_fluent_dumbbell_24_regular, "workout motivation high energy electronic gym music", Color(0xFFEF4444)),
+        VibePreset("Late Night Soul", "Moody RnB, jazz and atmospheric vibes", R.drawable.ic_fluent_weather_moon_24_regular, "late night r&b and moody soul playlist", Color(0xFFA855F7)),
+        VibePreset("Acoustic Warmth", "Unplugged guitar, coffeehouse tunes", R.drawable.ic_fluent_drink_coffee_24_regular, "acoustic guitar warm coffeehouse playlist", Color(0xFFF59E0B)),
+        VibePreset("Party & Dance", "Chart toppers, remixes and dancefloor hits", R.drawable.ic_fluent_sparkle_24_regular, "party dance club hits playlist", Color(0xFF10B981))
     )
 
     fun launchMusic(query: String) {
@@ -95,10 +87,10 @@ fun VibesScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Vibes & Music", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
+                title = { Text("Vibes & Audio", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(painter = painterResource(id = R.drawable.ic_fluent_arrow_left_24_regular), contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -129,7 +121,7 @@ fun VibesScreen(
                             .background(palette.primary.copy(alpha = 0.2f))
                     ) {
                         Icon(
-                            imageVector = Icons.Rounded.PlayArrow,
+                            painter = painterResource(id = R.drawable.ic_fluent_play_24_regular),
                             contentDescription = null,
                             tint = palette.primary,
                             modifier = Modifier.size(24.dp)
@@ -184,7 +176,7 @@ fun VibesScreen(
                                     .background(vibe.accentColor.copy(alpha = 0.15f))
                             ) {
                                 Icon(
-                                    imageVector = vibe.icon,
+                                    painter = painterResource(id = vibe.iconRes),
                                     contentDescription = null,
                                     tint = vibe.accentColor,
                                     modifier = Modifier.size(22.dp)
@@ -205,7 +197,7 @@ fun VibesScreen(
                                 )
                             }
                             Icon(
-                                imageVector = Icons.Rounded.ChevronRight,
+                                painter = painterResource(id = R.drawable.ic_fluent_chevron_right_24_regular),
                                 contentDescription = null,
                                 tint = palette.textSecondary
                             )

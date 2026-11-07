@@ -55,7 +55,6 @@ fun AdvancedSettingsScreen(
 
     val themePalette by userPrefs.themePaletteFlow.collectAsState(initial = "Midnight")
     val orbStyle by userPrefs.orbStyleFlow.collectAsState(initial = "Mira Neon")
-    val startOnBoot by userPrefs.startOnBootFlow.collectAsState(initial = false)
     val earpieceMode by userPrefs.earpieceModeFlow.collectAsState(initial = false)
     val batterySaver by userPrefs.batterySaverFlow.collectAsState(initial = false)
     val touchGuard by userPrefs.touchGuardFlow.collectAsState(initial = false)
@@ -162,21 +161,6 @@ fun AdvancedSettingsScreen(
             // Behaviour Toggles
             item {
                 Text("Device Behaviour", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.primary)
-            }
-
-            item {
-                MiraCard(modifier = Modifier.fillMaxWidth()) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Start on Boot", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
-                            Text("Launch Mira voice service when phone turns on", fontSize = 12.sp, color = palette.textSecondary)
-                        }
-                        MiraSwitch(
-                            checked = startOnBoot,
-                            onCheckedChange = { scope.launch { userPrefs.setStartOnBoot(it) } }
-                        )
-                    }
-                }
             }
 
             item {

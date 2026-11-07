@@ -1,12 +1,13 @@
 package io.github.ryoaonetsuki.mira.ui.screens.settings
 
-import androidx.compose.ui.res.painterResource
-import io.github.ryoaonetsuki.mira.R
 import android.widget.Toast
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -15,9 +16,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.ryoaonetsuki.mira.R
 import io.github.ryoaonetsuki.mira.data.preferences.UserPreferences
 import io.github.ryoaonetsuki.mira.ui.components.MiraCard
 import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
@@ -50,10 +53,21 @@ fun SecretSettingsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Secret Settings", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
+                title = {
+                    Text(
+                        text = "Secret Settings",
+                        fontSize = 19.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = palette.textPrimary
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(painter = painterResource(id = R.drawable.ic_fluent_arrow_left_24_regular), contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_fluent_arrow_left_24_regular),
+                            contentDescription = "Back",
+                            tint = palette.textPrimary
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -66,28 +80,47 @@ fun SecretSettingsScreen(
                 .fillMaxSize()
                 .padding(padding)
                 .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             item {
-                Text("Companion Closeness & Tone", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.primary)
-            }
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "Companion Closeness & Tone",
+                    fontSize = 13.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = palette.primary
+                )
 
-            // Friendly Mode Card
-            item {
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // Friendly Mode Card
                 val isFriendly = secretMode == "Friendly"
                 MiraCard(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(
+                            if (isFriendly) Modifier.border(1.5.dp, palette.primary, RoundedCornerShape(16.dp))
+                            else Modifier
+                        ),
                     onClick = {
                         scope.launch { userPrefs.setSecretMode("Friendly") }
                     }
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            painter = painterResource(id = R.drawable.ic_fluent_emoji_24_regular),
-                            contentDescription = null,
-                            tint = if (isFriendly) palette.primary else palette.textSecondary,
-                            modifier = Modifier.size(28.dp)
-                        )
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .background(if (isFriendly) palette.primary.copy(alpha = 0.2f) else palette.surfaceVariant)
+                        ) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_fluent_emoji_24_regular),
+                                contentDescription = null,
+                                tint = if (isFriendly) palette.primary else palette.textSecondary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
                         Spacer(modifier = Modifier.width(14.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
@@ -96,10 +129,12 @@ fun SecretSettingsScreen(
                                 fontWeight = FontWeight.Bold,
                                 color = if (isFriendly) palette.primary else palette.textPrimary
                             )
+                            Spacer(modifier = Modifier.height(2.dp))
                             Text(
                                 text = "Warm, human-like companion, thoughtful friend & everyday confidante. Speaks with genuine emotion and warmth.",
                                 fontSize = 12.sp,
-                                color = palette.textSecondary
+                                color = palette.textSecondary,
+                                lineHeight = 16.sp
                             )
                         }
                         RadioButton(
@@ -109,13 +144,18 @@ fun SecretSettingsScreen(
                         )
                     }
                 }
-            }
 
-            // Romantic Mode Card
-            item {
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Romantic Mode Card
                 val isRomantic = secretMode == "Romantic"
                 MiraCard(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(
+                            if (isRomantic) Modifier.border(1.5.dp, Color(0xFFF43F5E), RoundedCornerShape(16.dp))
+                            else Modifier
+                        ),
                     onClick = {
                         if (!isAdultConfirmed) {
                             showAgeGateDialog = true
@@ -125,12 +165,22 @@ fun SecretSettingsScreen(
                     }
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            painter = painterResource(id = if (isRomantic) R.drawable.ic_fluent_heart_24_filled else R.drawable.ic_fluent_heart_24_regular),
-                            contentDescription = null,
-                            tint = if (isRomantic) Color(0xFFF43F5E) else palette.textSecondary,
-                            modifier = Modifier.size(28.dp)
-                        )
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .background(if (isRomantic) Color(0xFFF43F5E).copy(alpha = 0.2f) else palette.surfaceVariant)
+                        ) {
+                            Icon(
+                                painter = painterResource(
+                                    id = if (isRomantic) R.drawable.ic_fluent_heart_24_filled else R.drawable.ic_fluent_heart_24_regular
+                                ),
+                                contentDescription = null,
+                                tint = if (isRomantic) Color(0xFFF43F5E) else palette.textSecondary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
                         Spacer(modifier = Modifier.width(14.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
@@ -139,10 +189,12 @@ fun SecretSettingsScreen(
                                 fontWeight = FontWeight.Bold,
                                 color = if (isRomantic) Color(0xFFF43F5E) else palette.textPrimary
                             )
+                            Spacer(modifier = Modifier.height(2.dp))
                             Text(
                                 text = "Affectionate, deeply attentive and caring romantic companion. Speaks like a loving partner with heartfelt warmth. (Age-gated 18+; strictly PG companion tone).",
                                 fontSize = 12.sp,
-                                color = palette.textSecondary
+                                color = palette.textSecondary,
+                                lineHeight = 16.sp
                             )
                         }
                         RadioButton(
@@ -160,22 +212,27 @@ fun SecretSettingsScreen(
                 }
             }
 
+            // Custom Persona Instructions Card
             item {
-                Spacer(modifier = Modifier.height(6.dp))
-                Text("Custom Persona Instructions", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.primary)
-            }
+                Text(
+                    text = "Custom Persona Instructions",
+                    fontSize = 13.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = palette.primary
+                )
 
-            item {
+                Spacer(modifier = Modifier.height(6.dp))
+
                 MiraCard(modifier = Modifier.fillMaxWidth()) {
                     Text(
-                        text = "Custom Prompt Injection",
-                        fontSize = 14.sp,
+                        text = "System Prompt Customization",
+                        fontSize = 14.5.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = palette.textPrimary
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "These instructions are injected into Mira's instructions.",
+                        text = "These instructions are injected into Mira's internal personality prompt on every turn.",
                         fontSize = 12.sp,
                         color = palette.textSecondary
                     )
@@ -186,11 +243,20 @@ fun SecretSettingsScreen(
                             instructionsInput = it
                             scope.launch { userPrefs.setCustomInstructions(it) }
                         },
-                        placeholder = { Text("e.g. Always greet me warmly and be playful.") },
+                        placeholder = { Text("e.g. Always greet me warmly and keep answers thoughtful and concise.") },
                         minLines = 4,
+                        shape = RoundedCornerShape(12.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = palette.primary,
+                            unfocusedBorderColor = palette.borderSubtle
+                        ),
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
+            }
+
+            item {
+                Spacer(modifier = Modifier.height(20.dp))
             }
         }
 
@@ -198,13 +264,14 @@ fun SecretSettingsScreen(
         if (showAgeGateDialog) {
             AlertDialog(
                 onDismissRequest = { showAgeGateDialog = false },
-                title = { Text("Age Confirmation Required") },
+                title = { Text("Age Confirmation Required", fontWeight = FontWeight.Bold) },
                 text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text(
                             text = "Romantic companion mode requires confirming you are at least 18 years of age. What year were you born?",
                             fontSize = 13.sp,
-                            color = palette.textSecondary
+                            color = palette.textSecondary,
+                            lineHeight = 17.sp
                         )
                         OutlinedTextField(
                             value = birthYearInput,
@@ -214,6 +281,7 @@ fun SecretSettingsScreen(
                             },
                             label = { Text("Birth Year (e.g. 2002)") },
                             singleLine = true,
+                            shape = RoundedCornerShape(12.dp),
                             modifier = Modifier.fillMaxWidth()
                         )
                         if (ageGateError != null) {
@@ -236,11 +304,13 @@ fun SecretSettingsScreen(
                             ageGateError = "Must be 18 years or older."
                         }
                     }) {
-                        Text("Confirm")
+                        Text("Confirm", fontWeight = FontWeight.Bold, color = Color(0xFFF43F5E))
                     }
                 },
                 dismissButton = {
-                    TextButton(onClick = { showAgeGateDialog = false }) { Text("Cancel") }
+                    TextButton(onClick = { showAgeGateDialog = false }) {
+                        Text("Cancel", color = palette.textSecondary)
+                    }
                 },
                 containerColor = palette.surface,
                 titleContentColor = palette.textPrimary,

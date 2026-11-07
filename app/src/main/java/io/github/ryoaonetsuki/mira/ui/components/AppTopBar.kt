@@ -8,15 +8,22 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.ryoaonetsuki.mira.R
+import io.github.ryoaonetsuki.mira.data.preferences.UserPreferences
 import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -29,9 +36,12 @@ fun AppTopBar(
     modifier: Modifier = Modifier
 ) {
     val palette = LocalMiraPalette.current
+    val context = LocalContext.current
+    val userPrefs = remember { UserPreferences(context) }
+    val scope = rememberCoroutineScope()
 
     TopAppBar(
-        modifier = modifier.height(64.dp),
+        modifier = modifier,
         title = {
             Text(
                 text = title,
@@ -54,6 +64,25 @@ fun AppTopBar(
             }
         },
         actions = {
+            // Theme toggle button (Sun for Light Mode, Moon for Dark Mode)
+            IconButton(
+                onClick = {
+                    scope.launch {
+                        val nextMode = if (palette.isDark) "Light" else "Dark"
+                        userPrefs.setThemeMode(nextMode)
+                    }
+                }
+            ) {
+                Icon(
+                    painter = painterResource(
+                        id = if (palette.isDark) R.drawable.ic_fluent_weather_sunny_24_regular else R.drawable.ic_fluent_weather_moon_24_regular
+                    ),
+                    contentDescription = if (palette.isDark) "Switch to Light Mode" else "Switch to Dark Mode",
+                    tint = palette.textPrimary,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+
             // Notification bell with unread badge
             Box(
                 contentAlignment = Alignment.Center,

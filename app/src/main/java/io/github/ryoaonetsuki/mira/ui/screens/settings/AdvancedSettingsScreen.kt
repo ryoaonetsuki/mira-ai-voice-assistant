@@ -63,7 +63,6 @@ fun AdvancedSettingsScreen(
     val sosContacts by db.sosContactDao().getAllContacts().collectAsState(initial = emptyList())
 
     var isFaceLockActive by remember { mutableStateOf(securePrefs.isFaceLockEnabled()) }
-    var enrolledFaceName by remember { mutableStateOf(securePrefs.getEnrolledFaceName() ?: "Owner (Alex)") }
 
     var isAccessibilityEnabled by remember {
         mutableStateOf(MiraAccessibilityService.isEnabled(context))
@@ -83,14 +82,6 @@ fun AdvancedSettingsScreen(
     var showSosDialog by remember { mutableStateOf(false) }
     var sosNameInput by remember { mutableStateOf("") }
     var sosPhoneInput by remember { mutableStateOf("") }
-
-    val pickPhotoLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        if (uri != null) {
-            Toast.makeText(context, "Face photo enrolled successfully!", Toast.LENGTH_SHORT).show()
-        }
-    }
 
     val themesList = listOf("Midnight", "Obsidian", "Nocturne", "Ember", "Abyss", "Rosewood", "Daylight")
     val orbStylesList = listOf("Mira Neon", "Cyan Core", "Pulse Wave", "Deep Violet")
@@ -291,24 +282,6 @@ fun AdvancedSettingsScreen(
                                 }
                             }
                         )
-                    }
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = "Enrolled Face: $enrolledFaceName",
-                            fontSize = 12.sp,
-                            color = palette.textSecondary,
-                            modifier = Modifier.weight(1f)
-                        )
-                        OutlinedButton(
-                            onClick = { pickPhotoLauncher.launch("image/*") },
-                            shape = RoundedCornerShape(10.dp),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
-                        ) {
-                            Text("Enroll Photo", fontSize = 11.sp)
-                        }
                     }
                 }
             }

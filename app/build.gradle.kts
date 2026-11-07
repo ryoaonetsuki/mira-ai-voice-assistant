@@ -129,4 +129,7 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
+    // Robolectric (ROUND 15): NotificationActionsTest runs Android framework
+    // code (Context/Intent) on the JVM; test-only dependency, not shipped in the APK.
+    testImplementation("org.robolectric:robolectric:4.13")
 }

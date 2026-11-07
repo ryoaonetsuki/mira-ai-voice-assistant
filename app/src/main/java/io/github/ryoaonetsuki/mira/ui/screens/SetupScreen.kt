@@ -1,8 +1,5 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
-import androidx.annotation.DrawableRes
-import androidx.compose.ui.res.painterResource
-import io.github.ryoaonetsuki.mira.R
 import android.Manifest
 import android.content.Context
 import android.content.Intent
@@ -15,7 +12,10 @@ import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.DrawableRes
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -29,14 +29,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import io.github.ryoaonetsuki.mira.R
 import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
 import io.github.ryoaonetsuki.mira.network.GeminiRestClient
 import io.github.ryoaonetsuki.mira.network.KeyValidationOutcome
@@ -77,7 +78,6 @@ fun SetupScreen(
     var keyStatus by remember { mutableStateOf(SetupKeyStatus.IDLE) }
     var isServerKeyAvailable by remember { mutableStateOf(false) }
 
-
     var liveCapabilityMessage by remember { mutableStateOf<String?>(null) }
     var isLiveCapable by remember { mutableStateOf(false) }
 
@@ -116,7 +116,6 @@ fun SetupScreen(
             isLiveCapable = liveOutcome.isCapable
             liveCapabilityMessage = liveOutcome.message
             io.github.ryoaonetsuki.mira.voice.LiveVoiceDiagnostics.updateLiveCapability(liveOutcome.message)
-
 
             isCheckingKey = false
 
@@ -160,7 +159,6 @@ fun SetupScreen(
             }
         }
     }
-
 
     // Permission states
     var hasMicPermission by remember {
@@ -212,7 +210,7 @@ fun SetupScreen(
 
     val multiPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { permissions ->
+    ) {
         hasMicPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
     }
 
@@ -224,22 +222,30 @@ fun SetupScreen(
             .navigationBarsPadding()
             .padding(20.dp)
     ) {
-        // Step Indicator
+        // Step Indicator Pill Row
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text(
-                text = "Step $currentStep of 2",
-                fontSize = 13.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = palette.primary,
-                letterSpacing = 1.sp
-            )
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = palette.primary.copy(alpha = 0.15f),
+                border = BorderStroke(1.dp, palette.primary.copy(alpha = 0.35f))
+            ) {
+                Text(
+                    text = "STEP $currentStep OF 2",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = palette.primary,
+                    letterSpacing = 0.5.sp,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                )
+            }
             Spacer(modifier = Modifier.weight(1f))
             Text(
-                text = if (currentStep == 1) "API Key" else "Permissions",
+                text = if (currentStep == 1) "API Key Activation" else "Permissions Wizard",
                 fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
                 color = palette.textSecondary
             )
         }
@@ -253,128 +259,165 @@ fun SetupScreen(
                     .fillMaxWidth()
                     .verticalScroll(rememberScrollState())
             ) {
-                // STEP 1: API Key
                 Text(
-                    text = "Add Your API Key",
-                    fontSize = 24.sp,
+                    text = "Welcome to Mira AI",
+                    fontSize = 26.sp,
                     fontWeight = FontWeight.Bold,
                     color = palette.textPrimary
                 )
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = "Only your Gemini key is needed for chat and voice.",
+                    text = "Enter your Google Gemini API key to activate voice sessions, deep reasoning, and companion intelligence.",
                     fontSize = 14.sp,
                     color = palette.textSecondary,
                     lineHeight = 20.sp
                 )
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(18.dp))
 
-                // Guide Card
-                MiraCard {
-                    Text(
-                        text = "Quick Setup Guide",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = palette.primary
+                // Single-Save Key Input Card
+                MiraCard(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .background(palette.primary.copy(alpha = 0.15f))
+                                .border(1.dp, palette.primary.copy(alpha = 0.35f), CircleShape)
+                        ) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_fluent_key_24_regular),
+                                contentDescription = null,
+                                tint = palette.primary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Gemini API Key",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = palette.textPrimary
+                            )
+                            Text(
+                                text = "Encrypted in Android Keystore (AES-256)",
+                                fontSize = 11.sp,
+                                color = palette.textSecondary
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    OutlinedTextField(
+                        value = apiKeyInput,
+                        onValueChange = {
+                            apiKeyInput = it
+                            keyValidationMessage = null
+                            keyStatus = SetupKeyStatus.IDLE
+                        },
+                        label = { Text("API Key (Required)") },
+                        placeholder = { Text("Paste key starting with AQ...") },
+                        visualTransformation = if (isKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { isKeyVisible = !isKeyVisible }) {
+                                Icon(
+                                    painter = painterResource(
+                                        id = if (isKeyVisible) R.drawable.ic_fluent_eye_off_24_regular else R.drawable.ic_fluent_eye_24_regular
+                                    ),
+                                    contentDescription = "Toggle Visibility",
+                                    tint = palette.textSecondary
+                                )
+                            }
+                        },
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = palette.primary,
+                            unfocusedBorderColor = palette.borderSubtle,
+                            focusedTextColor = palette.textPrimary,
+                            unfocusedTextColor = palette.textPrimary,
+                            focusedContainerColor = palette.surfaceSubtle,
+                            unfocusedContainerColor = palette.surfaceSubtle
+                        ),
+                        modifier = Modifier.fillMaxWidth()
                     )
+
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "Get your free Gemini key, paste it below, then save it to continue.",
-                        fontSize = 13.sp,
+                        text = "New keys generated on Google AI Studio start with AQ. — paste the entire key as provided.",
+                        fontSize = 11.5.sp,
                         color = palette.textSecondary,
-                        lineHeight = 20.sp
+                        lineHeight = 16.sp
                     )
+
+                    // Validation Message Banner
+                    if (keyValidationMessage != null) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        val msgColor = when (keyStatus) {
+                            SetupKeyStatus.VALID -> Color(0xFF10B981)
+                            SetupKeyStatus.TRANSIENT -> Color(0xFFF59E0B)
+                            SetupKeyStatus.INVALID -> Color(0xFFEF4444)
+                            SetupKeyStatus.CHECKING, SetupKeyStatus.IDLE -> palette.textSecondary
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = msgColor.copy(alpha = 0.12f),
+                            border = BorderStroke(1.dp, msgColor.copy(alpha = 0.35f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = keyValidationMessage!!,
+                                fontSize = 12.5.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = msgColor,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                            )
+                        }
+                    }
+
+                    if (liveCapabilityMessage != null) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = liveCapabilityMessage!!,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = if (isLiveCapable) Color(0xFF10B981) else Color(0xFFF59E0B)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    // Get Free Key helper
+                    OutlinedButton(
+                        onClick = {
+                            val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://aistudio.google.com/apikey"))
+                            browserIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                            context.startActivity(browserIntent)
+                        },
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = palette.primary),
+                        border = BorderStroke(1.dp, palette.borderSubtle),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_fluent_open_24_regular),
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Get Free Key from Google AI Studio")
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(20.dp))
 
-                // FIELD 1: Gemini API Key (REQUIRED)
-                OutlinedTextField(
-                    value = apiKeyInput,
-                    onValueChange = {
-                        apiKeyInput = it
-                        keyValidationMessage = null
-                        keyStatus = SetupKeyStatus.IDLE
-                    },
-                    label = { Text("Gemini API Key (Required)") },
-                    placeholder = { Text("Paste your Gemini key — starts with AQ.") },
-                    visualTransformation = if (isKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                    trailingIcon = {
-                        IconButton(onClick = { isKeyVisible = !isKeyVisible }) {
-                            Icon(
-                                painter = painterResource(id = if (isKeyVisible) R.drawable.ic_fluent_eye_off_24_regular else R.drawable.ic_fluent_eye_24_regular),
-                                contentDescription = "Toggle Visibility",
-                                tint = palette.textSecondary
-                            )
-                        }
-                    },
-                    singleLine = true,
-                    shape = RoundedCornerShape(14.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = palette.primary,
-                        unfocusedBorderColor = palette.surfaceVariant,
-                        focusedTextColor = palette.textPrimary,
-                        unfocusedTextColor = palette.textPrimary,
-                        focusedContainerColor = palette.surface,
-                        unfocusedContainerColor = palette.surface
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                // Hint line under the Gemini field
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = "New keys from Google AI Studio start with AQ. — that is correct, paste the whole key.",
-                    fontSize = 12.sp,
-                    color = palette.textSecondary,
-                    lineHeight = 17.sp
-                )
-
-                if (keyValidationMessage != null) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    val msgColor = when (keyStatus) {
-                        SetupKeyStatus.VALID -> Color(0xFF10B981)
-                        SetupKeyStatus.TRANSIENT -> Color(0xFFF59E0B)
-                        SetupKeyStatus.INVALID -> Color(0xFFEF4444)
-                        SetupKeyStatus.CHECKING, SetupKeyStatus.IDLE -> palette.textSecondary
-                    }
-                    Text(
-                        text = keyValidationMessage!!,
-                        fontSize = 13.sp,
-                        color = msgColor
-                    )
-                }
-
-                if (liveCapabilityMessage != null) {
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = liveCapabilityMessage!!,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = if (isLiveCapable) Color(0xFF10B981) else Color(0xFFF59E0B)
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                // Get Free Key helper (not a save action — opens AI Studio)
-                OutlinedButton(
-                    onClick = {
-                        val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://aistudio.google.com/apikey"))
-                        browserIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                        context.startActivity(browserIntent)
-                    },
-                    shape = RoundedCornerShape(14.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = palette.primary),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Get Free Key")
-                }
-
-                Spacer(modifier = Modifier.height(24.dp))
-
-                // The single save action: tests the key, saves it, continues.
+                // The single save action button
                 MiraButton(
                     text = "Save Key & Continue →",
                     onClick = testAndSaveKeys,
@@ -382,23 +425,21 @@ fun SetupScreen(
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
                 if (isServerKeyAvailable) {
-                    Spacer(modifier = Modifier.height(8.dp))
                     TextButton(
                         onClick = { currentStep = 2 },
                         modifier = Modifier.align(Alignment.CenterHorizontally)
                     ) {
-                        Text("Mira server key available — Continue with server key →", color = palette.primary)
+                        Text("Mira server key available — Continue with server key →", color = palette.primary, fontSize = 13.sp)
                     }
                 } else if (securePrefs.getGeminiApiKey() != null) {
-                    Spacer(modifier = Modifier.height(8.dp))
                     TextButton(
                         onClick = { currentStep = 2 },
                         modifier = Modifier.align(Alignment.CenterHorizontally)
                     ) {
-                        Text("Gemini key already saved — Continue to Step 2 →", color = palette.primary)
+                        Text("Gemini key already saved — Continue to Step 2 →", color = palette.primary, fontSize = 13.sp)
                     }
                 }
 
@@ -420,6 +461,7 @@ fun SetupScreen(
                 Surface(
                     shape = RoundedCornerShape(12.dp),
                     color = bannerBg,
+                    border = BorderStroke(1.dp, bannerTextColor.copy(alpha = 0.35f)),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
@@ -441,9 +483,10 @@ fun SetupScreen(
             )
             Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = "Microphone, Battery optimization & File Management are required for real-time voice and file creation. The rest enable tools and features.",
-                fontSize = 14.sp,
-                color = palette.textSecondary
+                text = "Microphone, Battery optimization & File Management are required for real-time voice and file creation. The rest enable optional tools.",
+                fontSize = 13.5.sp,
+                color = palette.textSecondary,
+                lineHeight = 19.sp
             )
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -494,7 +537,7 @@ fun SetupScreen(
                 item {
                     PermissionRow(
                         title = "File Management (Required)",
-                        subtitle = "Mira needs file access to save websites, code and files you ask her to build",
+                        subtitle = "Mira needs file access to save websites, code, and files you generate",
                         iconRes = R.drawable.ic_fluent_folder_open_24_regular,
                         isGranted = hasFileAccess,
                         isRequired = true,
@@ -654,6 +697,7 @@ fun PermissionRow(
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
             .background(palette.surface)
+            .border(1.dp, palette.borderSubtle, RoundedCornerShape(14.dp))
             .clickable { onClick() }
             .padding(14.dp)
     ) {

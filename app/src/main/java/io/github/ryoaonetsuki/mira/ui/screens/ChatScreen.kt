@@ -7,11 +7,13 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.database.sqlite.SQLiteConstraintException
 import android.os.Bundle
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -619,6 +621,10 @@ fun ChatScreen(
 
             activeGenerationJob = MiraAppScope.scope.launch {
                 try {
+                    withContext(Dispatchers.IO) {
+                        db.chatDao().ensureConversationExists(currentConversationId)
+                    }
+
                     // Check image intent first
                     val imagePrompt = extractImagePrompt(text, isImageMode)
                     if (imagePrompt != null && currentStaged == null) {
@@ -642,7 +648,9 @@ fun ChatScreen(
                         val imageUrl = "https://image.pollinations.ai/prompt/$encoded?width=1024&height=1024&nologo=true&seed=${System.currentTimeMillis()}"
 
                         if (overrideText == null) {
-                            db.chatDao().insertMessage(
+                            safeInsertMessage(
+                                context,
+                                db,
                                 ChatMessageEntity(
                                     conversationId = currentConversationId,
                                     role = "user",
@@ -650,7 +658,9 @@ fun ChatScreen(
                                 )
                             )
                         }
-                        db.chatDao().insertMessage(
+                        safeInsertMessage(
+                            context,
+                            db,
                             ChatMessageEntity(
                                 conversationId = currentConversationId,
                                 role = "model",
@@ -667,7 +677,9 @@ fun ChatScreen(
                     // Otherwise text/code generation via Gemini
                     val keySource = resolver.resolveKey()
                     if (keySource is KeySource.NoKey) {
-                        db.chatDao().insertMessage(
+                        safeInsertMessage(
+                            context,
+                            db,
                             ChatMessageEntity(
                                 conversationId = currentConversationId,
                                 role = "error",
@@ -709,14 +721,16 @@ fun ChatScreen(
                         content = userContent
                     )
                     if (overrideText == null) {
-                        db.chatDao().insertMessage(userMsg)
+                        safeInsertMessage(context, db, userMsg)
                     }
 
                     // Check connector command
                     if (currentStaged == null) {
                         val connectorReply = ConnectorIntentHandler.handleCommand(context, text)
                         if (connectorReply != null) {
-                            db.chatDao().insertMessage(
+                            safeInsertMessage(
+                                context,
+                                db,
                                 ChatMessageEntity(
                                     conversationId = currentConversationId,
                                     role = "model",
@@ -928,7 +942,9 @@ fun ChatScreen(
                         }
 
                         withContext(Dispatchers.IO) {
-                            db.chatDao().insertMessage(
+                            safeInsertMessage(
+                                context,
+                                db,
                                 ChatMessageEntity(
                                     conversationId = currentConversationId,
                                     role = "model",
@@ -967,7 +983,9 @@ fun ChatScreen(
                                 }
                             }
                             withContext(Dispatchers.IO) {
-                                db.chatDao().insertMessage(
+                                safeInsertMessage(
+                                    context,
+                                    db,
                                     ChatMessageEntity(
                                         conversationId = currentConversationId,
                                         role = "model",
@@ -981,7 +999,9 @@ fun ChatScreen(
                             val reason = fallbackResponse.exceptionOrNull()?.message ?: "Unknown error"
                             if (!reason.contains("coroutine scope left the composition", ignoreCase = true)) {
                                 withContext(Dispatchers.IO) {
-                                    db.chatDao().insertMessage(
+                                    safeInsertMessage(
+                                        context,
+                                        db,
                                         ChatMessageEntity(
                                             conversationId = currentConversationId,
                                             role = "error",
@@ -997,7 +1017,12 @@ fun ChatScreen(
                     val msg = e.message ?: "Unknown error"
                     if (!msg.contains("coroutine scope left the composition", ignoreCase = true)) {
                         withContext(Dispatchers.IO) {
-                            db.chatDao().insertMessage(
+                            try {
+                                db.chatDao().ensureConversationExists(currentConversationId)
+                            } catch (_: Exception) {}
+                            safeInsertMessage(
+                                context,
+                                db,
                                 ChatMessageEntity(
                                     conversationId = currentConversationId,
                                     role = "error",
@@ -1025,9 +1050,12 @@ fun ChatScreen(
         val lastModel = messages.lastOrNull { it.role == "model" || it.role == "error" }
         MiraAppScope.scope.launch {
             if (lastModel != null && lastModel.id > lastUser.id) {
-                db.chatDao().deleteMessagesForConversation(currentConversationId)
-                val keep = messages.filter { it.id <= lastUser.id }
-                keep.forEach { db.chatDao().insertMessage(it) }
+                withContext(Dispatchers.IO) {
+                    db.chatDao().ensureConversationExists(currentConversationId)
+                    db.chatDao().deleteMessagesForConversation(currentConversationId)
+                    val keep = messages.filter { it.id <= lastUser.id }
+                    keep.forEach { safeInsertMessage(context, db, it) }
+                }
             }
             sendMessage(overrideText = lastUser.content)
         }
@@ -2185,6 +2213,38 @@ fun ChatScreen(
 }
 
 /**
+ * Safely inserts a chat message ensuring its parent conversation exists in the database.
+ * Catches SQLiteConstraintException defensively so that a database constraint failure
+ * can never crash the app, surfacing an in-app error Toast instead.
+ */
+internal suspend fun safeInsertMessage(
+    context: Context,
+    db: MiraDatabase,
+    message: ChatMessageEntity,
+    defaultTitle: String = "New Chat"
+): Long? {
+    return try {
+        withContext(Dispatchers.IO) {
+            db.chatDao().insertMessageEnsuringConversation(message, defaultTitle)
+        }
+    } catch (e: SQLiteConstraintException) {
+        Log.e("ChatScreen", "Database constraint error on insertMessage: ${e.message}", e)
+        withContext(Dispatchers.Main) {
+            Toast.makeText(
+                context,
+                "Database error: could not save message due to constraint failure.",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+        null
+    } catch (e: Exception) {
+        if (e is CancellationException) throw e
+        Log.e("ChatScreen", "Failed to insert message: ${e.message}", e)
+        null
+    }
+}
+
+/**
  * Derives and updates conversation title and long-term memory keyed to this conversationId.
  */
 suspend fun updateConversationTitleAndMemory(
@@ -2193,6 +2253,7 @@ suspend fun updateConversationTitleAndMemory(
     lastUserText: String,
     lastAssistantText: String
 ) {
+    db.chatDao().ensureConversationExists(conversationId)
     val conversation = db.chatDao().getConversationById(conversationId) ?: return
     val currentTitle = conversation.title
     val isGeneric = currentTitle == "Mira Conversation" || currentTitle == "New Chat" ||

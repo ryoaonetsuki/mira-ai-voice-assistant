@@ -41,8 +41,6 @@ fun MayaSettingsScreen(
     val persona by userPrefs.personaFlow.collectAsState(initial = "Mira")
     val assistantName by userPrefs.assistantNameFlow.collectAsState(initial = "Mira")
     val language by userPrefs.languageFlow.collectAsState(initial = "Bangla (Bengali)")
-    val drivingMode by userPrefs.drivingModeFlow.collectAsState(initial = false)
-    val sleepTimeout by userPrefs.sleepTimeoutFlow.collectAsState(initial = 5)
 
     var showNameDialog by remember { mutableStateOf(false) }
     var nameInput by remember { mutableStateOf(assistantName) }
@@ -186,25 +184,6 @@ fun MayaSettingsScreen(
                             Text(language, fontSize = 12.sp, color = palette.textSecondary)
                         }
                         Icon(Icons.Rounded.ChevronRight, contentDescription = null, tint = palette.textSecondary)
-                    }
-                }
-            }
-
-            // Driving Mode
-            item {
-                MiraCard(modifier = Modifier.fillMaxWidth()) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Driving Mode", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
-                            Text("Auto-reject calls and announce who is calling", fontSize = 12.sp, color = palette.textSecondary)
-                        }
-                        MiraSwitch(
-                            checked = drivingMode,
-                            onCheckedChange = { scope.launch { userPrefs.setDrivingMode(it) } }
-                        )
                     }
                 }
             }

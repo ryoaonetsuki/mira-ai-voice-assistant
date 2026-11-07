@@ -343,7 +343,7 @@ fun WhiteboardScreen(
                             val isSelected = !isEraser && selectedColor == col
                             val animatedBorderColor by animateColorAsState(
                                 targetValue = if (isSelected) palette.primary else palette.borderSubtle.copy(alpha = 0.6f),
-                                animationSpec = MiraMotion.EffectsFloat,
+                                animationSpec = MiraMotion.effectsSpec<Color>(),
                                 label = "SwatchBorder"
                             )
 

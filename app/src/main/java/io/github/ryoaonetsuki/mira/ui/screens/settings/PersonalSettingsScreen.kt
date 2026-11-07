@@ -75,9 +75,8 @@ fun PersonalSettingsScreen(
         refreshStatus()
     }
 
-    LaunchedEffect(savedName, savedPhone, savedSong) {
+    LaunchedEffect(savedName, savedSong) {
         nameInput = savedName
-        phoneInput = savedPhone
         favoriteSongInput = savedSong
     }
 

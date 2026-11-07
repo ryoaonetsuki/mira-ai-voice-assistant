@@ -10,5 +10,6 @@ data class MemoryEntity(
     val content: String,
     val category: String = "General",
     val createdAt: Long = System.currentTimeMillis(),
-    val playCount: Int = 0
+    val playCount: Int = 0,
+    val conversationId: String? = null
 )

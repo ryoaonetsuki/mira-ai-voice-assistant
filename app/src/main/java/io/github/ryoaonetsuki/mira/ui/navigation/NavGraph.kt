@@ -186,17 +186,6 @@ fun MiraNavGraph(
                 MarketingScreen(onBack = { navController.popBackStack() })
             }
 
-            composable(Screen.Licence.route) {
-                LicenceScreen(
-                    onLicenceSuccess = {
-                        navController.navigate(Screen.Home.route) {
-                            popUpTo(Screen.Licence.route) { inclusive = true }
-                        }
-                    },
-                    onBack = { navController.popBackStack() }
-                )
-            }
-
             composable(Screen.Extensions.route) {
                 ExtensionsScreen(onBack = { navController.popBackStack() })
             }
@@ -283,10 +272,6 @@ fun MiraNavGraph(
 
             composable(Screen.SettingsOptional.route) {
                 OptionalSettingsScreen(onBack = { navController.popBackStack() })
-            }
-
-            composable(Screen.SettingsSkills.route) {
-                SkillsSettingsScreen(onBack = { navController.popBackStack() })
             }
 
             composable(Screen.SettingsBackup.route) {

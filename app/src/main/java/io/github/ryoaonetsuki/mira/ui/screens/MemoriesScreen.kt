@@ -1,11 +1,5 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.Lock
-import androidx.compose.material.icons.rounded.Search
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -21,10 +15,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.fragment.app.FragmentActivity
+import io.github.ryoaonetsuki.mira.R
 import io.github.ryoaonetsuki.mira.data.local.MiraDatabase
 import io.github.ryoaonetsuki.mira.data.local.entities.MemoryEntity
 import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
@@ -77,12 +73,36 @@ fun MemoriesScreen(
                 title = { Text("Memories", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(painter = painterResource(id = R.drawable.ic_fluent_arrow_left_24_regular), contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 actions = {
-                    IconButton(onClick = { showAddDialog = true }) {
-                        Icon(Icons.Rounded.Add, contentDescription = "Add Memory", tint = palette.primary)
+                    Surface(
+                        color = palette.primary.copy(alpha = 0.15f),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .padding(end = 8.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable { showAddDialog = true }
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_fluent_add_24_regular),
+                                contentDescription = null,
+                                tint = palette.primary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "Add",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = palette.primary
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -99,7 +119,7 @@ fun MemoriesScreen(
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(
-                        imageVector = Icons.Rounded.Lock,
+                        painter = painterResource(id = R.drawable.ic_fluent_shield_keyhole_24_regular),
                         contentDescription = "Locked",
                         tint = palette.primary,
                         modifier = Modifier.size(56.dp)
@@ -149,7 +169,7 @@ fun MemoriesScreen(
                                 color = palette.textPrimary
                             )
                             Text(
-                                text = "Mira remembers durable facts and preferences from voice chats",
+                                text = "Mira remembers durable facts and preferences from chats",
                                 fontSize = 12.sp,
                                 color = palette.textSecondary
                             )
@@ -168,7 +188,7 @@ fun MemoriesScreen(
                     value = searchQuery,
                     onValueChange = { searchQuery = it },
                     placeholder = { Text("Search memories…", fontSize = 14.sp) },
-                    leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null, tint = palette.textSecondary) },
+                    leadingIcon = { Icon(painter = painterResource(id = R.drawable.ic_fluent_search_24_regular), contentDescription = null, tint = palette.textSecondary) },
                     shape = RoundedCornerShape(14.dp),
                     singleLine = true,
                     colors = OutlinedTextFieldDefaults.colors(
@@ -203,6 +223,17 @@ fun MemoriesScreen(
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         items(memories) { mem ->
+                            val lines = remember(mem.content) {
+                                mem.content.lines().map { it.trim() }.filter { it.isNotEmpty() }
+                            }
+                            val title = if (lines.size > 1) lines.first() else null
+                            val snippet = if (lines.size > 1) {
+                                lines.drop(1).joinToString("\n")
+                            } else {
+                                mem.content.trim()
+                            }
+                            val displaySnippet = if (title != null && snippet.equals(title, ignoreCase = true)) "" else snippet
+
                             MiraCard(modifier = Modifier.fillMaxWidth()) {
                                 Row(
                                     verticalAlignment = Alignment.Top,
@@ -216,13 +247,24 @@ fun MemoriesScreen(
                                             color = palette.primary,
                                             letterSpacing = 1.sp
                                         )
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Text(
-                                            text = mem.content,
-                                            fontSize = 14.sp,
-                                            color = palette.textPrimary,
-                                            lineHeight = 20.sp
-                                        )
+                                        if (!title.isNullOrBlank()) {
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            Text(
+                                                text = title,
+                                                fontSize = 15.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = palette.textPrimary
+                                            )
+                                        }
+                                        if (displaySnippet.isNotBlank()) {
+                                            Spacer(modifier = Modifier.height(3.dp))
+                                            Text(
+                                                text = displaySnippet,
+                                                fontSize = 13.sp,
+                                                color = if (title != null) palette.textSecondary else palette.textPrimary,
+                                                lineHeight = 19.sp
+                                            )
+                                        }
                                     }
 
                                     IconButton(
@@ -231,7 +273,7 @@ fun MemoriesScreen(
                                         }
                                     ) {
                                         Icon(
-                                            imageVector = Icons.Rounded.Close,
+                                            painter = painterResource(id = R.drawable.ic_fluent_delete_24_regular),
                                             contentDescription = "Delete",
                                             tint = palette.textSecondary,
                                             modifier = Modifier.size(18.dp)

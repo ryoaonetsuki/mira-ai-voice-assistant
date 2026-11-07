@@ -30,16 +30,13 @@ fun SocialSettingsScreen(
 
     val savedHandle by userPrefs.userHandleFlow.collectAsState(initial = "@mira_creator")
     val savedVoice by userPrefs.captionVoiceFlow.collectAsState(initial = "Witty, bold and tech-savvy")
-    val savedDailyStory by userPrefs.dailyStoryFlow.collectAsState(initial = true)
 
     var userHandle by remember { mutableStateOf(savedHandle) }
     var captionVoice by remember { mutableStateOf(savedVoice) }
-    var dailyStoryEnabled by remember { mutableStateOf(savedDailyStory) }
 
-    LaunchedEffect(savedHandle, savedVoice, savedDailyStory) {
+    LaunchedEffect(savedHandle, savedVoice) {
         userHandle = savedHandle
         captionVoice = savedVoice
-        dailyStoryEnabled = savedDailyStory
     }
 
     Scaffold(

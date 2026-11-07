@@ -1,14 +1,5 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.ArrowBackIosNew
-import androidx.compose.material.icons.rounded.ArrowForward
-import androidx.compose.material.icons.rounded.ArrowForwardIos
-import androidx.compose.material.icons.rounded.Home
-import androidx.compose.material.icons.rounded.Laptop
-import androidx.compose.material.icons.rounded.PhoneAndroid
-import androidx.compose.material.icons.rounded.Refresh
 import android.graphics.Bitmap
 import android.webkit.WebChromeClient
 import android.webkit.WebView
@@ -22,10 +13,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import io.github.ryoaonetsuki.mira.R
 import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -59,7 +52,7 @@ fun BrowserScreen(
                         .padding(horizontal = 8.dp, vertical = 6.dp)
                 ) {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(painter = painterResource(id = R.drawable.ic_fluent_arrow_left_24_regular), contentDescription = "Back", tint = palette.textPrimary)
                     }
 
                     // Address bar
@@ -77,7 +70,7 @@ fun BrowserScreen(
                                 }
                                 webViewInstance?.loadUrl(url)
                             }) {
-                                Icon(Icons.Rounded.ArrowForward, contentDescription = "Go", tint = palette.primary)
+                                Icon(painter = painterResource(id = R.drawable.ic_fluent_arrow_right_24_regular), contentDescription = "Go", tint = palette.primary)
                             }
                         },
                         colors = OutlinedTextFieldDefaults.colors(
@@ -104,7 +97,7 @@ fun BrowserScreen(
                         webViewInstance?.reload()
                     }) {
                         Icon(
-                            imageVector = if (isDesktopMode) Icons.Rounded.Laptop else Icons.Rounded.PhoneAndroid,
+                            painter = painterResource(id = if (isDesktopMode) R.drawable.ic_fluent_laptop_24_regular else R.drawable.ic_fluent_phone_24_regular),
                             contentDescription = "Desktop Toggle",
                             tint = if (isDesktopMode) palette.primary else palette.textSecondary
                         )
@@ -112,7 +105,7 @@ fun BrowserScreen(
 
                     // Reload
                     IconButton(onClick = { webViewInstance?.reload() }) {
-                        Icon(Icons.Rounded.Refresh, contentDescription = "Reload", tint = palette.textPrimary)
+                        Icon(painter = painterResource(id = R.drawable.ic_fluent_arrow_clockwise_24_regular), contentDescription = "Reload", tint = palette.textPrimary)
                     }
                 }
 
@@ -139,13 +132,13 @@ fun BrowserScreen(
                     enabled = canGoBack,
                     onClick = { webViewInstance?.goBack() }
                 ) {
-                    Icon(Icons.Rounded.ArrowBackIosNew, contentDescription = "Back", tint = if (canGoBack) palette.textPrimary else palette.textSecondary.copy(alpha = 0.4f))
+                    Icon(painter = painterResource(id = R.drawable.ic_fluent_chevron_left_24_regular), contentDescription = "Back", tint = if (canGoBack) palette.textPrimary else palette.textSecondary.copy(alpha = 0.4f))
                 }
                 IconButton(
                     enabled = canGoForward,
                     onClick = { webViewInstance?.goForward() }
                 ) {
-                    Icon(Icons.Rounded.ArrowForwardIos, contentDescription = "Forward", tint = if (canGoForward) palette.textPrimary else palette.textSecondary.copy(alpha = 0.4f))
+                    Icon(painter = painterResource(id = R.drawable.ic_fluent_chevron_right_24_regular), contentDescription = "Forward", tint = if (canGoForward) palette.textPrimary else palette.textSecondary.copy(alpha = 0.4f))
                 }
                 Box(
                     contentAlignment = Alignment.Center,
@@ -159,7 +152,7 @@ fun BrowserScreen(
                 IconButton(onClick = {
                     webViewInstance?.loadUrl("https://duckduckgo.com")
                 }) {
-                    Icon(Icons.Rounded.Home, contentDescription = "Home", tint = palette.textPrimary)
+                    Icon(painter = painterResource(id = R.drawable.ic_fluent_home_24_regular), contentDescription = "Home", tint = palette.textPrimary)
                 }
             }
         },

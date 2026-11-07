@@ -72,43 +72,6 @@ class LiveDiagnosticRunnerTest {
 
     @Test
     fun testStage2_ConnectionFailure_FailsStage2() = runBlocking {
-        val mockFactory = WebSocket.Factory { request ->
-            val ws = MockWebSocket(request, object : WebSocketListener() {})
-            val resp = dummyResponse(401, request)
-            object : WebSocket by ws {
-                // Return a websocket that immediately reports failure
-            }.also {
-                // Dispatched via listener
-            }
-        }
-
-        val failingFactory = WebSocket.Factory { request ->
-            object : WebSocket {
-                override fun request(): Request = request
-                override fun queueSize(): Long = 0L
-                override fun send(text: String): Boolean = false
-                override fun send(bytes: ByteString): Boolean = false
-                override fun close(code: Int, reason: String?): Boolean = true
-                override fun cancel() {}
-            }
-        }
-
-        val clientWithFailure = WebSocket.Factory { request ->
-            val ws = MockWebSocket(request, object : WebSocketListener() {})
-            // Notify listener of HTTP 401 failure
-            val listener = (LiveDiagnosticRunnerTest::class.java).let {
-                // Create a factory that triggers listener.onFailure
-            }
-            ws
-        }
-
-        // Test with a factory that triggers onFailure with HTTP 401
-        var capturedListener: WebSocketListener? = null
-        val factory = WebSocket.Factory { req ->
-            val ws = MockWebSocket(req, capturedListener ?: object : WebSocketListener() {})
-            ws
-        }
-
         val customWsFactory = object : WebSocket.Factory {
             override fun newWebSocket(request: Request, listener: WebSocketListener): WebSocket {
                 val ws = MockWebSocket(request, listener)

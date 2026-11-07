@@ -1,14 +1,18 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
-import androidx.annotation.DrawableRes
-import androidx.compose.ui.res.painterResource
-import io.github.ryoaonetsuki.mira.R
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.DrawableRes
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -24,12 +28,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import io.github.ryoaonetsuki.mira.R
 import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
 import io.github.ryoaonetsuki.mira.data.preferences.UserPreferences
 import io.github.ryoaonetsuki.mira.network.WeatherClient
@@ -98,14 +104,18 @@ fun HomeScreen(
                 .padding(horizontal = 18.dp, vertical = 8.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // In-app remote banner
-            if (!cachedConfig?.bannerText.isNullOrBlank()) {
+            // In-app remote banner with smooth animation and subtle glow
+            AnimatedVisibility(
+                visible = !cachedConfig?.bannerText.isNullOrBlank(),
+                enter = fadeIn(animationSpec = tween(300)) + expandVertically(animationSpec = tween(300))
+            ) {
                 Surface(
                     shape = RoundedCornerShape(12.dp),
-                    color = palette.surfaceVariant.copy(alpha = 0.8f),
+                    color = palette.surfaceVariant.copy(alpha = 0.85f),
+                    border = BorderStroke(1.dp, palette.primary.copy(alpha = 0.35f)),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(bottom = 10.dp)
+                        .padding(bottom = 12.dp)
                 ) {
                     Text(
                         text = cachedConfig?.bannerText ?: "",
@@ -117,61 +127,86 @@ fun HomeScreen(
                 }
             }
 
-            // Info Cards Row (Weather, Today, Mood) — STAY
+            // Info Cards Row (Weather, Today) — harmonized to 84dp height & borderSubtle
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                // Weather
+                // Weather Card
                 MiraCard(
-                    modifier = Modifier.weight(1f),
-                    cornerRadius = 14.dp
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(84.dp),
+                    cornerRadius = 14.dp,
+                    containerColor = palette.surface,
+                    borderColor = palette.borderSubtle,
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp)
                 ) {
-                    Icon(
-                        painter = painterResource(id = R.drawable.ic_fluent_weather_sunny_24_regular),
-                        contentDescription = "Weather",
-                        tint = palette.primary,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = weatherData.temperature,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = palette.textPrimary
-                    )
-                    Text(
-                        text = weatherData.condition,
-                        fontSize = 11.sp,
-                        color = palette.textSecondary
-                    )
+                    Column(
+                        modifier = Modifier.fillMaxHeight(),
+                        verticalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_fluent_weather_sunny_24_regular),
+                            contentDescription = "Weather",
+                            tint = palette.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Column {
+                            Text(
+                                text = weatherData.temperature,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = palette.textPrimary,
+                                maxLines = 1
+                            )
+                            Text(
+                                text = weatherData.condition,
+                                fontSize = 11.sp,
+                                color = palette.textSecondary,
+                                maxLines = 1
+                            )
+                        }
+                    }
                 }
 
-                // Date
+                // Date Card
                 MiraCard(
-                    modifier = Modifier.weight(1f),
-                    cornerRadius = 14.dp
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(84.dp),
+                    cornerRadius = 14.dp,
+                    containerColor = palette.surface,
+                    borderColor = palette.borderSubtle,
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp)
                 ) {
-                    Icon(
-                        painter = painterResource(id = R.drawable.ic_fluent_calendar_ltr_24_regular),
-                        contentDescription = "Date",
-                        tint = palette.secondary,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = dateString,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = palette.textPrimary
-                    )
-                    Text(
-                        text = "Today",
-                        fontSize = 11.sp,
-                        color = palette.textSecondary
-                    )
+                    Column(
+                        modifier = Modifier.fillMaxHeight(),
+                        verticalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_fluent_calendar_ltr_24_regular),
+                            contentDescription = "Date",
+                            tint = palette.secondary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Column {
+                            Text(
+                                text = dateString,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = palette.textPrimary,
+                                maxLines = 1
+                            )
+                            Text(
+                                text = "Today",
+                                fontSize = 11.sp,
+                                color = palette.textSecondary,
+                                maxLines = 1
+                            )
+                        }
+                    }
                 }
-
             }
 
             Spacer(modifier = Modifier.height(20.dp))
@@ -192,11 +227,19 @@ fun HomeScreen(
                 LiveState.SPEAKING -> "Speaking..."
                 LiveState.IDLE, LiveState.ERROR -> "Tap the voice button to start"
             }
-            Text(
-                text = statusText,
-                fontSize = 13.sp,
-                color = palette.textSecondary
-            )
+            Crossfade(
+                targetState = statusText,
+                animationSpec = tween(200),
+                label = "orb-status"
+            ) { text ->
+                Text(
+                    text = text,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    textAlign = TextAlign.Center,
+                    color = palette.textSecondary
+                )
+            }
 
             // ROUND 6: on-screen voice diagnostics card REMOVED (Salman's order) —
             // Home matches the v1.0.0 layout again (orb + small status line only).
@@ -250,8 +293,9 @@ private fun HomeBottomNavBar(
     ) {
         Surface(
             color = palette.surface.copy(alpha = 0.97f),
-            shadowElevation = 18.dp,
+            shadowElevation = 12.dp,
             shape = RoundedCornerShape(30.dp),
+            border = BorderStroke(1.dp, palette.borderSubtle.copy(alpha = 0.6f)),
             modifier = Modifier.fillMaxWidth()
         ) {
             Row(
@@ -349,10 +393,11 @@ private fun BottomNavItem(
 ) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
         modifier = Modifier
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(12.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 6.dp)
+            .padding(horizontal = 8.dp, vertical = 4.dp)
     ) {
         Icon(
             painter = painterResource(id = if (selected) filledIcon else regularIcon),
@@ -367,5 +412,16 @@ private fun BottomNavItem(
             color = if (selected) palette.primary else palette.textSecondary,
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
         )
+        Spacer(modifier = Modifier.height(2.dp))
+        if (selected) {
+            Box(
+                modifier = Modifier
+                    .size(width = 4.dp, height = 2.dp)
+                    .clip(RoundedCornerShape(1.dp))
+                    .background(palette.primary)
+            )
+        } else {
+            Spacer(modifier = Modifier.height(2.dp))
+        }
     }
 }

@@ -116,29 +116,7 @@ fun SplashScreen(
             return@LaunchedEffect
         }
 
-        // 4. Licence Check (OFF by default — opens freely)
-        if (config.licenceEnabled) {
-            if (configRes.isFailure) {
-                // Backend unreachable and licence is required -> fail closed with clear message
-                blockingTitle = "Licence Check Offline"
-                blockingMessage = "Cannot verify licence — check connection.\nAn active internet connection is required to verify your licence."
-                return@LaunchedEffect
-            }
-
-            val savedLicence = securePrefs.getLicenceKey()
-            if (savedLicence.isNullOrBlank()) {
-                onNavigate(Screen.Licence.route)
-                return@LaunchedEffect
-            }
-
-            val isValid = supabaseClient.validateLicence(savedLicence).getOrDefault(false)
-            if (!isValid) {
-                onNavigate(Screen.Licence.route)
-                return@LaunchedEffect
-            }
-        }
-
-        // 5. Normal setup check: proceed to Home if user has a key OR server key is configured
+        // 4. Normal setup check: proceed to Home if user has a key OR server key is configured
         val key = securePrefs.getGeminiApiKey()
         val hasKey = if (key.isNullOrBlank()) {
             val resolver = io.github.ryoaonetsuki.mira.backend.ApiKeyResolver(context)

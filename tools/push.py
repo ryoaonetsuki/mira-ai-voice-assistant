@@ -26,7 +26,7 @@ BRANCH = "main"
 BASE = "https://api.github.com"
 CREDENTIAL = "custom.github-pat"
 
-EXCLUDE_DIRS = {".git", "build", ".gradle", ".idea", "__pycache__", ".dart_tool"}
+EXCLUDE_DIRS = {".git", "build", ".gradle", ".idea", "__pycache__", ".dart_tool", ".gemini", ".specify"}
 EXCLUDE_FILES = {"local.properties", "logo-alt-blue.png"}
 EXCLUDE_SUFFIX = (".apk", ".pyc")
 

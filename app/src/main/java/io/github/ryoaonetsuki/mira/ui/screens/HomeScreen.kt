@@ -1,14 +1,6 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.CalendarToday
-import androidx.compose.material.icons.rounded.Chat
-import androidx.compose.material.icons.rounded.Home
-import androidx.compose.material.icons.rounded.Mic
-import androidx.compose.material.icons.rounded.Book
-import androidx.compose.material.icons.rounded.QrCodeScanner
-import androidx.compose.material.icons.rounded.Stop
-import androidx.compose.material.icons.rounded.WbSunny
+import androidx.annotation.DrawableRes
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
@@ -134,7 +126,7 @@ fun HomeScreen(
                     cornerRadius = 14.dp
                 ) {
                     Icon(
-                        imageVector = Icons.Rounded.WbSunny,
+                        painter = painterResource(id = R.drawable.ic_fluent_weather_sunny_24_regular),
                         contentDescription = "Weather",
                         tint = palette.primary,
                         modifier = Modifier.size(18.dp)
@@ -159,7 +151,7 @@ fun HomeScreen(
                     cornerRadius = 14.dp
                 ) {
                     Icon(
-                        imageVector = Icons.Rounded.CalendarToday,
+                        painter = painterResource(id = R.drawable.ic_fluent_calendar_ltr_24_regular),
                         contentDescription = "Date",
                         tint = palette.secondary,
                         modifier = Modifier.size(18.dp)
@@ -270,16 +262,18 @@ private fun HomeBottomNavBar(
             ) {
                 // Home tab
                 BottomNavItem(
-                    icon = Icons.Rounded.Home,
+                    regularIcon = R.drawable.ic_fluent_home_24_regular,
+                    filledIcon = R.drawable.ic_fluent_home_24_filled,
                     label = "Home",
                     selected = true,
                     palette = palette,
                     onClick = { /* already on home */ }
                 )
 
-                // Vision tab
+                // Vision tab (Camera, never QR scanner)
                 BottomNavItem(
-                    icon = Icons.Rounded.QrCodeScanner,
+                    regularIcon = R.drawable.ic_fluent_camera_24_regular,
+                    filledIcon = R.drawable.ic_fluent_camera_24_filled,
                     label = "Vision",
                     selected = false,
                     palette = palette,
@@ -311,7 +305,7 @@ private fun HomeBottomNavBar(
                         }
                 ) {
                     Icon(
-                        imageVector = if (isLive) Icons.Rounded.Stop else Icons.Rounded.Mic,
+                        painter = painterResource(id = if (isLive) R.drawable.ic_fluent_stop_24_filled else R.drawable.ic_fluent_mic_24_regular),
                         contentDescription = if (isLive) "Stop Session" else "Talk to Mira",
                         tint = Color.White,
                         modifier = Modifier.size(26.dp)
@@ -320,7 +314,8 @@ private fun HomeBottomNavBar(
 
                 // Memory tab
                 BottomNavItem(
-                    icon = Icons.Rounded.Book,
+                    regularIcon = R.drawable.ic_fluent_sparkle_24_regular,
+                    filledIcon = R.drawable.ic_fluent_sparkle_24_filled,
                     label = "Memory",
                     selected = false,
                     palette = palette,
@@ -329,7 +324,8 @@ private fun HomeBottomNavBar(
 
                 // Chat tab
                 BottomNavItem(
-                    icon = Icons.Rounded.Chat,
+                    regularIcon = R.drawable.ic_fluent_chat_24_regular,
+                    filledIcon = R.drawable.ic_fluent_chat_24_filled,
                     label = "Chat",
                     selected = false,
                     palette = palette,
@@ -342,7 +338,8 @@ private fun HomeBottomNavBar(
 
 @Composable
 private fun BottomNavItem(
-    icon: ImageVector,
+    @DrawableRes regularIcon: Int,
+    @DrawableRes filledIcon: Int = regularIcon,
     label: String,
     selected: Boolean,
     palette: io.github.ryoaonetsuki.mira.ui.theme.MiraPalette,
@@ -356,7 +353,7 @@ private fun BottomNavItem(
             .padding(horizontal = 8.dp, vertical = 6.dp)
     ) {
         Icon(
-            imageVector = icon,
+            painter = painterResource(id = if (selected) filledIcon else regularIcon),
             contentDescription = label,
             tint = if (selected) palette.primary else palette.textSecondary,
             modifier = Modifier.size(22.dp)

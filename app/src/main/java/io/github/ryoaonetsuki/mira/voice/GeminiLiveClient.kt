@@ -60,6 +60,7 @@ class GeminiLiveClient(
         fun onConnecting(model: String) {}
         fun onConnected() {}
         fun onSetupComplete() {}
+        fun onRouteConnected(route: String) {}
         fun onAudioData(pcmBytes: ByteArray) {}
         fun onInterrupted() {}
         fun onTurnComplete() {}
@@ -85,6 +86,8 @@ class GeminiLiveClient(
 
     private var webSocket: WebSocket? = null
     private val isRunning = AtomicBoolean(false)
+    private var triedDirectFallback = false
+    @Volatile private var activeRoute: String = "RELAY"
     private var sessionStartMs: Long = 0L
     private var setupSentMs: Long = 0L
 
@@ -135,6 +138,7 @@ class GeminiLiveClient(
         lastServerMessageMs = 0L
         lastUserAudioSentMs = 0L
         reconnectAttempts = 0
+        triedDirectFallback = false
 
         LiveVoiceDiagnostics.reset()
         LiveVoiceDiagnostics.updateStage("CONNECTING")
@@ -149,9 +153,12 @@ class GeminiLiveClient(
         listener.onConnecting(model)
         LiveVoiceDiagnostics.updateStage("CONNECTING")
 
-        val targetUrl = if (useRelay) RELAY_WS_URL else LIVE_WS_URL
-        val headerName = if (useRelay) RelayLiveClient.HEADER_MIRA_KEY else "x-goog-api-key"
-        Log.i(TAG, "MIRA_LIVE_VOICE: WS connecting to $targetUrl (routing=${if (useRelay) "RELAY" else "DIRECT"}, no key logged)")
+        val relayActive = useRelay && !triedDirectFallback
+        val targetUrl = if (relayActive) RELAY_WS_URL else LIVE_WS_URL
+        val headerName = if (relayActive) RelayLiveClient.HEADER_MIRA_KEY else "x-goog-api-key"
+        activeRoute = if (relayActive) "RELAY" else "DIRECT"
+        LiveVoiceDiagnostics.updateActiveRoute(activeRoute)
+        Log.i(TAG, "MIRA_LIVE_VOICE: WS connecting to $targetUrl (routing=$activeRoute, no key logged)")
 
         // Connect timeout watchdog (20s)
         connectTimeoutJob?.cancel()
@@ -230,6 +237,7 @@ class GeminiLiveClient(
                         transitionTo(LiveClientState.LISTENING)
                         try {
                             listener.onSetupComplete()
+                            listener.onRouteConnected(activeRoute)
                         } catch (e: Exception) {
                             Log.e(TAG, "MIRA_LIVE_VOICE: Error in listener.onSetupComplete: ${e.message}")
                         }
@@ -384,6 +392,8 @@ class GeminiLiveClient(
                 Log.e(TAG, "MIRA_LIVE_VOICE: WS failure (code=$code): ${t.message}")
 
                 if (_state.value == LiveClientState.STOPPED) return
+                if (code != 400 && code != 401 && code != 403 &&
+                    tryDirectFallback("WS failure: ${t.message}")) return
 
                 val wasActiveSession = _state.value == LiveClientState.LISTENING ||
                         _state.value == LiveClientState.SPEAKING ||
@@ -414,6 +424,7 @@ class GeminiLiveClient(
                     listener.onClosed(reason)
                     return
                 }
+                if (code != 1000 && tryDirectFallback("WS closed (code=$code)")) return
 
                 if (code == 1000) {
                     transitionTo(LiveClientState.STOPPED)
@@ -490,8 +501,32 @@ class GeminiLiveClient(
         }
     }
 
+    private fun tryDirectFallback(reason: String): Boolean {
+        if (!useRelay || triedDirectFallback || _state.value == LiveClientState.STOPPED) return false
+
+        triedDirectFallback = true
+        Log.w(TAG, "MIRA_LIVE_VOICE: Relay route failed ($reason) — falling back to DIRECT")
+        transitionTo(LiveClientState.RECONNECTING)
+        LiveVoiceDiagnostics.updateStage("RECONNECTING")
+        cancelWatchdogs()
+
+        try {
+            webSocket?.close(1000, "Falling back to direct route")
+        } catch (_: Exception) {}
+        webSocket = null
+
+        clientScope.launch {
+            delay(500L)
+            if (isRunning.get() && _state.value != LiveClientState.STOPPED) {
+                connectWsInternal()
+            }
+        }
+        return true
+    }
+
     private fun handleError(message: String, code: Int?) {
         if (_state.value == LiveClientState.STOPPED) return
+        if (code != 400 && code != 401 && code != 403 && tryDirectFallback(message)) return
         transitionTo(LiveClientState.ERROR)
         LiveVoiceDiagnostics.updateLastError(message)
         LiveVoiceDiagnostics.updateStage("ERROR")

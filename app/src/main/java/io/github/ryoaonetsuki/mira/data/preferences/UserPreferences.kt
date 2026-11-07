@@ -56,9 +56,17 @@ class UserPreferences(private val context: Context) {
         it[KEY_ADULT_CONFIRMED] ?: false
     }
 
-    val themePaletteFlow: Flow<String> = context.dataStore.data.catch { emitDefaults(it) }.map {
-        it[KEY_THEME_PALETTE] ?: "Midnight"
+    val themeModeFlow: Flow<String> = context.dataStore.data.catch { emitDefaults(it) }.map {
+        val stored = it[KEY_THEME_PALETTE]
+        when (stored?.trim()?.lowercase()) {
+            "dark" -> "Dark"
+            "light" -> "Light"
+            "system" -> "System"
+            else -> "System"
+        }
     }
+
+    val themePaletteFlow: Flow<String> = themeModeFlow
 
     val orbStyleFlow: Flow<String> = context.dataStore.data.catch { emitDefaults(it) }.map {
         it[KEY_ORB_STYLE] ?: "Mira Neon"
@@ -149,7 +157,15 @@ class UserPreferences(private val context: Context) {
     suspend fun setCustomInstructions(text: String) = context.dataStore.edit { it[KEY_CUSTOM_INSTRUCTIONS] = text }
     suspend fun setSecretMode(mode: String) = context.dataStore.edit { it[KEY_SECRET_MODE] = mode }
     suspend fun setAdultConfirmed(confirmed: Boolean) = context.dataStore.edit { it[KEY_ADULT_CONFIRMED] = confirmed }
-    suspend fun setThemePalette(palette: String) = context.dataStore.edit { it[KEY_THEME_PALETTE] = palette }
+    suspend fun setThemeMode(mode: String) {
+        val normalized = when (mode.trim().lowercase()) {
+            "dark" -> "Dark"
+            "light" -> "Light"
+            else -> "System"
+        }
+        context.dataStore.edit { it[KEY_THEME_PALETTE] = normalized }
+    }
+    suspend fun setThemePalette(palette: String) = setThemeMode(palette)
     suspend fun setOrbStyle(style: String) = context.dataStore.edit { it[KEY_ORB_STYLE] = style }
     suspend fun setFastListening(enabled: Boolean) = context.dataStore.edit { it[KEY_FAST_LISTENING] = enabled }
     suspend fun setEchoGuard(enabled: Boolean) = context.dataStore.edit { it[KEY_ECHO_GUARD] = enabled }

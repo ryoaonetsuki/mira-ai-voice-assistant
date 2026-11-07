@@ -149,16 +149,6 @@ class SecurePreferences(context: Context) {
         return true
     }
 
-    fun getEnrolledFaceName(): String? {
-        return sharedPreferences?.getString(KEY_FACE_NAME, null)
-    }
-
-    fun setEnrolledFaceName(name: String): Boolean {
-        val sp = sharedPreferences ?: return false
-        sp.edit().putString(KEY_FACE_NAME, name.trim()).apply()
-        return true
-    }
-
     fun getLicenceKey(): String? {
         val sp = sharedPreferences ?: return null
         val key = sp.getString(KEY_LICENCE_KEY, null)
@@ -224,7 +214,6 @@ class SecurePreferences(context: Context) {
         private const val KEY_PIN_CODE = "pin_code"
         private const val KEY_TELEGRAM_CHAT_ID = "telegram_chat_id"
         private const val KEY_FACE_LOCK = "face_lock_enabled"
-        private const val KEY_FACE_NAME = "enrolled_face_name"
         private const val KEY_LICENCE_KEY = "licence_key"
         private const val KEY_CACHED_REMOTE_CONFIG = "cached_remote_config"
 

@@ -47,29 +47,6 @@ class SecurePreferences(context: Context) {
         return true
     }
 
-    fun getDeepgramApiKey(): String? {
-        val sp = sharedPreferences ?: return null
-        val key = sp.getString(KEY_DEEPGRAM_API_KEY, null)
-        return if (!key.isNullOrBlank()) key.trim() else null
-    }
-
-    fun setDeepgramApiKey(key: String): Boolean {
-        val sp = sharedPreferences ?: return false
-        val trimmed = key.trim()
-        if (trimmed.isBlank()) {
-            return clearDeepgramApiKey()
-        }
-        sp.edit().putString(KEY_DEEPGRAM_API_KEY, trimmed).apply()
-        Log.d(TAG, "Deepgram API key saved (length=${trimmed.length})")
-        return true
-    }
-
-    fun clearDeepgramApiKey(): Boolean {
-        val sp = sharedPreferences ?: return false
-        sp.edit().remove(KEY_DEEPGRAM_API_KEY).apply()
-        return true
-    }
-
     fun getConnectorToken(connectorId: String): String? {
         return sharedPreferences?.getString("token_$connectorId", null)
     }
@@ -186,7 +163,6 @@ class SecurePreferences(context: Context) {
         private const val TAG = "SecurePreferences"
         private const val PREFS_FILENAME = "mira_encrypted_prefs"
         private const val KEY_GEMINI_API_KEY = "gemini_api_key"
-        private const val KEY_DEEPGRAM_API_KEY = "deepgram_api_key"
         private const val KEY_PIN_CODE = "pin_code"
         private const val KEY_TELEGRAM_CHAT_ID = "telegram_chat_id"
         private const val KEY_FACE_LOCK = "face_lock_enabled"

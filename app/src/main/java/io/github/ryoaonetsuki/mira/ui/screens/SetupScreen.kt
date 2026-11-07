@@ -92,9 +92,6 @@ fun SetupScreen(
     var groqValidationMessage by remember { mutableStateOf<String?>(null) }
     var groqKeyStatus by remember { mutableStateOf(SetupKeyStatus.IDLE) }
 
-    var deepgramKeyInput by remember { mutableStateOf(securePrefs.getDeepgramApiKey() ?: "") }
-    var isDeepgramKeyVisible by remember { mutableStateOf(false) }
-
     var liveCapabilityMessage by remember { mutableStateOf<String?>(null) }
     var isLiveCapable by remember { mutableStateOf(false) }
 
@@ -184,12 +181,6 @@ fun SetupScreen(
                     keyStatus = SetupKeyStatus.INVALID
                     keyValidationMessage = geminiOutcome.userFacingMessage
                 }
-            }
-
-            // Save Deepgram key if provided
-            val trimmedDeepgram = deepgramKeyInput.trim()
-            if (trimmedDeepgram.isNotBlank()) {
-                securePrefs.setDeepgramApiKey(trimmedDeepgram)
             }
 
             // Only Gemini key is REQUIRED to proceed (spec §3.3, §3.6)
@@ -377,7 +368,7 @@ fun SetupScreen(
                     )
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "1. Gemini key (required) — gives Mira her intelligence and voice\n2. Groq key (required) — gives real-time speech recognition for voice\n3. Deepgram key (optional) — optional speech engine, addable anytime",
+                        text = "1. Gemini key (required) — gives Mira her intelligence and native Live voice\n2. Groq key (optional) — optional alternative server voice, addable anytime",
                         fontSize = 13.sp,
                         color = palette.textSecondary,
                         lineHeight = 20.sp
@@ -566,61 +557,6 @@ fun SetupScreen(
                         isLoading = isCheckingGroqKey,
                         modifier = Modifier.weight(1f)
                     )
-                }
-
-                Spacer(modifier = Modifier.height(20.dp))
-
-                // FIELD 3: Deepgram API Key (OPTIONAL)
-                OutlinedTextField(
-                    value = deepgramKeyInput,
-                    onValueChange = { deepgramKeyInput = it },
-                    label = { Text("Deepgram API Key (optional)") },
-                    placeholder = { Text("Paste your Deepgram key (optional)") },
-                    visualTransformation = if (isDeepgramKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                    trailingIcon = {
-                        IconButton(onClick = { isDeepgramKeyVisible = !isDeepgramKeyVisible }) {
-                            Icon(
-                                imageVector = if (isDeepgramKeyVisible) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
-                                contentDescription = "Toggle Visibility",
-                                tint = palette.textSecondary
-                            )
-                        }
-                    },
-                    singleLine = true,
-                    shape = RoundedCornerShape(14.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = palette.primary,
-                        unfocusedBorderColor = palette.surfaceVariant,
-                        focusedTextColor = palette.textPrimary,
-                        unfocusedTextColor = palette.textPrimary,
-                        focusedContainerColor = palette.surface,
-                        unfocusedContainerColor = palette.surface
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                // Hint line under Deepgram field
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = "Optional — gives you $200 free credit at console.deepgram.com/signup. Can be added later in Settings.",
-                    fontSize = 12.sp,
-                    color = palette.textSecondary,
-                    lineHeight = 17.sp
-                )
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                OutlinedButton(
-                    onClick = {
-                        val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://console.deepgram.com/signup"))
-                        browserIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                        context.startActivity(browserIntent)
-                    },
-                    shape = RoundedCornerShape(14.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = palette.primary),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Get Free Key")
                 }
 
                 Spacer(modifier = Modifier.height(24.dp))

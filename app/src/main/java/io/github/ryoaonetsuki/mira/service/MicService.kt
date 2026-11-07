@@ -12,7 +12,6 @@ import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
-import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import io.github.ryoaonetsuki.mira.MainActivity
@@ -75,6 +74,58 @@ class MicService : Service() {
     private val handledTranscripts = Collections.synchronizedSet(mutableSetOf<String>())
     private var connectorJob: Job? = null
     private var liveSearchJob: Job? = null
+    private var connectingWatchdogJob: Job? = null
+
+    /**
+     * Guarantees terminal ERROR state and complete resource cleanup on every failure path (spec §4).
+     * Stops recorder, flushes/releases player, ends Live client, stops server voice,
+     * resets mic amplitude to 0, cancels watchdogs, and allows Home to return to idle.
+     */
+    private fun handleTerminalError(message: String) {
+        connectingWatchdogJob?.cancel()
+        connectingWatchdogJob = null
+        connectorJob?.cancel()
+        connectorJob = null
+        liveSearchJob?.cancel()
+        liveSearchJob = null
+
+        _errorMessage.value = message
+        _lastVoiceDiagnostic.value = message
+        _liveState.value = LiveState.ERROR
+        _voiceStage.value = VoiceStage.ERROR
+        _micAmplitude.value = 0f
+        LiveVoiceDiagnostics.updateLastError(message)
+        LiveVoiceDiagnostics.updateStage("ERROR")
+
+        try {
+            audioRecorder?.stopRecording()
+        } catch (e: Exception) {
+            Log.w(TAG, "Error stopping recorder on terminal error: ${e.message}")
+        }
+        audioRecorder = null
+
+        try {
+            audioPlayer?.stopImmediatelyAndFlush()
+            audioPlayer?.release()
+        } catch (e: Exception) {
+            Log.w(TAG, "Error stopping player on terminal error: ${e.message}")
+        }
+        audioPlayer = null
+
+        try {
+            liveClient?.endSession()
+        } catch (e: Exception) {
+            Log.w(TAG, "Error ending live client on terminal error: ${e.message}")
+        }
+        liveClient = null
+
+        try {
+            serverVoiceSession?.stop()
+        } catch (e: Exception) {
+            Log.w(TAG, "Error stopping server voice on terminal error: ${e.message}")
+        }
+        serverVoiceSession = null
+    }
 
     // Legacy Fallback voice mode & session (unreachable unless explicitly enabled)
     private var fallbackSession: FallbackVoiceSession? = null
@@ -213,11 +264,7 @@ class MicService : Service() {
                     startServerVoiceSessionInternal(groqKey, geminiKey)
                     return@launch
                 } else if (geminiKey.isNotBlank()) {
-                    Toast.makeText(
-                        applicationContext,
-                        "Alternative voice requires Groq key — using Native Gemini Live",
-                        Toast.LENGTH_SHORT
-                    ).show()
+                    _errorMessage.value = "Alternative voice requires Groq key — using Native Gemini Live"
                 }
             }
 
@@ -358,6 +405,16 @@ class MicService : Service() {
             _voiceStage.value = VoiceStage.CONNECTING
             _errorMessage.value = null
 
+            // MicService-level 45s CONNECTING watchdog (spec §4)
+            connectingWatchdogJob?.cancel()
+            connectingWatchdogJob = serviceScope.launch {
+                delay(45_000L)
+                if (_liveState.value == LiveState.CONNECTING) {
+                    Log.e(TAG, "MIRA_LIVE_VOICE: MicService connecting watchdog fired after 45s")
+                    handleTerminalError("Live voice: Connection timed out — tap to retry")
+                }
+            }
+
             val storedHandle = resumptionStore.getHandle()
 
             // Initialize single-path Gemini Live Client (spec §3.1)
@@ -380,10 +437,14 @@ class MicService : Service() {
                                 _voiceStage.value = VoiceStage.WAITING_FOR_SETUP
                             }
                             LiveClientState.LISTENING -> {
+                                connectingWatchdogJob?.cancel()
+                                connectingWatchdogJob = null
                                 _liveState.value = LiveState.LISTENING
                                 _voiceStage.value = VoiceStage.LISTENING
                             }
                             LiveClientState.SPEAKING -> {
+                                connectingWatchdogJob?.cancel()
+                                connectingWatchdogJob = null
                                 _liveState.value = LiveState.SPEAKING
                                 _voiceStage.value = VoiceStage.SPEAKING
                             }
@@ -397,10 +458,14 @@ class MicService : Service() {
                                 _voiceStage.value = VoiceStage.CONNECTING
                             }
                             LiveClientState.ERROR -> {
+                                connectingWatchdogJob?.cancel()
+                                connectingWatchdogJob = null
                                 _liveState.value = LiveState.ERROR
                                 _voiceStage.value = VoiceStage.ERROR
                             }
                             LiveClientState.STOPPED, LiveClientState.IDLE -> {
+                                connectingWatchdogJob?.cancel()
+                                connectingWatchdogJob = null
                                 if (_liveState.value != LiveState.ERROR) {
                                     _liveState.value = LiveState.IDLE
                                     _voiceStage.value = VoiceStage.IDLE
@@ -411,6 +476,8 @@ class MicService : Service() {
                     }
 
                     override fun onSetupComplete() {
+                        connectingWatchdogJob?.cancel()
+                        connectingWatchdogJob = null
                         Log.i(TAG, "MIRA_LIVE_VOICE: Setup complete received in MicService")
                         _liveState.value = LiveState.LISTENING
                         _voiceStage.value = VoiceStage.LISTENING
@@ -475,34 +542,25 @@ class MicService : Service() {
 
                     override fun onStalled() {
                         Log.w(TAG, "MIRA_LIVE_VOICE: Session stalled after user speech")
-                        val stallMsg = "Live voice: Server did not answer — tap to retry"
-                        _errorMessage.value = stallMsg
-                        _lastVoiceDiagnostic.value = stallMsg
-                        _liveState.value = LiveState.ERROR
-                        _voiceStage.value = VoiceStage.ERROR
-                        Toast.makeText(applicationContext, stallMsg, Toast.LENGTH_SHORT).show()
+                        handleTerminalError("Live voice: Server did not answer — tap to retry")
                     }
 
                     override fun onError(message: String) {
                         Log.e(TAG, "MIRA_LIVE_VOICE: Voice session error: $message")
-                        _errorMessage.value = message
-                        _lastVoiceDiagnostic.value = message
-                        _liveState.value = LiveState.ERROR
-                        _voiceStage.value = VoiceStage.ERROR
-                        _micAmplitude.value = 0f
-                        Toast.makeText(applicationContext, message, Toast.LENGTH_SHORT).show()
-
-                        audioRecorder?.stopRecording()
-                        audioRecorder = null
-                        audioPlayer?.stopImmediatelyAndFlush()
-                        // NO silent fallback (spec §3.3)
+                        handleTerminalError(message)
                     }
 
                     override fun onClosed(reason: String) {
+                        connectingWatchdogJob?.cancel()
+                        connectingWatchdogJob = null
                         Log.i(TAG, "MIRA_LIVE_VOICE: Voice session closed: $reason")
-                        audioRecorder?.stopRecording()
+                        try {
+                            audioRecorder?.stopRecording()
+                        } catch (_: Exception) {}
                         audioRecorder = null
-                        audioPlayer?.stopImmediatelyAndFlush()
+                        try {
+                            audioPlayer?.stopImmediatelyAndFlush()
+                        } catch (_: Exception) {}
                         _micAmplitude.value = 0f
                         if (_liveState.value != LiveState.ERROR) {
                             _liveState.value = LiveState.IDLE
@@ -719,6 +777,8 @@ class MicService : Service() {
     }
 
     private fun stopLiveVoiceSessionInternal() {
+        connectingWatchdogJob?.cancel()
+        connectingWatchdogJob = null
         serverVoiceSession?.stop()
         serverVoiceSession = null
         vad?.reset()

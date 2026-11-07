@@ -1,16 +1,7 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Accessibility
-import androidx.compose.material.icons.rounded.Apps
-import androidx.compose.material.icons.rounded.BatteryChargingFull
-import androidx.compose.material.icons.rounded.Folder
-import androidx.compose.material.icons.rounded.Layers
-import androidx.compose.material.icons.rounded.MarkChatUnread
-import androidx.compose.material.icons.rounded.Mic
-import androidx.compose.material.icons.rounded.Notifications
-import androidx.compose.material.icons.rounded.Visibility
-import androidx.compose.material.icons.rounded.VisibilityOff
+import androidx.annotation.DrawableRes
+import androidx.compose.ui.res.painterResource
 import android.Manifest
 import android.content.Context
 import android.content.Intent
@@ -311,7 +302,7 @@ fun SetupScreen(
                     trailingIcon = {
                         IconButton(onClick = { isKeyVisible = !isKeyVisible }) {
                             Icon(
-                                imageVector = if (isKeyVisible) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+                                painter = painterResource(id = if (isKeyVisible) R.drawable.ic_fluent_eye_off_24_regular else R.drawable.ic_fluent_eye_24_regular),
                                 contentDescription = "Toggle Visibility",
                                 tint = palette.textSecondary
                             )
@@ -467,7 +458,7 @@ fun SetupScreen(
                     PermissionRow(
                         title = "Microphone (Required)",
                         subtitle = "Required to speak to Mira in real-time",
-                        icon = Icons.Rounded.Mic,
+                        iconRes = R.drawable.ic_fluent_mic_24_regular,
                         isGranted = hasMicPermission,
                         isRequired = true,
                         onClick = {
@@ -481,7 +472,7 @@ fun SetupScreen(
                     PermissionRow(
                         title = "Battery: Unrestricted (Required)",
                         subtitle = "Prevents Android from killing Mira's voice in the background",
-                        icon = Icons.Rounded.BatteryChargingFull,
+                        iconRes = R.drawable.ic_fluent_flash_24_regular,
                         isGranted = isBatteryIgnoringOptimizations,
                         isRequired = true,
                         onClick = {
@@ -503,7 +494,7 @@ fun SetupScreen(
                     PermissionRow(
                         title = "File Management (Required)",
                         subtitle = "Mira needs file access to save websites, code and files you ask her to build",
-                        icon = Icons.Rounded.Folder,
+                        iconRes = R.drawable.ic_fluent_folder_open_24_regular,
                         isGranted = hasFileAccess,
                         isRequired = true,
                         onClick = {
@@ -525,7 +516,7 @@ fun SetupScreen(
                     PermissionRow(
                         title = "Notifications",
                         subtitle = "Display foreground session and background updates",
-                        icon = Icons.Rounded.Notifications,
+                        iconRes = R.drawable.ic_fluent_alert_24_regular,
                         isGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
                         } else true,
@@ -542,7 +533,7 @@ fun SetupScreen(
                     PermissionRow(
                         title = "Notification Access (WhatsApp)",
                         subtitle = "Allows reading WhatsApp messages for auto-reply",
-                        icon = Icons.Rounded.MarkChatUnread,
+                        iconRes = R.drawable.ic_fluent_chat_24_regular,
                         isGranted = false,
                         onClick = {
                             val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
@@ -556,7 +547,7 @@ fun SetupScreen(
                     PermissionRow(
                         title = "Accessibility Service (Macros)",
                         subtitle = "Allows Mira to operate the screen for WhatsApp and YouTube macros",
-                        icon = Icons.Rounded.Accessibility,
+                        iconRes = R.drawable.ic_fluent_person_24_regular,
                         isGranted = isAccessibilityEnabled,
                         onClick = {
                             val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
@@ -570,7 +561,7 @@ fun SetupScreen(
                     PermissionRow(
                         title = "Display Over Other Apps",
                         subtitle = "Allows floating orb over apps and home screen",
-                        icon = Icons.Rounded.Layers,
+                        iconRes = R.drawable.ic_fluent_options_24_regular,
                         isGranted = Settings.canDrawOverlays(context),
                         onClick = {
                             val intent = Intent(
@@ -587,7 +578,7 @@ fun SetupScreen(
                     PermissionRow(
                         title = "Standard Integrations",
                         subtitle = "Camera, Contacts, Phone calls, SMS, Location",
-                        icon = Icons.Rounded.Apps,
+                        iconRes = R.drawable.ic_fluent_settings_24_regular,
                         isGranted = false,
                         onClick = {
                             val perms = mutableListOf(
@@ -649,7 +640,7 @@ fun SetupScreen(
 fun PermissionRow(
     title: String,
     subtitle: String,
-    icon: ImageVector,
+    @DrawableRes iconRes: Int,
     isGranted: Boolean,
     isRequired: Boolean = false,
     onClick: () -> Unit
@@ -673,7 +664,7 @@ fun PermissionRow(
                 .background(if (isGranted) Color(0xFF10B981).copy(alpha = 0.15f) else palette.surfaceVariant)
         ) {
             Icon(
-                imageVector = icon,
+                painter = painterResource(id = iconRes),
                 contentDescription = null,
                 tint = if (isGranted) Color(0xFF10B981) else palette.textPrimary,
                 modifier = Modifier.size(20.dp)

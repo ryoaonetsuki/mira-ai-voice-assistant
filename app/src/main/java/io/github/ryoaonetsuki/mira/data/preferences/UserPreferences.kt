@@ -130,6 +130,10 @@ class UserPreferences(private val context: Context) {
         it[KEY_VOICE_ROUTING] ?: "RELAY"
     }
 
+    val lastConversationIdFlow: Flow<String?> = context.dataStore.data.catch { emitDefaults(it) }.map {
+        it[KEY_LAST_CONVERSATION_ID]
+    }
+
     private suspend fun emitDefaults(throwable: Throwable) {
         if (throwable !is IOException) throw throwable
     }
@@ -163,6 +167,13 @@ class UserPreferences(private val context: Context) {
     suspend fun setWebSearchEnabled(enabled: Boolean) = context.dataStore.edit { it[KEY_WEB_SEARCH_ENABLED] = enabled }
     suspend fun setDeepThinkingEnabled(enabled: Boolean) = context.dataStore.edit { it[KEY_DEEP_THINKING_ENABLED] = enabled }
     suspend fun setVoiceRouting(routing: String) = context.dataStore.edit { it[KEY_VOICE_ROUTING] = routing }
+    suspend fun setLastConversationId(id: String?) = context.dataStore.edit {
+        if (id == null) {
+            it.remove(KEY_LAST_CONVERSATION_ID)
+        } else {
+            it[KEY_LAST_CONVERSATION_ID] = id
+        }
+    }
 
     companion object {
         private val KEY_USER_NAME = stringPreferencesKey("user_name")
@@ -194,5 +205,6 @@ class UserPreferences(private val context: Context) {
         private val KEY_WEB_SEARCH_ENABLED = booleanPreferencesKey("web_search_enabled")
         private val KEY_DEEP_THINKING_ENABLED = booleanPreferencesKey("deep_thinking_enabled")
         private val KEY_VOICE_ROUTING = stringPreferencesKey("voice_routing")
+        private val KEY_LAST_CONVERSATION_ID = stringPreferencesKey("last_conversation_id")
     }
 }

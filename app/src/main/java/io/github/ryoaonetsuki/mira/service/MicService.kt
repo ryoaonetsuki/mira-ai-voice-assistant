@@ -96,6 +96,7 @@ class MicService : Service() {
         _micAmplitude.value = 0f
         LiveVoiceDiagnostics.updateLastError(message)
         LiveVoiceDiagnostics.updateStage("ERROR")
+        dismissNotification()
 
         try {
             audioRecorder?.stopRecording()
@@ -158,6 +159,16 @@ class MicService : Service() {
         super.onCreate()
         resumptionStore = SessionResumptionStore(applicationContext)
         createNotificationChannel()
+
+        serviceScope.launch {
+            _liveState.collect { state ->
+                if (state != LiveState.IDLE && state != LiveState.ERROR) {
+                    updateNotification()
+                } else {
+                    dismissNotification()
+                }
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -169,33 +180,83 @@ class MicService : Service() {
             }
             ACTION_STOP -> {
                 stopLiveVoiceSession()
+                dismissNotification()
                 stopSelf()
+            }
+            ACTION_TOGGLE_MUTE -> {
+                toggleMute()
             }
         }
         return START_NOT_STICKY
     }
 
-    private fun startForegroundWithNotification() {
+    private fun toggleMute() {
+        val next = !_isMuted.value
+        _isMuted.value = next
+        Log.i(TAG, "MIRA_LIVE_VOICE: Mic mute toggled to $next")
+        updateNotification()
+    }
+
+    fun dismissNotification() {
+        try {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } catch (_: Exception) {}
+        val manager = getSystemService(NotificationManager::class.java)
+        manager?.cancel(NOTIFICATION_ID)
+        _isMuted.value = false
+    }
+
+    fun buildCallNotification(): Notification {
         val stopIntent = Intent(this, MicService::class.java).apply { action = ACTION_STOP }
         val stopPendingIntent = PendingIntent.getService(
-            this, 0, stopIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            this, 1, stopIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val openAppIntent = Intent(this, MainActivity::class.java)
+        val muteIntent = Intent(this, MicService::class.java).apply { action = ACTION_TOGGLE_MUTE }
+        val mutePendingIntent = PendingIntent.getService(
+            this, 2, muteIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val openAppIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
         val openAppPendingIntent = PendingIntent.getActivity(
             this, 0, openAppIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Mira AI is listening")
-            .setContentText("Native Gemini Live voice assistant active")
+        val isMutedState = _isMuted.value
+        val muteActionTitle = if (isMutedState) "Unmute" else "Mute"
+        val muteIcon = if (isMutedState) android.R.drawable.ic_lock_silent_mode_off else android.R.drawable.ic_lock_silent_mode
+
+        val statusText = when {
+            isMutedState -> "Microphone muted • Tap Unmute to speak"
+            _liveState.value == LiveState.CONNECTING -> "Connecting to Mira Live..."
+            _liveState.value == LiveState.SPEAKING -> "Mira is speaking..."
+            _liveState.value == LiveState.LISTENING -> "Listening • Mira Live call active"
+            else -> "Live voice call active"
+        }
+
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("Mira AI Voice Call")
+            .setContentText(statusText)
             .setSmallIcon(R.drawable.logo_chosen)
             .setContentIntent(openAppPendingIntent)
-            .addAction(android.R.drawable.ic_media_pause, "Stop", stopPendingIntent)
+            .addAction(muteIcon, muteActionTitle, mutePendingIntent)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "End", stopPendingIntent)
             .setOngoing(true)
+            .setCategory(NotificationCompat.CATEGORY_CALL)
             .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .build()
+    }
 
+    fun updateNotification() {
+        val manager = getSystemService(NotificationManager::class.java)
+        manager?.notify(NOTIFICATION_ID, buildCallNotification())
+    }
+
+    private fun startForegroundWithNotification() {
+        val notification = buildCallNotification()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
                 NOTIFICATION_ID,
@@ -375,12 +436,14 @@ class MicService : Service() {
             // Audio Recorder initialization (continuous frame streaming including silence, spec §0.5, §3.2)
             val recorder = AudioRecorder(
                 onAudioChunk = { chunk ->
-                    vadInstance.processFrame(chunk)
-                    liveClient?.sendAudioChunk(chunk)
-                    _audioChunksSent.value = liveClient?.audioChunksSent ?: 0L
+                    if (!_isMuted.value) {
+                        vadInstance.processFrame(chunk)
+                        liveClient?.sendAudioChunk(chunk)
+                        _audioChunksSent.value = liveClient?.audioChunksSent ?: 0L
+                    }
                 },
                 onAmplitude = { amp ->
-                    if (_liveState.value == LiveState.LISTENING || _liveState.value == LiveState.SPEAKING) {
+                    if (!_isMuted.value && (_liveState.value == LiveState.LISTENING || _liveState.value == LiveState.SPEAKING)) {
                         _micAmplitude.value = amp
                     } else {
                         _micAmplitude.value = 0f
@@ -416,6 +479,8 @@ class MicService : Service() {
             }
 
             val storedHandle = resumptionStore.getHandle()
+            val voiceRouting = userPrefs.voiceRoutingFlow.first()
+            val useRelay = (voiceRouting != "DIRECT")
 
             // Initialize single-path Gemini Live Client (spec §3.1)
             liveClient = GeminiLiveClient(
@@ -425,6 +490,7 @@ class MicService : Service() {
                 model = GeminiLiveClient.LIVE_MODEL_DEFAULT,
                 language = language,
                 storedResumptionHandle = storedHandle,
+                useRelay = useRelay,
                 listener = object : GeminiLiveClient.LiveEventsListener {
                     override fun onStateChanged(state: LiveClientState) {
                         when (state) {
@@ -562,6 +628,7 @@ class MicService : Service() {
                             audioPlayer?.stopImmediatelyAndFlush()
                         } catch (_: Exception) {}
                         _micAmplitude.value = 0f
+                        dismissNotification()
                         if (_liveState.value != LiveState.ERROR) {
                             _liveState.value = LiveState.IDLE
                             _voiceStage.value = VoiceStage.IDLE
@@ -824,6 +891,7 @@ class MicService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         stopLiveVoiceSession()
+        dismissNotification()
         serviceScope.cancel()
     }
 
@@ -834,6 +902,10 @@ class MicService : Service() {
 
         const val ACTION_START = "io.github.ryoaonetsuki.mira.action.START_VOICE"
         const val ACTION_STOP = "io.github.ryoaonetsuki.mira.action.STOP_VOICE"
+        const val ACTION_TOGGLE_MUTE = "io.github.ryoaonetsuki.mira.action.TOGGLE_MUTE"
+
+        private val _isMuted = MutableStateFlow(false)
+        val isMuted: StateFlow<Boolean> = _isMuted.asStateFlow()
 
         private val _liveState = MutableStateFlow(LiveState.IDLE)
         val liveState: StateFlow<LiveState> = _liveState.asStateFlow()

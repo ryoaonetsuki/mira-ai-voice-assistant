@@ -230,7 +230,8 @@ class LiveDiagnosticRunnerTest {
             model = "models/gemini-3.8-live"
         )
         val noToolsSetup = noToolsPayload.getJSONObject("setup")
-        assertFalse("No Tools variant must not have tools", noToolsSetup.has("tools"))
+        assertTrue("No Tools variant must send an explicit empty tools array", noToolsSetup.has("tools"))
+        assertEquals(0, noToolsSetup.getJSONArray("tools").length())
     }
 
     @Test

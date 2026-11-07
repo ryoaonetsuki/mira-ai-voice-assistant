@@ -60,6 +60,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -122,6 +123,36 @@ data class ViewingCode(
     val content: String
 )
 
+const val CHAT_INPUT_MAX_LINES: Int = 5
+val CHAT_INPUT_MAX_HEIGHT = 120.dp
+const val CHAT_INPUT_LINE_HEIGHT_SP: Float = 20f
+val CHAT_INPUT_VERTICAL_PADDING = 8.dp
+
+object ChatInputLayoutPolicy {
+    const val MAX_LINES: Int = CHAT_INPUT_MAX_LINES
+    val MAX_HEIGHT = CHAT_INPUT_MAX_HEIGHT
+    const val LINE_HEIGHT_SP: Float = CHAT_INPUT_LINE_HEIGHT_SP
+    val VERTICAL_PADDING = CHAT_INPUT_VERTICAL_PADDING
+
+    fun calculateInputHeightDp(lineCount: Int, fontScale: Float = 1.0f): Float {
+        val safeLines = lineCount.coerceAtLeast(1)
+        val visibleLines = safeLines.coerceAtMost(MAX_LINES)
+        val textHeightDp = visibleLines * LINE_HEIGHT_SP * fontScale
+        val totalHeightDp = textHeightDp + VERTICAL_PADDING.value
+        return totalHeightDp.coerceAtMost(MAX_HEIGHT.value)
+    }
+
+    fun estimateLineCount(text: String, charsPerLine: Int = 35): Int {
+        if (text.isEmpty()) return 1
+        var lines = 0
+        for (paragraph in text.split('\n')) {
+            val wrapLines = (paragraph.length / charsPerLine).coerceAtLeast(1)
+            lines += wrapLines
+        }
+        return lines.coerceAtLeast(1)
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
@@ -161,7 +192,11 @@ fun ChatScreen(
     var isSending by remember { mutableStateOf(false) }
     var streamingMessageText by remember { mutableStateOf<String?>(null) }
     var isBuildingFileNow by remember { mutableStateOf(false) }
-    var showConversationHistory by remember { mutableStateOf(false) }
+    val historyDrawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    var historySearchQuery by remember { mutableStateOf("") }
+    var conversationToRename by remember { mutableStateOf<ConversationEntity?>(null) }
+    var renameText by remember { mutableStateOf("") }
+    var conversationToDelete by remember { mutableStateOf<ConversationEntity?>(null) }
     var viewingCode by remember { mutableStateOf<ViewingCode?>(null) }
     var previewingHtml by remember { mutableStateOf<String?>(null) }
 
@@ -778,6 +813,7 @@ fun ChatScreen(
 
                     withTimeout(180_000L) {
                         try {
+                            var lastUiUpdate = 0L
                             restClient.generateChatResponseStreaming(
                                 apiKey = apiKey,
                                 history = allMsgs,
@@ -790,9 +826,11 @@ fun ChatScreen(
                                     capturedSources = sources
                                 },
                                 onThoughtChunk = { thoughtChunk ->
-                                    isThinking = true
-                                    val current = streamingThinkingText ?: ""
-                                    streamingThinkingText = current + thoughtChunk
+                                    MiraAppScope.scope.launch {
+                                        isThinking = true
+                                        val current = streamingThinkingText ?: ""
+                                        streamingThinkingText = current + thoughtChunk
+                                    }
                                 }
                             ).collect { chunk ->
                                 if (isThinking) {
@@ -804,6 +842,36 @@ fun ChatScreen(
                                     streamingMessageText = ""
                                 }
                                 accumulated.append(chunk)
+                                val now = android.os.SystemClock.uptimeMillis()
+                                if (now - lastUiUpdate >= 35L) {
+                                    lastUiUpdate = now
+                                    val fullText = accumulated.toString()
+                                    if (isProjectOrDownload) {
+                                        val (displayOverview, isBuilding) = WebsiteProjectManager.extractStreamingDisplay(fullText, isBangla)
+                                        isBuildingFileNow = isBuilding
+                                        streamingMessageText = if (isBuilding && displayOverview.isBlank()) {
+                                            if (isBangla) "আপনার ফাইল তৈরি করা হচ্ছে..." else "Creating your file..."
+                                        } else {
+                                            displayOverview
+                                        }
+                                    } else {
+                                        if (fullText.contains("<think>") && !fullText.contains("</think>")) {
+                                            val thinkPart = fullText.substringAfter("<think>")
+                                            streamingThinkingText = thinkPart
+                                            isThinking = true
+                                        } else if (fullText.contains("</think>")) {
+                                            val thinkPart = fullText.substringAfter("<think>").substringBefore("</think>")
+                                            val answerPart = fullText.substringAfter("</think>").trimStart()
+                                            streamingThinkingText = thinkPart
+                                            isThinking = false
+                                            streamingMessageText = answerPart
+                                        } else {
+                                            streamingMessageText = fullText
+                                        }
+                                    }
+                                }
+                            }
+                            if (accumulated.isNotEmpty()) {
                                 val fullText = accumulated.toString()
                                 if (isProjectOrDownload) {
                                     val (displayOverview, isBuilding) = WebsiteProjectManager.extractStreamingDisplay(fullText, isBangla)
@@ -967,94 +1035,332 @@ fun ChatScreen(
 
     val listState = rememberLazyListState()
 
-    // Safe frame-aligned auto-scrolling: only scrolls to a valid index, never messages.size out of bounds!
+    // Safe frame-aligned auto-scrolling: yields to allow composition/measurement pass,
+    // verifies layoutInfo bounds, and guards with try-catch so it NEVER crashes the UI.
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) {
-            val targetIdx = (messages.size - 1).coerceAtLeast(0)
-            listState.animateScrollToItem(targetIdx)
+            try {
+                kotlinx.coroutines.yield()
+                val totalCount = listState.layoutInfo.totalItemsCount
+                if (totalCount > 0) {
+                    val safeIdx = (totalCount - 1).coerceIn(0, totalCount - 1)
+                    listState.animateScrollToItem(safeIdx)
+                }
+            } catch (_: Throwable) {
+                // Ignore scroll cancellation or measurement race conditions
+            }
         }
     }
 
-    LaunchedEffect(streamingMessageText != null, isBuildingFileNow, generatingImagePrompt != null) {
-        val extraItems = (if (generatingImagePrompt != null) 1 else 0) +
-                         (if (streamingMessageText != null || (isSending && generatingImagePrompt == null)) 1 else 0)
-        val totalCount = messages.size + extraItems
-        if (totalCount > 0) {
-            val targetIdx = (totalCount - 1).coerceAtLeast(0)
-            listState.scrollToItem(targetIdx)
+    LaunchedEffect(streamingMessageText != null, isBuildingFileNow, generatingImagePrompt != null, isSending) {
+        try {
+            kotlinx.coroutines.yield()
+            val totalCount = listState.layoutInfo.totalItemsCount
+            if (totalCount > 0) {
+                val safeIdx = (totalCount - 1).coerceIn(0, totalCount - 1)
+                listState.scrollToItem(safeIdx)
+            }
+        } catch (_: Throwable) {
+            // Ignore scroll cancellation or measurement race conditions
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    val currentConv = conversations.firstOrNull { it.id == currentConversationId }
-                    val displayTitle = currentConv?.title ?: "Mira AI"
-                    Text(
-                        text = displayTitle,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = palette.textPrimary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = {
-                        if (onOpenDrawer != null) {
-                            onOpenDrawer()
-                        } else {
-                            onBack()
+    ModalNavigationDrawer(
+        drawerState = historyDrawerState,
+        gesturesEnabled = true,
+        drawerContent = {
+            ModalDrawerSheet(
+                drawerContainerColor = palette.background,
+                drawerContentColor = palette.textPrimary,
+                modifier = Modifier.width(310.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 14.dp, vertical = 12.dp)
+                ) {
+                    // Drawer Header
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Chats",
+                            modifier = Modifier.weight(1f),
+                            fontSize = 19.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = palette.textPrimary
+                        )
+                        IconButton(
+                            onClick = {
+                                val newId = UUID.randomUUID().toString()
+                                MiraAppScope.scope.launch {
+                                    withContext(Dispatchers.IO) {
+                                        db.chatDao().insertConversation(
+                                            ConversationEntity(id = newId, title = "New Chat")
+                                        )
+                                    }
+                                    currentConversationId = newId
+                                    userPrefs.setLastConversationId(newId)
+                                    historyDrawerState.close()
+                                }
+                            },
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_fluent_chat_add_24_regular),
+                                contentDescription = "New chat",
+                                tint = palette.textPrimary,
+                                modifier = Modifier.size(20.dp)
+                            )
                         }
-                    }) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_fluent_navigation_24_regular),
-                            contentDescription = "Menu",
-                            tint = palette.textPrimary
-                        )
                     }
-                },
-                actions = {
-                    // Dedicated "Your chats" history button (OWNER ERROR #2 fix)
-                    IconButton(onClick = { showConversationHistory = true }) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_fluent_task_list_square_ltr_24_regular),
-                            contentDescription = "Chat history",
-                            tint = palette.textPrimary
-                        )
-                    }
-                    IconButton(onClick = {
-                        val newId = UUID.randomUUID().toString()
-                        MiraAppScope.scope.launch {
-                            withContext(Dispatchers.IO) {
-                                db.chatDao().insertConversation(
-                                    ConversationEntity(id = newId, title = "New Chat")
-                                )
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    // Search field
+                    OutlinedTextField(
+                        value = historySearchQuery,
+                        onValueChange = { historySearchQuery = it },
+                        placeholder = { Text("Search chats...", color = palette.textSecondary, fontSize = 13.sp) },
+                        leadingIcon = {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_fluent_search_24_regular),
+                                contentDescription = null,
+                                tint = palette.textSecondary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        },
+                        trailingIcon = {
+                            if (historySearchQuery.isNotBlank()) {
+                                IconButton(onClick = { historySearchQuery = "" }) {
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_fluent_dismiss_24_regular),
+                                        contentDescription = "Clear",
+                                        tint = palette.textSecondary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
                             }
-                            currentConversationId = newId
-                            userPrefs.setLastConversationId(newId)
-                        }
-                    }) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_fluent_chat_add_24_regular),
-                            contentDescription = "New chat",
-                            tint = palette.textPrimary
+                        },
+                        singleLine = true,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = palette.textPrimary,
+                            unfocusedTextColor = palette.textPrimary,
+                            focusedBorderColor = palette.primary,
+                            unfocusedBorderColor = palette.surfaceVariant,
+                            focusedContainerColor = palette.surfaceVariant.copy(alpha = 0.4f),
+                            unfocusedContainerColor = palette.surfaceVariant.copy(alpha = 0.4f)
                         )
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    val filteredConversations = remember(conversations, historySearchQuery) {
+                        if (historySearchQuery.isBlank()) conversations
+                        else conversations.filter { it.title.contains(historySearchQuery, ignoreCase = true) }
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
-            )
-        },
-        containerColor = palette.background
-    ) { padding ->
+
+                    val grouped = remember(filteredConversations) {
+                        groupConversationsByDate(filteredConversations)
+                    }
+
+                    if (grouped.isEmpty()) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth()
+                        ) {
+                            Text(
+                                text = if (historySearchQuery.isBlank()) "No chats yet." else "No matching chats found.",
+                                color = palette.textSecondary,
+                                fontSize = 13.5.sp
+                            )
+                        }
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            grouped.forEach { (sectionHeader, convList) ->
+                                item(key = "header_$sectionHeader") {
+                                    Text(
+                                        text = sectionHeader,
+                                        fontSize = 11.5.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = palette.primary,
+                                        modifier = Modifier.padding(top = 10.dp, bottom = 4.dp, start = 6.dp)
+                                    )
+                                }
+                                items(convList, key = { it.id }) { conversation ->
+                                    var menuExpanded by remember { mutableStateOf(false) }
+                                    val isActive = conversation.id == currentConversationId
+
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(
+                                                if (isActive) palette.primary.copy(alpha = 0.14f)
+                                                else Color.Transparent
+                                            )
+                                            .clickable {
+                                                currentConversationId = conversation.id
+                                                inputScope.launch {
+                                                    userPrefs.setLastConversationId(conversation.id)
+                                                    historyDrawerState.close()
+                                                }
+                                            }
+                                            .padding(start = 10.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = conversation.title,
+                                            modifier = Modifier.weight(1f),
+                                            color = if (isActive) palette.primary else palette.textPrimary,
+                                            fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
+                                            fontSize = 13.5.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+
+                                        Box {
+                                            IconButton(
+                                                onClick = { menuExpanded = true },
+                                                modifier = Modifier.size(28.dp)
+                                            ) {
+                                                Icon(
+                                                    painter = painterResource(R.drawable.ic_fluent_more_horizontal_24_regular),
+                                                    contentDescription = "Options",
+                                                    tint = if (isActive) palette.primary else palette.textSecondary,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                            DropdownMenu(
+                                                expanded = menuExpanded,
+                                                onDismissRequest = { menuExpanded = false }
+                                            ) {
+                                                DropdownMenuItem(
+                                                    text = { Text("Rename") },
+                                                    leadingIcon = {
+                                                        Icon(
+                                                            painter = painterResource(R.drawable.ic_fluent_edit_24_regular),
+                                                            contentDescription = null,
+                                                            modifier = Modifier.size(18.dp)
+                                                        )
+                                                    },
+                                                    onClick = {
+                                                        menuExpanded = false
+                                                        conversationToRename = conversation
+                                                        renameText = conversation.title
+                                                        inputScope.launch { historyDrawerState.close() }
+                                                    }
+                                                )
+                                                DropdownMenuItem(
+                                                    text = { Text("Delete", color = Color(0xFFEF4444)) },
+                                                    leadingIcon = {
+                                                        Icon(
+                                                            painter = painterResource(R.drawable.ic_fluent_delete_24_regular),
+                                                            contentDescription = null,
+                                                            tint = Color(0xFFEF4444),
+                                                            modifier = Modifier.size(18.dp)
+                                                        )
+                                                    },
+                                                    onClick = {
+                                                        menuExpanded = false
+                                                        conversationToDelete = conversation
+                                                        inputScope.launch { historyDrawerState.close() }
+                                                    }
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    ) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = {
+                        val currentConv = conversations.firstOrNull { it.id == currentConversationId }
+                        val displayTitle = currentConv?.title ?: "Mira AI"
+                        Text(
+                            text = displayTitle,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = palette.textPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    },
+                    navigationIcon = {
+                        IconButton(
+                            onClick = {
+                                inputScope.launch {
+                                    if (historyDrawerState.isClosed) historyDrawerState.open() else historyDrawerState.close()
+                                }
+                            },
+                            modifier = Modifier.padding(start = 4.dp)
+                        ) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_fluent_navigation_24_regular),
+                                contentDescription = "Chat history",
+                                tint = palette.textPrimary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                    },
+                    actions = {
+                        IconButton(
+                            onClick = {
+                                val newId = UUID.randomUUID().toString()
+                                MiraAppScope.scope.launch {
+                                    withContext(Dispatchers.IO) {
+                                        db.chatDao().insertConversation(
+                                            ConversationEntity(id = newId, title = "New Chat")
+                                        )
+                                    }
+                                    currentConversationId = newId
+                                    userPrefs.setLastConversationId(newId)
+                                }
+                            },
+                            modifier = Modifier.padding(end = 4.dp)
+                        ) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_fluent_chat_add_24_regular),
+                                contentDescription = "New chat",
+                                tint = palette.textPrimary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
+                )
+            },
+            containerColor = palette.background
+        ) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
         ) {
             // Empty state or messages list
-            if (messages.isEmpty() && streamingMessageText == null && generatingImagePrompt == null) {
+            val isChatEmpty = messages.isEmpty() && streamingMessageText == null && generatingImagePrompt == null && !isSending
+            if (isChatEmpty) {
                 Box(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
@@ -1089,7 +1395,11 @@ fun ChatScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                     contentPadding = PaddingValues(vertical = 10.dp)
                 ) {
-                    items(messages) { msg ->
+                    items(
+                        items = messages,
+                        key = { it.id },
+                        contentType = { it.role }
+                    ) { msg ->
                         val isUser = msg.role == "user"
                         val isError = msg.role == "error"
 
@@ -1343,7 +1653,7 @@ fun ChatScreen(
 
                     // Progressive streaming response - Free flowing on canvas, NO Box wrapper
                     if (streamingMessageText != null || (isThinking && !streamingThinkingText.isNullOrBlank())) {
-                        item {
+                        item(key = "streaming_response", contentType = "streaming") {
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -1397,7 +1707,7 @@ fun ChatScreen(
                         }
                     } else if (isSending && generatingImagePrompt == null) {
                         // 3-dot typing indicator
-                        item {
+                        item(key = "typing_dots", contentType = "typing") {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -1559,6 +1869,7 @@ fun ChatScreen(
                             BasicTextField(
                                 value = inputMessage,
                                 onValueChange = { inputMessage = it },
+                                maxLines = CHAT_INPUT_MAX_LINES,
                                 textStyle = TextStyle(
                                     color = palette.textPrimary,
                                     fontSize = 15.sp,
@@ -1566,6 +1877,7 @@ fun ChatScreen(
                                 ),
                                 modifier = Modifier
                                     .fillMaxWidth()
+                                    .heightIn(max = CHAT_INPUT_MAX_HEIGHT)
                                     .padding(horizontal = 4.dp, vertical = 4.dp),
                                 decorationBox = { innerTextField ->
                                     if (inputMessage.isEmpty()) {
@@ -1768,326 +2080,107 @@ fun ChatScreen(
                 }
             }
         }
+    }
 
-        // History Drawer
-        if (showConversationHistory) {
-            var historySearchQuery by remember { mutableStateOf("") }
-            var conversationToRename by remember { mutableStateOf<ConversationEntity?>(null) }
-            var renameText by remember { mutableStateOf("") }
-            var conversationToDelete by remember { mutableStateOf<ConversationEntity?>(null) }
-
-            Dialog(
-                onDismissRequest = { showConversationHistory = false },
-                properties = DialogProperties(
-                    usePlatformDefaultWidth = false,
-                    decorFitsSystemWindows = false
+    // Rename dialog
+    if (conversationToRename != null) {
+        AlertDialog(
+            onDismissRequest = { conversationToRename = null },
+            title = { Text("Rename Chat") },
+            text = {
+                OutlinedTextField(
+                    value = renameText,
+                    onValueChange = { renameText = it },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
                 )
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.55f))
-                        .clickable { showConversationHistory = false },
-                    horizontalArrangement = Arrangement.Start
-                ) {
-                    Surface(
-                        modifier = Modifier
-                            .fillMaxHeight()
-                            .fillMaxWidth(0.85f)
-                            .clickable(enabled = false) {},
-                        color = palette.surface,
-                        shape = RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp)
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .statusBarsPadding()
-                                .navigationBarsPadding()
-                                .padding(16.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = "Your chats",
-                                    modifier = Modifier.weight(1f),
-                                    fontSize = 20.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = palette.textPrimary
-                                )
-                                IconButton(onClick = { showConversationHistory = false }) {
-                                    Icon(
-                                        painter = painterResource(R.drawable.ic_fluent_dismiss_24_regular),
-                                        contentDescription = "Close history",
-                                        tint = palette.textSecondary
-                                    )
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(10.dp))
-
-                            OutlinedTextField(
-                                value = historySearchQuery,
-                                onValueChange = { historySearchQuery = it },
-                                placeholder = { Text("Search chat content...", color = palette.textSecondary, fontSize = 13.sp) },
-                                leadingIcon = {
-                                    Icon(
-                                        painter = painterResource(R.drawable.ic_fluent_search_24_regular),
-                                        contentDescription = null,
-                                        tint = palette.textSecondary,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                },
-                                trailingIcon = {
-                                    if (historySearchQuery.isNotBlank()) {
-                                        IconButton(onClick = { historySearchQuery = "" }) {
-                                            Icon(
-                                                painter = painterResource(R.drawable.ic_fluent_dismiss_24_regular),
-                                                contentDescription = "Clear",
-                                                tint = palette.textSecondary,
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                        }
-                                    }
-                                },
-                                singleLine = true,
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedTextColor = palette.textPrimary,
-                                    unfocusedTextColor = palette.textPrimary,
-                                    focusedBorderColor = palette.primary,
-                                    unfocusedBorderColor = palette.surfaceVariant,
-                                    focusedContainerColor = palette.surfaceVariant.copy(alpha = 0.4f),
-                                    unfocusedContainerColor = palette.surfaceVariant.copy(alpha = 0.4f)
-                                )
-                            )
-
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            val filteredConversations = remember(conversations, historySearchQuery) {
-                                if (historySearchQuery.isBlank()) conversations
-                                else conversations.filter { it.title.contains(historySearchQuery, ignoreCase = true) }
-                            }
-
-                            val grouped = remember(filteredConversations) {
-                                groupConversationsByDate(filteredConversations)
-                            }
-
-                            if (grouped.isEmpty()) {
-                                Box(
-                                    contentAlignment = Alignment.Center,
-                                    modifier = Modifier.weight(1f).fillMaxWidth()
-                                ) {
-                                    Text(
-                                        text = if (historySearchQuery.isBlank()) "No chats yet." else "No matching chats found.",
-                                        color = palette.textSecondary,
-                                        fontSize = 14.sp
-                                    )
-                                }
-                            } else {
-                                LazyColumn(
-                                    modifier = Modifier.weight(1f),
-                                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                                ) {
-                                    grouped.forEach { (sectionHeader, convList) ->
-                                        item(key = "header_$sectionHeader") {
-                                            Text(
-                                                text = sectionHeader,
-                                                fontSize = 11.5.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                color = palette.primary,
-                                                modifier = Modifier.padding(top = 10.dp, bottom = 4.dp, start = 4.dp)
-                                            )
-                                        }
-                                        items(convList, key = { it.id }) { conversation ->
-                                            var menuExpanded by remember { mutableStateOf(false) }
-                                            val isActive = conversation.id == currentConversationId
-
-                                            Row(
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .clip(RoundedCornerShape(12.dp))
-                                                    .background(if (isActive) palette.primary.copy(alpha = 0.15f) else Color.Transparent)
-                                                    .clickable {
-                                                        currentConversationId = conversation.id
-                                                        inputScope.launch {
-                                                            userPrefs.setLastConversationId(conversation.id)
-                                                        }
-                                                        showConversationHistory = false
-                                                    }
-                                                    .padding(start = 12.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                Text(
-                                                    text = conversation.title,
-                                                    modifier = Modifier.weight(1f),
-                                                    color = if (isActive) palette.primary else palette.textPrimary,
-                                                    fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
-                                                    fontSize = 13.5.sp,
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis
-                                                )
-
-                                                Box {
-                                                    IconButton(
-                                                        onClick = { menuExpanded = true },
-                                                        modifier = Modifier.size(28.dp)
-                                                    ) {
-                                                        Icon(
-                                                            painter = painterResource(R.drawable.ic_fluent_more_horizontal_24_regular),
-                                                            contentDescription = "Options",
-                                                            tint = palette.textSecondary,
-                                                            modifier = Modifier.size(16.dp)
-                                                        )
-                                                    }
-                                                    DropdownMenu(
-                                                        expanded = menuExpanded,
-                                                        onDismissRequest = { menuExpanded = false }
-                                                    ) {
-                                                        DropdownMenuItem(
-                                                            text = { Text("Rename") },
-                                                            leadingIcon = {
-                                                                Icon(
-                                                                    painter = painterResource(R.drawable.ic_fluent_edit_24_regular),
-                                                                    contentDescription = null,
-                                                                    modifier = Modifier.size(18.dp)
-                                                                )
-                                                            },
-                                                            onClick = {
-                                                                menuExpanded = false
-                                                                conversationToRename = conversation
-                                                                renameText = conversation.title
-                                                            }
-                                                        )
-                                                        DropdownMenuItem(
-                                                            text = { Text("Delete", color = Color(0xFFEF4444)) },
-                                                            leadingIcon = {
-                                                                Icon(
-                                                                    painter = painterResource(R.drawable.ic_fluent_delete_24_regular),
-                                                                    contentDescription = null,
-                                                                    tint = Color(0xFFEF4444),
-                                                                    modifier = Modifier.size(18.dp)
-                                                                )
-                                                            },
-                                                            onClick = {
-                                                                menuExpanded = false
-                                                                conversationToDelete = conversation
-                                                            }
-                                                        )
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val target = conversationToRename ?: return@TextButton
+                        val newT = renameText.trim()
+                        if (newT.isNotBlank()) {
+                            MiraAppScope.scope.launch {
+                                db.chatDao().updateConversation(target.copy(title = newT, updatedAt = System.currentTimeMillis()))
+                                val mem = db.memoryDao().getMemoryByConversationId(target.id)
+                                if (mem != null) {
+                                    val lines = mem.content.lines()
+                                    val snippet = if (lines.size > 1) lines.drop(1).joinToString("\n") else ""
+                                    db.memoryDao().updateMemory(mem.copy(content = "$newT\n$snippet"))
                                 }
                             }
                         }
+                        conversationToRename = null
                     }
+                ) {
+                    Text("Save", color = palette.primary)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { conversationToRename = null }) {
+                    Text("Cancel")
                 }
             }
+        )
+    }
 
-            // Rename dialog
-            if (conversationToRename != null) {
-                AlertDialog(
-                    onDismissRequest = { conversationToRename = null },
-                    title = { Text("Rename Chat") },
-                    text = {
-                        OutlinedTextField(
-                            value = renameText,
-                            onValueChange = { renameText = it },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    },
-                    confirmButton = {
-                        TextButton(
-                            onClick = {
-                                val target = conversationToRename ?: return@TextButton
-                                val newT = renameText.trim()
-                                if (newT.isNotBlank()) {
-                                    MiraAppScope.scope.launch {
-                                        db.chatDao().updateConversation(target.copy(title = newT, updatedAt = System.currentTimeMillis()))
-                                        val mem = db.memoryDao().getMemoryByConversationId(target.id)
-                                        if (mem != null) {
-                                            val lines = mem.content.lines()
-                                            val snippet = if (lines.size > 1) lines.drop(1).joinToString("\n") else ""
-                                            db.memoryDao().updateMemory(mem.copy(content = "$newT\n$snippet"))
-                                        }
-                                    }
-                                }
-                                conversationToRename = null
-                            }
-                        ) {
-                            Text("Save", color = palette.primary)
-                        }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = { conversationToRename = null }) {
-                            Text("Cancel")
-                        }
-                    }
-                )
-            }
-
-            // Delete confirm dialog
-            if (conversationToDelete != null) {
-                AlertDialog(
-                    onDismissRequest = { conversationToDelete = null },
-                    title = { Text("Delete Conversation?") },
-                    text = { Text("This will permanently delete “${conversationToDelete!!.title}” and its messages.") },
-                    confirmButton = {
-                        TextButton(
-                            onClick = {
-                                val target = conversationToDelete ?: return@TextButton
-                                conversationToDelete = null
-                                MiraAppScope.scope.launch {
-                                    db.chatDao().deleteMessagesForConversation(target.id)
-                                    db.chatDao().deleteConversation(target.id)
-                                    db.memoryDao().deleteMemoryByConversationId(target.id)
-                                    if (currentConversationId == target.id) {
-                                        val replacement = conversations.firstOrNull { it.id != target.id }
-                                        if (replacement != null) {
-                                            currentConversationId = replacement.id
-                                            userPrefs.setLastConversationId(replacement.id)
-                                        } else {
-                                            val newId = UUID.randomUUID().toString()
-                                            db.chatDao().insertConversation(ConversationEntity(id = newId, title = "New Chat"))
-                                            currentConversationId = newId
-                                            userPrefs.setLastConversationId(newId)
-                                        }
-                                    }
+    // Delete confirm dialog
+    if (conversationToDelete != null) {
+        AlertDialog(
+            onDismissRequest = { conversationToDelete = null },
+            title = { Text("Delete Conversation?") },
+            text = { Text("This will permanently delete “${conversationToDelete!!.title}” and its messages.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val target = conversationToDelete ?: return@TextButton
+                        conversationToDelete = null
+                        MiraAppScope.scope.launch {
+                            db.chatDao().deleteMessagesForConversation(target.id)
+                            db.chatDao().deleteConversation(target.id)
+                            db.memoryDao().deleteMemoryByConversationId(target.id)
+                            if (currentConversationId == target.id) {
+                                val replacement = conversations.firstOrNull { it.id != target.id }
+                                if (replacement != null) {
+                                    currentConversationId = replacement.id
+                                    userPrefs.setLastConversationId(replacement.id)
+                                } else {
+                                    val newId = UUID.randomUUID().toString()
+                                    db.chatDao().insertConversation(ConversationEntity(id = newId, title = "New Chat"))
+                                    currentConversationId = newId
+                                    userPrefs.setLastConversationId(newId)
                                 }
                             }
-                        ) {
-                            Text("Delete", color = Color(0xFFEF4444))
-                        }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = { conversationToDelete = null }) {
-                            Text("Cancel")
                         }
                     }
-                )
+                ) {
+                    Text("Delete", color = Color(0xFFEF4444))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { conversationToDelete = null }) {
+                    Text("Cancel")
+                }
             }
-        }
+        )
+    }
 
-        // Code Viewer Dialog
-        if (viewingCode != null) {
-            CodeViewerDialog(
-                code = viewingCode!!,
-                onDismiss = { viewingCode = null }
-            )
-        }
+    // Code Viewer Dialog
+    if (viewingCode != null) {
+        CodeViewerDialog(
+            code = viewingCode!!,
+            onDismiss = { viewingCode = null }
+        )
+    }
 
-        // HTML Live Preview Dialog
-        if (previewingHtml != null) {
-            HtmlPreviewDialog(
-                htmlCode = previewingHtml!!,
-                onDismiss = { previewingHtml = null }
-            )
-        }
+    // HTML Live Preview Dialog
+    if (previewingHtml != null) {
+        HtmlPreviewDialog(
+            htmlCode = previewingHtml!!,
+            onDismiss = { previewingHtml = null }
+        )
+    }
     }
 }
 
@@ -2643,14 +2736,27 @@ private fun TypingDotsIndicator(dotColor: Color) {
         horizontalArrangement = Arrangement.spacedBy(5.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        listOf(dot1Alpha, dot2Alpha, dot3Alpha).forEach { alpha ->
-            Box(
-                modifier = Modifier
-                    .size(7.dp)
-                    .clip(CircleShape)
-                    .background(dotColor.copy(alpha = alpha))
-            )
-        }
+        Box(
+            modifier = Modifier
+                .size(7.dp)
+                .clip(CircleShape)
+                .graphicsLayer { alpha = dot1Alpha }
+                .background(dotColor)
+        )
+        Box(
+            modifier = Modifier
+                .size(7.dp)
+                .clip(CircleShape)
+                .graphicsLayer { alpha = dot2Alpha }
+                .background(dotColor)
+        )
+        Box(
+            modifier = Modifier
+                .size(7.dp)
+                .clip(CircleShape)
+                .graphicsLayer { alpha = dot3Alpha }
+                .background(dotColor)
+        )
     }
 }
 
@@ -2878,13 +2984,13 @@ fun MiraLinkItem(
 }
 
 sealed class TextBlock {
-    data class Heading(val level: Int, val text: String) : TextBlock()
-    data class BulletItem(val text: String) : TextBlock()
-    data class NumberedItem(val number: String, val text: String) : TextBlock()
-    data class BlockQuote(val text: String) : TextBlock()
+    data class Heading(val level: Int, val text: String, val parsed: AnnotatedString = parseInlineMarkdown(text)) : TextBlock()
+    data class BulletItem(val text: String, val parsed: AnnotatedString = parseInlineMarkdown(text)) : TextBlock()
+    data class NumberedItem(val number: String, val text: String, val parsed: AnnotatedString = parseInlineMarkdown(text)) : TextBlock()
+    data class BlockQuote(val text: String, val parsed: AnnotatedString = parseInlineMarkdown(text)) : TextBlock()
     data class Table(val headers: List<String>, val rows: List<List<String>>) : TextBlock()
     data class MiraLink(val label: String, val url: String) : TextBlock()
-    data class Paragraph(val text: String) : TextBlock()
+    data class Paragraph(val text: String, val parsed: AnnotatedString = parseInlineMarkdown(text)) : TextBlock()
 }
 
 private fun isTableSeparator(line: String): Boolean {
@@ -2977,8 +3083,8 @@ private fun RenderFormattedText(
     defaultColor: Color,
     onOpenLink: ((String, String) -> Unit)? = null
 ) {
-    val lines = text.split("\n")
-    val blocks = remember(text) { parseTextBlocks(lines) }
+    val palette = LocalMiraPalette.current
+    val blocks = remember(text) { parseTextBlocks(text.split("\n")) }
 
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         for (block in blocks) {
@@ -2991,7 +3097,7 @@ private fun RenderFormattedText(
                         else -> 14.sp to FontWeight.Bold
                     }
                     Text(
-                        text = parseInlineMarkdown(block.text),
+                        text = block.parsed,
                         fontSize = fontSize,
                         fontWeight = fontWeight,
                         color = defaultColor
@@ -3000,13 +3106,13 @@ private fun RenderFormattedText(
                 is TextBlock.BulletItem -> {
                     Row(modifier = Modifier.fillMaxWidth()) {
                         Text(text = "• ", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = defaultColor)
-                        Text(text = parseInlineMarkdown(block.text), fontSize = 14.sp, lineHeight = 20.sp, color = defaultColor)
+                        Text(text = block.parsed, fontSize = 14.sp, lineHeight = 20.sp, color = defaultColor)
                     }
                 }
                 is TextBlock.NumberedItem -> {
                     Row(modifier = Modifier.fillMaxWidth()) {
                         Text(text = "${block.number}. ", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = defaultColor)
-                        Text(text = parseInlineMarkdown(block.text), fontSize = 14.sp, lineHeight = 20.sp, color = defaultColor)
+                        Text(text = block.parsed, fontSize = 14.sp, lineHeight = 20.sp, color = defaultColor)
                     }
                 }
                 is TextBlock.BlockQuote -> {
@@ -3019,11 +3125,11 @@ private fun RenderFormattedText(
                             modifier = Modifier
                                 .width(3.dp)
                                 .height(22.dp)
-                                .background(Color(0xFF8B5CF6))
+                                .background(palette.primary)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = parseInlineMarkdown(block.text),
+                            text = block.parsed,
                             fontSize = 13.5.sp,
                             fontStyle = FontStyle.Italic,
                             color = defaultColor.copy(alpha = 0.85f)
@@ -3044,7 +3150,7 @@ private fun RenderFormattedText(
                     val trimmed = block.text.trim()
                     if (trimmed.isNotEmpty()) {
                         Text(
-                            text = parseInlineMarkdown(block.text),
+                            text = block.parsed,
                             fontSize = 14.sp,
                             lineHeight = 20.sp,
                             color = defaultColor
@@ -3424,9 +3530,9 @@ fun ThinkingAccordion(
 }
 
 @Composable
-fun StreamingMessageView(
-    text: String,
-    textColor: Color,
+private fun BlinkingCursor(
+    color: Color = Color(0xFF38BDF8),
+    fontSize: TextUnit = 13.5.sp,
     modifier: Modifier = Modifier
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "cursor")
@@ -3439,12 +3545,27 @@ fun StreamingMessageView(
         ),
         label = "cursorAlpha"
     )
+    Text(
+        text = "▎",
+        color = color,
+        fontSize = fontSize,
+        fontWeight = FontWeight.Bold,
+        modifier = modifier.graphicsLayer { alpha = cursorAlpha }
+    )
+}
+
+@Composable
+fun StreamingMessageView(
+    text: String,
+    textColor: Color,
+    modifier: Modifier = Modifier
+) {
+    val lines = remember(text) { text.split("\n") }
 
     Column(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        val lines = text.split("\n")
         var inCodeBlock = false
         var codeBuffer = StringBuilder()
         var codeLang = ""
@@ -3512,11 +3633,9 @@ fun StreamingMessageView(
                                     lineHeight = 18.sp,
                                     color = Color(0xFFE2E8F0)
                                 )
-                                Text(
-                                    text = "▎",
-                                    color = Color(0xFF38BDF8).copy(alpha = cursorAlpha),
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold
+                                BlinkingCursor(
+                                    color = Color(0xFF38BDF8),
+                                    fontSize = 13.sp
                                 )
                             }
                         }
@@ -3535,11 +3654,10 @@ fun StreamingMessageView(
                             color = textColor
                         )
                         if (isLast) {
-                            Text(
-                                text = " ▎",
-                                color = Color(0xFF38BDF8).copy(alpha = cursorAlpha),
+                            BlinkingCursor(
+                                color = Color(0xFF38BDF8),
                                 fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold
+                                modifier = Modifier.padding(start = 2.dp)
                             )
                         }
                     }

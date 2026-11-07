@@ -398,42 +398,6 @@ object ConnectorActions {
         }
     }
 
-    // 11. Yahoo Finance: getQuote
-    suspend fun getYahooFinanceQuote(symbol: String): Result<String> = withContext(Dispatchers.IO) {
-        try {
-            val cleanSym = symbol.trim().uppercase().removePrefix("$")
-            val url = "https://query1.finance.yahoo.com/v8/finance/chart/$cleanSym"
-            val request = Request.Builder()
-                .url(url)
-                .header("User-Agent", "Mozilla/5.0")
-                .build()
-
-            client.newCall(request).execute().use { response ->
-                val body = response.body?.string() ?: ""
-                if (response.isSuccessful) {
-                    val root = JSONObject(body)
-                    val resultArr = root.optJSONObject("chart")?.optJSONArray("result")
-                    if (resultArr == null || resultArr.length() == 0) {
-                        return@withContext Result.failure(Exception("No quote data found for symbol $cleanSym"))
-                    }
-                    val meta = resultArr.getJSONObject(0).optJSONObject("meta")
-                        ?: return@withContext Result.failure(Exception("No meta quote data for symbol $cleanSym"))
-
-                    val price = meta.optDouble("regularMarketPrice", 0.0)
-                    val currency = meta.optString("currency", "USD")
-                    val sym = meta.optString("symbol", cleanSym)
-                    val high = meta.optDouble("regularMarketDayHigh", 0.0)
-                    val low = meta.optDouble("regularMarketDayLow", 0.0)
-                    Result.success("$sym is trading at $price $currency (Day Range: $low - $high)")
-                } else {
-                    Result.failure(Exception("Yahoo Finance error (HTTP ${response.code}): $body"))
-                }
-            }
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
-    }
-
     // 12. Open-Meteo: currentWeather
     suspend fun getOpenMeteoWeather(lat: Double = 23.8103, lon: Double = 90.4125): Result<String> = withContext(Dispatchers.IO) {
         try {

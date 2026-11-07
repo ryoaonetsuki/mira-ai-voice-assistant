@@ -1,6 +1,5 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -32,7 +31,6 @@ import io.github.ryoaonetsuki.mira.ui.components.BiometricAuthHelper
 import io.github.ryoaonetsuki.mira.ui.components.MiraCard
 import io.github.ryoaonetsuki.mira.ui.components.MiraSwitch
 import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
-import io.github.ryoaonetsuki.mira.ui.theme.MiraMotion
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -302,27 +300,15 @@ fun MemoriesScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(categories) { cat ->
+                    items(categories, key = { it }) { cat ->
                         val isSelected = selectedCategory.equals(cat, ignoreCase = true)
-                        val chipBg by animateColorAsState(
-                            targetValue = if (isSelected) palette.primary else palette.surface,
-                            animationSpec = MiraMotion.effectsSpec(),
-                            label = "cat-bg"
-                        )
-                        val chipBorder by animateColorAsState(
-                            targetValue = if (isSelected) palette.primary else palette.borderSubtle,
-                            animationSpec = MiraMotion.effectsSpec(),
-                            label = "cat-border"
-                        )
-                        val textColor by animateColorAsState(
-                            targetValue = if (isSelected) {
-                                if (palette.isDark) palette.background else Color.White
-                            } else {
-                                palette.textSecondary
-                            },
-                            animationSpec = MiraMotion.effectsSpec(),
-                            label = "cat-text"
-                        )
+                        val chipBg = if (isSelected) palette.primary else palette.surface
+                        val chipBorder = if (isSelected) palette.primary else palette.borderSubtle
+                        val textColor = if (isSelected) {
+                            if (palette.isDark) palette.background else Color.White
+                        } else {
+                            palette.textSecondary
+                        }
 
                         Surface(
                             shape = RoundedCornerShape(18.dp),
@@ -559,6 +545,7 @@ fun MemoriesScreen(
                             label = { Text("Memory Content") },
                             shape = RoundedCornerShape(12.dp),
                             minLines = 2,
+                            maxLines = 5,
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedContainerColor = palette.surfaceVariant,
                                 unfocusedContainerColor = palette.surfaceVariant,
@@ -567,7 +554,9 @@ fun MemoriesScreen(
                                 focusedBorderColor = palette.primary,
                                 unfocusedBorderColor = palette.borderSubtle
                             ),
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 120.dp)
                         )
                         OutlinedTextField(
                             value = newMemoryCategory,

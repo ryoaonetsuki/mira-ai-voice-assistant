@@ -34,7 +34,8 @@ data class DrawerItem(
 fun AppDrawer(
     currentRoute: String,
     onNavigate: (String) -> Unit,
-    onCloseDrawer: () -> Unit
+    onCloseDrawer: () -> Unit,
+    onOpenChatHistory: (() -> Unit)? = null
 ) {
     val palette = LocalMiraPalette.current
 
@@ -61,7 +62,7 @@ fun AppDrawer(
                 .fillMaxSize()
                 .padding(vertical = 16.dp, horizontal = 12.dp)
         ) {
-            // Header
+            // Header (DeepSeek Clean Branding)
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
@@ -72,16 +73,17 @@ fun AppDrawer(
                     painter = painterResource(id = R.drawable.logo_chosen),
                     contentDescription = "Logo",
                     modifier = Modifier
-                        .size(46.dp)
+                        .size(44.dp)
                         .clip(CircleShape)
                 )
                 Spacer(modifier = Modifier.width(12.dp))
                 Column {
                     Text(
                         text = "Mira AI",
-                        fontSize = 19.sp,
+                        fontSize = 18.sp,
                         fontWeight = FontWeight.Bold,
-                        color = palette.textPrimary
+                        color = palette.textPrimary,
+                        letterSpacing = (-0.2).sp
                     )
                     Text(
                         text = "Intelligent Companion",
@@ -92,8 +94,9 @@ fun AppDrawer(
             }
 
             HorizontalDivider(
-                color = palette.surfaceVariant.copy(alpha = 0.6f),
-                modifier = Modifier.padding(vertical = 8.dp)
+                color = palette.surfaceVariant.copy(alpha = 0.35f),
+                thickness = 1.dp,
+                modifier = Modifier.padding(vertical = 6.dp)
             )
 
             // Items list
@@ -103,46 +106,82 @@ fun AppDrawer(
                     .fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
+                if (onOpenChatHistory != null) {
+                    item {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(44.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(androidx.compose.ui.graphics.Color.Transparent)
+                                .clickable {
+                                    onCloseDrawer()
+                                    onOpenChatHistory()
+                                }
+                                .padding(horizontal = 12.dp)
+                        ) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_fluent_task_list_square_ltr_24_regular),
+                                contentDescription = "Chat History",
+                                tint = palette.textSecondary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(
+                                text = "Chat History",
+                                fontSize = 13.5.sp,
+                                fontWeight = FontWeight.Normal,
+                                color = palette.textPrimary
+                            )
+                        }
+                    }
+                }
+
                 items(drawerItems) { item ->
-                    val isSelected = currentRoute == item.route
-                    val itemBg = if (isSelected) palette.surfaceVariant else palette.background
-                    val itemTint = if (isSelected) palette.primary else palette.textPrimary
+                    val isSelected = currentRoute == item.route ||
+                            (item.route == Screen.Chat.route && currentRoute.startsWith("chat"))
+                    val itemBg = if (isSelected) palette.surfaceVariant.copy(alpha = 0.7f) else androidx.compose.ui.graphics.Color.Transparent
+                    val itemText = if (isSelected) palette.primary else palette.textPrimary
+                    val itemIconTint = if (isSelected) palette.primary else palette.textSecondary
 
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
                             .fillMaxWidth()
+                            .height(44.dp)
                             .clip(RoundedCornerShape(12.dp))
                             .background(itemBg)
                             .clickable {
                                 onNavigate(item.route)
                                 onCloseDrawer()
                             }
-                            .padding(horizontal = 14.dp, vertical = 10.dp)
+                            .padding(horizontal = 12.dp)
                     ) {
                         Icon(
                             painter = painterResource(id = if (isSelected) item.filledIcon else item.regularIcon),
                             contentDescription = item.title,
-                            tint = itemTint,
+                            tint = itemIconTint,
                             modifier = Modifier.size(20.dp)
                         )
-                        Spacer(modifier = Modifier.width(14.dp))
+                        Spacer(modifier = Modifier.width(12.dp))
                         Text(
                             text = item.title,
-                            fontSize = 14.sp,
+                            fontSize = 13.5.sp,
                             fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                            color = itemTint
+                            color = itemText
                         )
                     }
                 }
             }
 
             HorizontalDivider(
-                color = palette.surfaceVariant.copy(alpha = 0.6f),
-                modifier = Modifier.padding(vertical = 8.dp)
+                color = palette.surfaceVariant.copy(alpha = 0.35f),
+                thickness = 1.dp,
+                modifier = Modifier.padding(vertical = 6.dp)
             )
 
-            // Footer
+            // Footer (Refined DeepSeek Style)
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
@@ -158,7 +197,7 @@ fun AppDrawer(
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = "Private Companion Mode • Unlimited",
-                    fontSize = 11.sp,
+                    fontSize = 11.5.sp,
                     color = palette.textSecondary
                 )
             }

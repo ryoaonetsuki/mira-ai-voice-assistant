@@ -1,9 +1,7 @@
 package io.github.ryoaonetsuki.mira.ui.screens.settings
 
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.Favorite
-import androidx.compose.material.icons.rounded.SentimentSatisfied
+import androidx.compose.ui.res.painterResource
+import io.github.ryoaonetsuki.mira.R
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -55,7 +53,7 @@ fun SecretSettingsScreen(
                 title = { Text("Secret Settings", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(painter = painterResource(id = R.drawable.ic_fluent_arrow_left_24_regular), contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -85,7 +83,7 @@ fun SecretSettingsScreen(
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
-                            imageVector = Icons.Rounded.SentimentSatisfied,
+                            painter = painterResource(id = R.drawable.ic_fluent_emoji_24_regular),
                             contentDescription = null,
                             tint = if (isFriendly) palette.primary else palette.textSecondary,
                             modifier = Modifier.size(28.dp)
@@ -128,7 +126,7 @@ fun SecretSettingsScreen(
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
-                            imageVector = Icons.Rounded.Favorite,
+                            painter = painterResource(id = if (isRomantic) R.drawable.ic_fluent_heart_24_filled else R.drawable.ic_fluent_heart_24_regular),
                             contentDescription = null,
                             tint = if (isRomantic) Color(0xFFF43F5E) else palette.textSecondary,
                             modifier = Modifier.size(28.dp)

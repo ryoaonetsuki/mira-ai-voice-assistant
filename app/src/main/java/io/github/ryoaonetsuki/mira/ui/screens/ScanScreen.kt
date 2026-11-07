@@ -16,23 +16,36 @@ import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -42,7 +55,10 @@ import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import io.github.ryoaonetsuki.mira.R
+import io.github.ryoaonetsuki.mira.ui.components.MiraButton
+import io.github.ryoaonetsuki.mira.ui.components.MiraCard
 import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
+import io.github.ryoaonetsuki.mira.ui.theme.MiraMotion
 import java.io.File
 import java.util.concurrent.Executors
 
@@ -64,6 +80,7 @@ fun ScanScreen(
 ) {
     val context = LocalContext.current
     val palette = LocalMiraPalette.current
+    val keyboardController = LocalSoftwareKeyboardController.current
 
     var hasCameraPermission by remember {
         mutableStateOf(
@@ -96,127 +113,143 @@ fun ScanScreen(
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = if (cameraMode == CameraMode.VISION) "Mira Vision" else "QR & Barcode Scan",
-                        fontWeight = FontWeight.Bold,
-                        color = palette.textPrimary
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_fluent_arrow_left_24_regular),
-                            contentDescription = "Back",
-                            tint = palette.textPrimary
-                        )
-                    }
-                },
-                actions = {
-                    if (hasCameraPermission && capturedImageFile == null) {
-                        // Flash toggle
-                        IconButton(onClick = {
-                            flashMode = if (flashMode == ImageCapture.FLASH_MODE_OFF) {
-                                ImageCapture.FLASH_MODE_ON
-                            } else {
-                                ImageCapture.FLASH_MODE_OFF
-                            }
-                        }) {
-                            Icon(
-                                painter = painterResource(
-                                    if (flashMode == ImageCapture.FLASH_MODE_ON)
-                                        R.drawable.ic_fluent_flash_24_regular
-                                    else
-                                        R.drawable.ic_fluent_flash_off_24_regular
-                                ),
-                                contentDescription = "Flash",
-                                tint = if (flashMode == ImageCapture.FLASH_MODE_ON) palette.primary else palette.textSecondary
-                            )
-                        }
+    val shutterScale by animateFloatAsState(
+        targetValue = if (isCapturing) 0.86f else 1.0f,
+        animationSpec = MiraMotion.spatialSpring(),
+        label = "shutter-scale"
+    )
 
-                        // Lens switch
-                        IconButton(onClick = {
-                            lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK) {
-                                CameraSelector.LENS_FACING_FRONT
-                            } else {
-                                CameraSelector.LENS_FACING_BACK
-                            }
-                        }) {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_fluent_camera_switch_24_regular),
-                                contentDescription = "Switch Camera",
-                                tint = palette.textPrimary
-                            )
-                        }
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
-            )
-        },
+    Scaffold(
         containerColor = palette.background
     ) { padding ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding),
-            horizontalAlignment = Alignment.CenterHorizontally
+                .padding(padding)
         ) {
             if (!hasCameraPermission) {
                 // Permission required view
-                Box(
-                    contentAlignment = Alignment.Center,
+                Column(
                     modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .padding(24.dp)
+                        .fillMaxSize()
+                        .statusBarsPadding()
+                        .padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .size(80.dp)
+                            .clip(CircleShape)
+                            .background(palette.surfaceVariant)
+                            .border(1.dp, palette.borderSubtle, CircleShape)
+                    ) {
                         Icon(
                             painter = painterResource(R.drawable.ic_fluent_camera_24_regular),
                             contentDescription = null,
-                            tint = palette.textSecondary,
-                            modifier = Modifier.size(56.dp)
+                            tint = palette.primary,
+                            modifier = Modifier.size(36.dp)
                         )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text(
-                            text = "Camera permission required",
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = palette.textPrimary
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = "Mira needs camera access for visual intelligence and scanning.",
-                            fontSize = 13.sp,
-                            color = palette.textSecondary
-                        )
-                        Spacer(modifier = Modifier.height(20.dp))
-                        Button(
-                            onClick = { cameraPermissionLauncher.launch(Manifest.permission.CAMERA) },
-                            colors = ButtonDefaults.buttonColors(containerColor = palette.primary)
-                        ) {
-                            Text("Grant Camera Access", color = Color.Black)
-                        }
+                    }
+                    Spacer(modifier = Modifier.height(20.dp))
+                    Text(
+                        text = "Camera Permission Required",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = palette.textPrimary
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Mira uses your camera for real-time visual intelligence and QR/barcode scanning.",
+                        fontSize = 14.sp,
+                        lineHeight = 21.sp,
+                        color = palette.textSecondary,
+                        modifier = Modifier.padding(horizontal = 16.dp)
+                    )
+                    Spacer(modifier = Modifier.height(24.dp))
+                    MiraButton(
+                        text = "Grant Camera Access",
+                        onClick = { cameraPermissionLauncher.launch(Manifest.permission.CAMERA) },
+                        modifier = Modifier.fillMaxWidth(0.7f)
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    TextButton(onClick = onBack) {
+                        Text("Go Back", color = palette.textSecondary)
                     }
                 }
             } else if (capturedImageFile != null) {
                 // Photo review & Ask Mira view
                 Column(
                     modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
+                        .fillMaxSize()
+                        .statusBarsPadding()
+                        .navigationBarsPadding()
                         .padding(16.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
+                    // Top header for captured review
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        IconButton(
+                            onClick = {
+                                capturedImageFile = null
+                                userPrompt = ""
+                            },
+                            modifier = Modifier
+                                .size(42.dp)
+                                .clip(CircleShape)
+                                .background(palette.surfaceVariant)
+                                .border(1.dp, palette.borderSubtle, CircleShape)
+                        ) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_fluent_arrow_left_24_regular),
+                                contentDescription = "Back",
+                                tint = palette.textPrimary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+
+                        Text(
+                            text = "Analyze with Mira",
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = palette.textPrimary
+                        )
+
+                        IconButton(
+                            onClick = {
+                                capturedImageFile = null
+                                userPrompt = ""
+                            },
+                            modifier = Modifier
+                                .size(42.dp)
+                                .clip(CircleShape)
+                                .background(palette.surfaceVariant)
+                                .border(1.dp, palette.borderSubtle, CircleShape)
+                        ) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_fluent_arrow_clockwise_24_regular),
+                                contentDescription = "Retake",
+                                tint = palette.textSecondary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+
+                    // Photo card
                     Box(
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(16.dp))
+                            .clip(RoundedCornerShape(20.dp))
                             .background(Color.Black)
+                            .border(1.dp, palette.borderSubtle, RoundedCornerShape(20.dp))
                     ) {
                         AsyncImage(
                             model = capturedImageFile,
@@ -228,35 +261,185 @@ fun ScanScreen(
 
                     Spacer(modifier = Modifier.height(14.dp))
 
-                    OutlinedTextField(
-                        value = userPrompt,
-                        onValueChange = { userPrompt = it },
-                        placeholder = { Text("Ask Mira about this image...", color = palette.textSecondary) },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(14.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = palette.textPrimary,
-                            unfocusedTextColor = palette.textPrimary,
-                            focusedBorderColor = palette.primary,
-                            unfocusedBorderColor = palette.surfaceVariant,
-                            focusedContainerColor = palette.surface,
-                            unfocusedContainerColor = palette.surface
+                    // Bottom Floating Prompt Pill Container
+                    Surface(
+                        shape = RoundedCornerShape(22.dp),
+                        color = palette.surface,
+                        border = BorderStroke(1.dp, palette.borderSubtle),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 8.dp, vertical = 6.dp)
+                        ) {
+                            // Thumbnail Preview Chip
+                            Box(
+                                modifier = Modifier
+                                    .size(42.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(Color.Black)
+                                    .border(1.dp, palette.primary.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                            ) {
+                                AsyncImage(
+                                    model = capturedImageFile,
+                                    contentDescription = "Thumbnail",
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.width(10.dp))
+
+                            OutlinedTextField(
+                                value = userPrompt,
+                                onValueChange = { userPrompt = it },
+                                placeholder = {
+                                    Text(
+                                        "Ask Mira about this image...",
+                                        fontSize = 14.sp,
+                                        color = palette.textSecondary
+                                    )
+                                },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                                keyboardActions = KeyboardActions(onSend = {
+                                    keyboardController?.hide()
+                                    val file = capturedImageFile ?: return@KeyboardActions
+                                    val query = userPrompt.ifBlank { "What's in this image?" }
+                                    processImageForAiVision(context, file, query) {
+                                        onNavigateToChat()
+                                    }
+                                }),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 44.dp),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = Color.Transparent,
+                                    unfocusedBorderColor = Color.Transparent,
+                                    focusedContainerColor = Color.Transparent,
+                                    unfocusedContainerColor = Color.Transparent,
+                                    focusedTextColor = palette.textPrimary,
+                                    unfocusedTextColor = palette.textPrimary
+                                )
+                            )
+
+                            // Send Button
+                            IconButton(
+                                onClick = {
+                                    keyboardController?.hide()
+                                    val file = capturedImageFile ?: return@IconButton
+                                    val query = userPrompt.ifBlank { "What's in this image?" }
+                                    processImageForAiVision(context, file, query) {
+                                        onNavigateToChat()
+                                    }
+                                },
+                                modifier = Modifier
+                                    .size(42.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        Brush.horizontalGradient(
+                                            listOf(palette.primary, palette.secondary)
+                                        )
+                                    )
+                            ) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_fluent_sparkle_24_filled),
+                                    contentDescription = "Ask Mira",
+                                    tint = if (palette.isDark) palette.background else Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            } else if (cameraMode == CameraMode.SCAN && scannedValue != null && !isScanning) {
+                // QR/Barcode Scan Result View
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .statusBarsPadding()
+                        .navigationBarsPadding()
+                        .padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .size(72.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFF10B981).copy(alpha = 0.15f))
+                            .border(1.dp, Color(0xFF10B981).copy(alpha = 0.4f), CircleShape)
+                    ) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_fluent_checkmark_circle_24_filled),
+                            contentDescription = null,
+                            tint = Color(0xFF10B981),
+                            modifier = Modifier.size(38.dp)
                         )
+                    }
+
+                    Spacer(modifier = Modifier.height(18.dp))
+
+                    Text(
+                        text = "Code Detected",
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = palette.textPrimary
                     )
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = palette.surfaceVariant,
+                        border = BorderStroke(1.dp, palette.borderSubtle)
+                    ) {
+                        Text(
+                            text = scannedFormat ?: "Barcode",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = palette.primary,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(20.dp))
+
+                    MiraCard(
+                        modifier = Modifier.fillMaxWidth(),
+                        cornerRadius = 16.dp,
+                        containerColor = palette.surface,
+                        borderColor = palette.borderSubtle
+                    ) {
+                        Text(
+                            text = scannedValue ?: "",
+                            fontSize = 14.sp,
+                            lineHeight = 22.sp,
+                            color = palette.textPrimary
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(24.dp))
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         OutlinedButton(
                             onClick = {
-                                capturedImageFile = null
-                                userPrompt = ""
+                                scannedValue = null
+                                scannedFormat = null
+                                isScanning = true
                             },
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.weight(1f)
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = palette.textPrimary),
+                            border = BorderStroke(1.dp, palette.borderSubtle),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
                         ) {
                             Icon(
                                 painter = painterResource(R.drawable.ic_fluent_arrow_clockwise_24_regular),
@@ -264,126 +447,39 @@ fun ScanScreen(
                                 modifier = Modifier.size(18.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Retake", color = palette.textPrimary)
+                            Text("Scan Again", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                         }
 
                         Button(
                             onClick = {
-                                val file = capturedImageFile ?: return@Button
-                                val query = userPrompt.ifBlank { "What's in this image?" }
-                                processImageForAiVision(context, file, query) {
-                                    onNavigateToChat()
-                                }
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                val clip = ClipData.newPlainText("Scanned Value", scannedValue)
+                                clipboard.setPrimaryClip(clip)
+                                Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
                             },
-                            colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.weight(1f)
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = palette.primary,
+                                contentColor = if (palette.isDark) palette.background else Color.White
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
                         ) {
                             Icon(
-                                painter = painterResource(R.drawable.ic_fluent_sparkle_24_filled),
+                                painter = painterResource(R.drawable.ic_fluent_copy_24_regular),
                                 contentDescription = null,
-                                tint = Color.Black,
                                 modifier = Modifier.size(18.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Ask Mira", color = Color.Black, fontWeight = FontWeight.Bold)
+                            Text("Copy Value", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                         }
-                    }
-                }
-            } else if (cameraMode == CameraMode.SCAN && scannedValue != null && !isScanning) {
-                // QR/Barcode scan result view
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_fluent_checkmark_circle_24_filled),
-                        contentDescription = null,
-                        tint = Color(0xFF10B981),
-                        modifier = Modifier.size(56.dp)
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text(
-                        text = "Scan Result",
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = palette.textPrimary
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = "Format: ${scannedFormat ?: "Unknown"}",
-                        fontSize = 13.sp,
-                        color = palette.textSecondary
-                    )
-                    Spacer(modifier = Modifier.height(20.dp))
-
-                    Surface(
-                        color = palette.surface,
-                        shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Text(
-                                text = scannedValue ?: "",
-                                fontSize = 15.sp,
-                                color = palette.textPrimary,
-                                lineHeight = 22.sp
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(20.dp))
-
-                    Button(
-                        onClick = {
-                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            val clip = ClipData.newPlainText("Scanned Value", scannedValue)
-                            clipboard.setPrimaryClip(clip)
-                            Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = palette.primary),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_fluent_copy_24_regular),
-                            contentDescription = null,
-                            tint = Color.Black
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Copy", color = Color.Black, fontWeight = FontWeight.SemiBold)
-                    }
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    OutlinedButton(
-                        onClick = {
-                            scannedValue = null
-                            scannedFormat = null
-                            isScanning = true
-                        },
-                        shape = RoundedCornerShape(10.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = palette.primary),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_fluent_arrow_clockwise_24_regular),
-                            contentDescription = null
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Scan Again")
                     }
                 }
             } else {
-                // Live Camera View
+                // Live Full Bleed Camera View
                 Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(16.dp))
-                        .padding(horizontal = 16.dp, vertical = 4.dp)
+                    modifier = Modifier.fillMaxSize()
                 ) {
                     CameraXView(
                         modifier = Modifier.fillMaxSize(),
@@ -400,105 +496,257 @@ fun ScanScreen(
                         }
                     )
 
-                    // Mode switch pills at bottom of preview
+                    // Top Floating Control Bar (Status bar aware)
                     Row(
                         modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .padding(bottom = 12.dp)
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(Color.Black.copy(alpha = 0.6f))
-                            .padding(4.dp),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(if (cameraMode == CameraMode.VISION) palette.primary else Color.Transparent)
-                                .clickable { cameraMode = CameraMode.VISION }
-                                .padding(horizontal = 16.dp, vertical = 6.dp)
-                        ) {
-                            Text(
-                                "Vision",
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = if (cameraMode == CameraMode.VISION) Color.Black else Color.White
-                            )
-                        }
-
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(if (cameraMode == CameraMode.SCAN) palette.primary else Color.Transparent)
-                                .clickable {
-                                    cameraMode = CameraMode.SCAN
-                                    isScanning = true
-                                }
-                                .padding(horizontal = 16.dp, vertical = 6.dp)
-                        ) {
-                            Text(
-                                "QR Scan",
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = if (cameraMode == CameraMode.SCAN) Color.Black else Color.White
-                            )
-                        }
-                    }
-                }
-
-                // Shutter / action area below preview
-                if (cameraMode == CameraMode.VISION) {
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 16.dp)
+                            .statusBarsPadding()
+                            .padding(horizontal = 16.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Box(
-                            contentAlignment = Alignment.Center,
+                        // Back button pill
+                        IconButton(
+                            onClick = onBack,
                             modifier = Modifier
-                                .size(72.dp)
-                                .border(4.dp, palette.primary, CircleShape)
-                                .padding(6.dp)
+                                .size(44.dp)
                                 .clip(CircleShape)
-                                .background(if (isCapturing) palette.primary.copy(alpha = 0.5f) else Color.White)
-                                .clickable(enabled = !isCapturing) {
-                                    val capture = imageCapture ?: return@clickable
-                                    isCapturing = true
-                                    val photoFile = File(
-                                        context.cacheDir,
-                                        "mira_vision_${System.currentTimeMillis()}.jpg"
-                                    )
-                                    val outputOptions = ImageCapture.OutputFileOptions.Builder(photoFile).build()
-
-                                    capture.takePicture(
-                                        outputOptions,
-                                        ContextCompat.getMainExecutor(context),
-                                        object : ImageCapture.OnImageSavedCallback {
-                                            override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
-                                                isCapturing = false
-                                                capturedImageFile = photoFile
-                                            }
-
-                                            override fun onError(exception: ImageCaptureException) {
-                                                isCapturing = false
-                                                Toast.makeText(context, "Capture failed: ${exception.message}", Toast.LENGTH_SHORT).show()
-                                            }
-                                        }
-                                    )
-                                }
+                                .background(Color.Black.copy(alpha = 0.55f))
+                                .border(1.dp, Color.White.copy(alpha = 0.2f), CircleShape)
                         ) {
                             Icon(
-                                painter = painterResource(R.drawable.ic_fluent_camera_24_filled),
-                                contentDescription = "Capture",
-                                tint = Color.Black,
-                                modifier = Modifier.size(28.dp)
+                                painter = painterResource(R.drawable.ic_fluent_arrow_left_24_regular),
+                                contentDescription = "Back",
+                                tint = Color.White,
+                                modifier = Modifier.size(20.dp)
                             )
                         }
+
+                        // Mode chip label in center
+                        Surface(
+                            shape = RoundedCornerShape(20.dp),
+                            color = Color.Black.copy(alpha = 0.55f),
+                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.2f))
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                            ) {
+                                Icon(
+                                    painter = painterResource(
+                                        if (cameraMode == CameraMode.VISION)
+                                            R.drawable.ic_fluent_sparkle_24_regular
+                                        else
+                                            R.drawable.ic_fluent_camera_24_regular
+                                    ),
+                                    contentDescription = null,
+                                    tint = palette.primary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = if (cameraMode == CameraMode.VISION) "Mira Vision" else "QR Scanner",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color.White
+                                )
+                            }
+                        }
+
+                        // Top right floating controls container (Flash + Flip)
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            // Flash toggle
+                            IconButton(
+                                onClick = {
+                                    flashMode = if (flashMode == ImageCapture.FLASH_MODE_OFF) {
+                                        ImageCapture.FLASH_MODE_ON
+                                    } else {
+                                        ImageCapture.FLASH_MODE_OFF
+                                    }
+                                },
+                                modifier = Modifier
+                                    .size(44.dp)
+                                    .clip(CircleShape)
+                                    .background(Color.Black.copy(alpha = 0.55f))
+                                    .border(
+                                        1.dp,
+                                        if (flashMode == ImageCapture.FLASH_MODE_ON) palette.primary else Color.White.copy(alpha = 0.2f),
+                                        CircleShape
+                                    )
+                            ) {
+                                Icon(
+                                    painter = painterResource(
+                                        if (flashMode == ImageCapture.FLASH_MODE_ON)
+                                            R.drawable.ic_fluent_flash_24_regular
+                                        else
+                                            R.drawable.ic_fluent_flash_off_24_regular
+                                    ),
+                                    contentDescription = "Flash",
+                                    tint = if (flashMode == ImageCapture.FLASH_MODE_ON) palette.primary else Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+
+                            // Camera Switch
+                            IconButton(
+                                onClick = {
+                                    lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK) {
+                                        CameraSelector.LENS_FACING_FRONT
+                                    } else {
+                                        CameraSelector.LENS_FACING_BACK
+                                    }
+                                },
+                                modifier = Modifier
+                                    .size(44.dp)
+                                    .clip(CircleShape)
+                                    .background(Color.Black.copy(alpha = 0.55f))
+                                    .border(1.dp, Color.White.copy(alpha = 0.2f), CircleShape)
+                            ) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_fluent_camera_switch_24_regular),
+                                    contentDescription = "Switch Camera",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
                     }
-                } else {
-                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Bottom Floating Controls: Mode Switch Pill + Concentric Shutter Button
+                    Column(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .navigationBarsPadding()
+                            .padding(bottom = 24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        // Horizontal Mode Switch Pill Slider
+                        Surface(
+                            shape = RoundedCornerShape(24.dp),
+                            color = Color.Black.copy(alpha = 0.65f),
+                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.18f))
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(4.dp),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                val isVision = cameraMode == CameraMode.VISION
+                                val visionBg by animateColorAsState(
+                                    targetValue = if (isVision) palette.primary else Color.Transparent,
+                                    animationSpec = MiraMotion.effectsSpec(),
+                                    label = "vision-bg"
+                                )
+                                val scanBg by animateColorAsState(
+                                    targetValue = if (!isVision) palette.primary else Color.Transparent,
+                                    animationSpec = MiraMotion.effectsSpec(),
+                                    label = "scan-bg"
+                                )
+
+                                Box(
+                                    contentAlignment = Alignment.Center,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(20.dp))
+                                        .background(visionBg)
+                                        .clickable { cameraMode = CameraMode.VISION }
+                                        .padding(horizontal = 20.dp, vertical = 7.dp)
+                                ) {
+                                    Text(
+                                        text = "Vision",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = if (isVision) Color.Black else Color.White
+                                    )
+                                }
+
+                                Box(
+                                    contentAlignment = Alignment.Center,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(20.dp))
+                                        .background(scanBg)
+                                        .clickable {
+                                            cameraMode = CameraMode.SCAN
+                                            isScanning = true
+                                        }
+                                        .padding(horizontal = 20.dp, vertical = 7.dp)
+                                ) {
+                                    Text(
+                                        text = "QR Scan",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = if (!isVision) Color.Black else Color.White
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(18.dp))
+
+                        // Shutter Button Area (Vision Mode Only)
+                        if (cameraMode == CameraMode.VISION) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .size(76.dp)
+                                    .scale(shutterScale)
+                                    .border(3.5.dp, palette.primary, CircleShape)
+                                    .padding(6.dp)
+                                    .clip(CircleShape)
+                                    .background(if (isCapturing) palette.primary.copy(alpha = 0.6f) else Color.White)
+                                    .clickable(
+                                        interactionSource = remember { MutableInteractionSource() },
+                                        indication = null,
+                                        enabled = !isCapturing
+                                    ) {
+                                        val capture = imageCapture ?: return@clickable
+                                        isCapturing = true
+                                        val photoFile = File(
+                                            context.cacheDir,
+                                            "mira_vision_${System.currentTimeMillis()}.jpg"
+                                        )
+                                        val outputOptions = ImageCapture.OutputFileOptions.Builder(photoFile).build()
+
+                                        capture.takePicture(
+                                            outputOptions,
+                                            ContextCompat.getMainExecutor(context),
+                                            object : ImageCapture.OnImageSavedCallback {
+                                                override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
+                                                    isCapturing = false
+                                                    capturedImageFile = photoFile
+                                                }
+
+                                                override fun onError(exception: ImageCaptureException) {
+                                                    isCapturing = false
+                                                    Toast.makeText(context, "Capture failed: ${exception.message}", Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
+                                        )
+                                    }
+                            ) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_fluent_camera_24_filled),
+                                    contentDescription = "Capture",
+                                    tint = Color.Black,
+                                    modifier = Modifier.size(30.dp)
+                                )
+                            }
+                        } else {
+                            // Scanner helper guide text
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = Color.Black.copy(alpha = 0.55f),
+                                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f))
+                            ) {
+                                Text(
+                                    text = "Point camera at any QR or barcode",
+                                    fontSize = 12.sp,
+                                    color = Color.White.copy(alpha = 0.85f),
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -536,6 +784,7 @@ private fun CameraXView(
         factory = { ctx ->
             val previewView = PreviewView(ctx).apply {
                 implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+                scaleType = PreviewView.ScaleType.FILL_CENTER
             }
             previewView
         },
@@ -627,3 +876,4 @@ private fun CameraXView(
         }
     }
 }
+

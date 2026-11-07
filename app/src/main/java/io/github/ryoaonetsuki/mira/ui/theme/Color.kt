@@ -21,35 +21,35 @@ data class MiraPalette(
 
 object Palettes {
     val Midnight = MiraPalette(
-        background = Color(0xFF0A0A12),
-        surface = Color(0xFF131322),
-        surfaceVariant = Color(0xFF1D1D34),
+        background = Color(0xFF080D16),
+        surface = Color(0xFF101A29),
+        surfaceVariant = Color(0xFF19283B),
         primary = Color(0xFF22D3EE),
         secondary = Color(0xFF8B5CF6),
-        textPrimary = Color(0xFFF8FAFC),
-        textSecondary = Color(0xFF94A3B8),
+        textPrimary = Color(0xFFF2F7FC),
+        textSecondary = Color(0xFFA9B9CC),
         isDark = true
     )
 
     val Obsidian = MiraPalette(
-        background = Color(0xFF0D0E11),
-        surface = Color(0xFF16181D),
-        surfaceVariant = Color(0xFF23272F),
-        primary = Color(0xFF38BDF8),
-        secondary = Color(0xFF94A3B8),
-        textPrimary = Color(0xFFF1F5F9),
-        textSecondary = Color(0xFF64748B),
+        background = Color(0xFF0B0D10),
+        surface = Color(0xFF14191F),
+        surfaceVariant = Color(0xFF202A34),
+        primary = Color(0xFF22D3EE),
+        secondary = Color(0xFF8B5CF6),
+        textPrimary = Color(0xFFF3F6F8),
+        textSecondary = Color(0xFFB0BEC9),
         isDark = true
     )
 
     val Nocturne = MiraPalette(
-        background = Color(0xFF0A091A),
-        surface = Color(0xFF141233),
-        surfaceVariant = Color(0xFF1E1C4A),
-        primary = Color(0xFFA78BFA),
-        secondary = Color(0xFFC084FC),
-        textPrimary = Color(0xFFFAF5FF),
-        textSecondary = Color(0xFFA8A29E),
+        background = Color(0xFF0D0B18),
+        surface = Color(0xFF171329),
+        surfaceVariant = Color(0xFF241D3B),
+        primary = Color(0xFF22D3EE),
+        secondary = Color(0xFF8B5CF6),
+        textPrimary = Color(0xFFF7F3FF),
+        textSecondary = Color(0xFFC0B5D4),
         isDark = true
     )
 

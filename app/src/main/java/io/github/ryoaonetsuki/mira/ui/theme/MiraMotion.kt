@@ -54,13 +54,22 @@ object MiraMotion {
     const val DurationExtraLong3 = 900
     const val DurationExtraLong4 = 1000
 
-    // Spatial spring specs (layout, position, size transitions)
+    // Spatial spring specs (layout, position, size transitions) - snappier default with zero overshoot
     fun <T> spatialSpring(
-        dampingRatio: Float = 0.82f,
-        stiffness: Float = Spring.StiffnessMediumLow
+        dampingRatio: Float = Spring.DampingRatioNoBouncy,
+        stiffness: Float = Spring.StiffnessMedium
     ): SpringSpec<T> = spring(
         dampingRatio = dampingRatio,
         stiffness = stiffness
+    )
+
+    // Spatial tween spec for faster, deterministic layout transitions
+    fun <T> spatialTween(
+        durationMillis: Int = DurationShort4,
+        easing: Easing = EmphasizedDecelerate
+    ): TweenSpec<T> = tween(
+        durationMillis = durationMillis,
+        easing = easing
     )
 
     val SpatialSpringFloat: SpringSpec<Float> = spatialSpring()
@@ -85,15 +94,15 @@ object MiraMotion {
         repeatMode = RepeatMode.Restart
     )
 
-    // Transitions
+    // Transitions - fast, fluid tweens without heavy physics oscillations
     val AccordionExpand: EnterTransition = expandVertically(
-        animationSpec = spring(stiffness = Spring.StiffnessMediumLow)
+        animationSpec = tween(durationMillis = DurationShort4, easing = EmphasizedDecelerate)
     ) + fadeIn(
         animationSpec = tween(durationMillis = DurationShort4, easing = EmphasizedDecelerate)
     )
 
     val AccordionCollapse: ExitTransition = shrinkVertically(
-        animationSpec = spring(stiffness = Spring.StiffnessMediumLow)
+        animationSpec = tween(durationMillis = DurationShort3, easing = EmphasizedAccelerate)
     ) + fadeOut(
         animationSpec = tween(durationMillis = DurationShort3, easing = EmphasizedAccelerate)
     )

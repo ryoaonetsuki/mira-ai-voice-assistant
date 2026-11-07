@@ -1,9 +1,5 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.DeleteOutline
-import androidx.compose.material.icons.rounded.Html
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -13,9 +9,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.ryoaonetsuki.mira.R
 import io.github.ryoaonetsuki.mira.backend.ApiKeyResolver
 import io.github.ryoaonetsuki.mira.backend.KeySource
 import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
@@ -69,7 +67,7 @@ fun CodeProjectsScreen(
                 title = { Text("Websites & Code Projects", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(painter = painterResource(id = R.drawable.ic_fluent_arrow_left_24_regular), contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -199,7 +197,7 @@ fun CodeProjectsScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                Icon(Icons.Rounded.Html, contentDescription = null, tint = palette.primary, modifier = Modifier.size(28.dp))
+                                Icon(painter = painterResource(id = R.drawable.ic_fluent_code_24_regular), contentDescription = null, tint = palette.primary, modifier = Modifier.size(28.dp))
                                 Spacer(modifier = Modifier.width(12.dp))
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
@@ -224,7 +222,7 @@ fun CodeProjectsScreen(
                                     proj.dir.deleteRecursively()
                                     refreshProjects()
                                 }) {
-                                    Icon(Icons.Rounded.DeleteOutline, contentDescription = "Delete", tint = palette.textSecondary)
+                                    Icon(painter = painterResource(id = R.drawable.ic_fluent_delete_24_regular), contentDescription = "Delete", tint = palette.textSecondary)
                                 }
                             }
                         }

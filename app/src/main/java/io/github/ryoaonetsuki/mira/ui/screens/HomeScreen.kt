@@ -279,10 +279,12 @@ private fun HomeBottomNavBar(
         }
     }
 
-    val micButtonGradient = if (isLive) {
-        Brush.verticalGradient(listOf(Color(0xFFEF4444), Color(0xFFDC2626)))
-    } else {
-        Brush.verticalGradient(listOf(Color(0xFF22D3EE), Color(0xFF8B5CF6)))
+    val micButtonGradient = remember(palette.primary, palette.secondary, isLive) {
+        if (isLive) {
+            Brush.verticalGradient(listOf(Color(0xFFEF4444), Color(0xFFDC2626)))
+        } else {
+            Brush.verticalGradient(listOf(palette.primary, palette.secondary))
+        }
     }
 
     Box(
@@ -293,7 +295,7 @@ private fun HomeBottomNavBar(
     ) {
         Surface(
             color = palette.surface.copy(alpha = 0.97f),
-            shadowElevation = 12.dp,
+            shadowElevation = 6.dp,
             shape = RoundedCornerShape(30.dp),
             border = BorderStroke(1.dp, palette.borderSubtle.copy(alpha = 0.6f)),
             modifier = Modifier.fillMaxWidth()
@@ -331,7 +333,7 @@ private fun HomeBottomNavBar(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
                         .size(56.dp)
-                        .shadow(elevation = 8.dp, shape = CircleShape)
+                        .shadow(elevation = 4.dp, shape = CircleShape)
                         .clip(CircleShape)
                         .background(micButtonGradient)
                         .clickable {
@@ -393,11 +395,10 @@ private fun BottomNavItem(
 ) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
         modifier = Modifier
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(10.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 4.dp)
+            .padding(horizontal = 8.dp, vertical = 6.dp)
     ) {
         Icon(
             painter = painterResource(id = if (selected) filledIcon else regularIcon),
@@ -405,23 +406,12 @@ private fun BottomNavItem(
             tint = if (selected) palette.primary else palette.textSecondary,
             modifier = Modifier.size(22.dp)
         )
-        Spacer(modifier = Modifier.height(2.dp))
+        Spacer(modifier = Modifier.height(3.dp))
         Text(
             text = label,
             fontSize = 10.sp,
             color = if (selected) palette.primary else palette.textSecondary,
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
         )
-        Spacer(modifier = Modifier.height(2.dp))
-        if (selected) {
-            Box(
-                modifier = Modifier
-                    .size(width = 4.dp, height = 2.dp)
-                    .clip(RoundedCornerShape(1.dp))
-                    .background(palette.primary)
-            )
-        } else {
-            Spacer(modifier = Modifier.height(2.dp))
-        }
     }
 }

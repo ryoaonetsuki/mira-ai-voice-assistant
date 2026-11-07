@@ -52,6 +52,7 @@ class GeminiLiveClient(
     val model: String = LIVE_MODEL_DEFAULT,
     val language: String = "Bangla (Bengali)",
     val storedResumptionHandle: String? = null,
+    val useRelay: Boolean = true,
     private val listener: LiveEventsListener
 ) {
     interface LiveEventsListener {
@@ -148,7 +149,9 @@ class GeminiLiveClient(
         listener.onConnecting(model)
         LiveVoiceDiagnostics.updateStage("CONNECTING")
 
-        Log.i(TAG, "MIRA_LIVE_VOICE: WS connecting to $LIVE_WS_URL (header auth, no key logged)")
+        val targetUrl = if (useRelay) RELAY_WS_URL else LIVE_WS_URL
+        val headerName = if (useRelay) RelayLiveClient.HEADER_MIRA_KEY else "x-goog-api-key"
+        Log.i(TAG, "MIRA_LIVE_VOICE: WS connecting to $targetUrl (routing=${if (useRelay) "RELAY" else "DIRECT"}, no key logged)")
 
         // Connect timeout watchdog (20s)
         connectTimeoutJob?.cancel()
@@ -162,8 +165,8 @@ class GeminiLiveClient(
         }
 
         val request = Request.Builder()
-            .url(LIVE_WS_URL)
-            .addHeader("x-goog-api-key", currentKey)
+            .url(targetUrl)
+            .addHeader(headerName, currentKey)
             .build()
 
         webSocket = httpClient.newWebSocket(request, createWebSocketListener())
@@ -641,6 +644,7 @@ class GeminiLiveClient(
     companion object {
         const val TAG = "MIRA_LIVE_VOICE"
         const val LIVE_WS_URL = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
+        const val RELAY_WS_URL = RelayLiveClient.RELAY_WS_URL
         const val LIVE_MODEL_DEFAULT = "models/gemini-3.8-live"
 
         const val WS_CONNECT_TIMEOUT_MS = 20_000L

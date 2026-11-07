@@ -1,8 +1,7 @@
 package io.github.ryoaonetsuki.mira.ui.screens.settings
 
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.ui.res.painterResource
+import io.github.ryoaonetsuki.mira.R
 import android.content.Intent
 import android.provider.Settings
 import androidx.compose.foundation.background
@@ -49,7 +48,7 @@ fun MessagesSettingsScreen(
                 title = { Text("Messages & WhatsApp", fontWeight = FontWeight.Bold, color = palette.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = palette.textPrimary)
+                        Icon(painter = painterResource(id = R.drawable.ic_fluent_arrow_left_24_regular), contentDescription = "Back", tint = palette.textPrimary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.background)
@@ -89,7 +88,7 @@ fun MessagesSettingsScreen(
                 MiraCard(modifier = Modifier.fillMaxWidth()) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
-                            imageVector = Icons.Rounded.CheckCircle,
+                            painter = painterResource(id = R.drawable.ic_fluent_checkmark_circle_24_filled),
                             contentDescription = null,
                             tint = Color(0xFF10B981),
                             modifier = Modifier.size(24.dp)

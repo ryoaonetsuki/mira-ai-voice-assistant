@@ -9,7 +9,6 @@ import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
-import android.speech.tts.TextToSpeech
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
@@ -72,14 +71,6 @@ class MicService : Service() {
     private var connectorJob: Job? = null
     private var liveSearchJob: Job? = null
     private var connectingWatchdogJob: Job? = null
-
-    // Legacy Fallback voice mode & session (unreachable unless explicitly enabled)
-    private var androidTts: TextToSpeech? = null
-    private var isFallbackMode: Boolean
-        get() = _isFallbackMode.value
-        set(value) {
-            _isFallbackMode.value = value
-        }
 
     private var cachedVoiceName: String = "Aoede"
     private var cachedLanguage: String = "Bangla (Bengali)"
@@ -267,7 +258,6 @@ class MicService : Service() {
         _lastVoiceDiagnostic.value = null
         _audioChunksSent.value = 0L
         _audioChunksReceived.value = 0L
-        _isFallbackMode.value = false
         _isReconnecting.value = false
         _reconnectAttempt.value = 0
         _micAmplitude.value = 0f
@@ -751,13 +741,6 @@ class MicService : Service() {
         sessionManager = null
         activeSessionManager = null
 
-        try {
-            androidTts?.stop()
-            androidTts?.shutdown()
-        } catch (_: Exception) {}
-        androidTts = null
-
-        isFallbackMode = false
         _isReconnecting.value = false
         _reconnectAttempt.value = 0
         _audioChunksSent.value = 0L
@@ -808,9 +791,6 @@ class MicService : Service() {
 
         private val _voiceStage = MutableStateFlow(VoiceStage.IDLE)
         val voiceStage: StateFlow<VoiceStage> = _voiceStage.asStateFlow()
-
-        private val _isFallbackMode = MutableStateFlow(false)
-        val isFallbackMode: StateFlow<Boolean> = _isFallbackMode.asStateFlow()
 
         private val _isReconnecting = MutableStateFlow(false)
         val isReconnecting: StateFlow<Boolean> = _isReconnecting.asStateFlow()

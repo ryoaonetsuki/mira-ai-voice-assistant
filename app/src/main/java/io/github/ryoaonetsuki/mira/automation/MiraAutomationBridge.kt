@@ -81,7 +81,7 @@ class MiraAutomationBridge(
             think = thinkLambda
         )
         activeExecutor = executor
-        try {
+        return try {
             val result = executor.executeGoal(goal)
             AutomationResult(
                 status = result.status,

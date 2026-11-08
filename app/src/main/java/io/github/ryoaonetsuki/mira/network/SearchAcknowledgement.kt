@@ -22,7 +22,20 @@ object SearchAcknowledgement {
         "id" to "Sebentar, saya cari dan beri tahu",
         "vi" to "Đợi một chút, để tôi tìm rồi nói cho bạn",
         "th" to "รอสักครู่ เดี๋ยวฉันค้นหาแล้วบอก",
-        "ta" to "ஒரு நிமிடம், தேடிச் சொல்கிறேன்"
+        "ta" to "ஒரு நிமிடம், தேடிச் சொல்கிறேன்",
+        "te" to "ఒక్క నిమిషం, నేను వెతికి చెబుతాను",
+        "mr" to "एक मिनिट, मी शोधून सांगते",
+        "gu" to "એક મિનિટ, હું શોધીને કહું છું",
+        "pa" to "ਇੱਕ ਮਿੰਟ, ਮੈਂ ਖੋਜ ਕਰਕੇ ਦੱਸਦੀ ਹਾਂ",
+        "ml" to "ഒരു നിമിഷം, ഞാൻ തിരഞ്ഞു പറയാം",
+        "kn" to "ಒಂದು ನಿಮಿಷ, ನಾನು ಹುಡುಕಿ ಹೇಳುತ್ತೇನೆ",
+        "it" to "Un momento, cerco e ti dico",
+        "nl" to "Een ogenblik, ik zoek het even op",
+        "pl" to "Chwileczkę, poszukam i powiem",
+        "sv" to "Ett ögonblick, jag ska söka och berätta",
+        "uk" to "Хвилинку, я пошукаю і скажу",
+        "el" to "Ένα λεπτό, θα ψάξω και θα σας πω",
+        "zh" to "请稍等，我为您搜索一下"
     )
 
     const val DEFAULT_PHRASE = "One moment, let me search and tell you"

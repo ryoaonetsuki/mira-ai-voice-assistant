@@ -137,9 +137,9 @@ class AecLifecycleTest {
     }
 
     @Test
-    fun testNativeSpeexAecEngine_ZeroHandleIsSafeNoOp() {
-        // NativeSpeexAecEngine with 0 handle (as set after destroy) must be a safe no-op without JNI calls
-        val engine = NativeSpeexAecEngine(0L, 160)
+    fun testNativeWebRtcAec3Engine_ZeroHandleIsSafeNoOp() {
+        // NativeWebRtcAec3Engine with 0 handle (as set after destroy) must be a safe no-op without JNI calls
+        val engine = NativeWebRtcAec3Engine(0L, 160)
         val nearEnd = ShortArray(160) { (it * 10).toShort() }
         val farEnd = ShortArray(160)
         val out = ShortArray(160)
@@ -156,35 +156,29 @@ class AecLifecycleTest {
     }
 
     @Test
-    fun testNativeSpeexContextWrapper_SharedLockSynchronizesReleaseAndProcess() {
-        val wrapper = NativeSpeexContextWrapper(0L)
-        val engine = NativeSpeexAecEngine(wrapper, 160)
-        val resampler = NativeSpeexResampler(wrapper)
+    fun testNativeWebRtcContextWrapper_SharedLockSynchronizesReleaseAndProcess() {
+        val wrapper = NativeWebRtcContextWrapper(0L)
+        val engine = NativeWebRtcAec3Engine(wrapper, 160)
 
         assertEquals(0L, engine.nativeHandle)
-        assertEquals(0L, resampler.nativeHandle)
 
-        // process and resample with zero handle are safe no-ops
+        // process with zero handle is a safe no-op
         val near = ShortArray(160) { 1 }
         val out = ShortArray(160)
         engine.process(near, ShortArray(160), out, 160)
         assertEquals(1.toShort(), out[0])
 
-        val resampled = resampler.resample(ShortArray(160), 24000, 16000)
-        assertEquals(0, resampled.size)
-
         // release is idempotent
         engine.release()
-        resampler.release()
         wrapper.release()
         assertEquals(0L, wrapper.handle)
     }
 
     @Test
     fun testConcurrentProcessAndRelease_DoesNotCrash() {
-        val wrapper = NativeSpeexContextWrapper(0L)
-        val engine = NativeSpeexAecEngine(wrapper, 160)
-        val resampler = NativeSpeexResampler(wrapper)
+        val wrapper = NativeWebRtcContextWrapper(0L)
+        val engine = NativeWebRtcAec3Engine(wrapper, 160)
+        val resampler = LinearAudioResampler()
 
         var error: Throwable? = null
         val threads = mutableListOf<Thread>()

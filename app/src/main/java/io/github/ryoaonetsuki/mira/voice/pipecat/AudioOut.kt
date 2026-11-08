@@ -79,15 +79,21 @@ internal class AudioOut(
             try {
                 track.play()
 
-                val measured = try {
-                    val method = AudioTrack::class.java.getMethod("getLatency")
-                    ((method.invoke(track) as? Int) ?: 120).coerceIn(0, 300)
-                } catch (_: Throwable) {
-                    120
+                fun measureLatency(): Int {
+                    return try {
+                        val method = AudioTrack::class.java.getMethod("getLatency")
+                        val lat = (method.invoke(track) as? Int) ?: 120
+                        if (lat <= 0) 120 else lat.coerceIn(40, 300)
+                    } catch (_: Throwable) {
+                        120
+                    }
                 }
-                playbackLatencyMs = measured
-                Log.i(TAG, "AudioTrack output latency measured: $playbackLatencyMs ms")
+
+                playbackLatencyMs = measureLatency()
+                Log.i(TAG, "AudioTrack output latency initial measurement: $playbackLatencyMs ms")
                 onLatencyMeasured?.invoke(playbackLatencyMs)
+
+                var firstChunkWritten = false
 
                 while (true) {
                     val item = synchronized(queueLock) {
@@ -114,6 +120,16 @@ internal class AudioOut(
                         }
 
                         writePtr += writeRes
+                    }
+
+                    if (!firstChunkWritten) {
+                        firstChunkWritten = true
+                        val refined = measureLatency()
+                        if (refined != playbackLatencyMs) {
+                            playbackLatencyMs = refined
+                            Log.i(TAG, "AudioTrack output latency refined after write: $playbackLatencyMs ms")
+                            onLatencyMeasured?.invoke(playbackLatencyMs)
+                        }
                     }
                 }
             } catch (e: Exception) {

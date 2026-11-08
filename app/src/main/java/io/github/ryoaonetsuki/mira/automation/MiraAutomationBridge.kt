@@ -6,7 +6,10 @@ import io.github.ryoaonetsuki.mira.automation.agent.ScreenAutomationService
 import io.github.ryoaonetsuki.mira.automation.agent.SkillMemoryService
 import io.github.ryoaonetsuki.mira.automation.agent.TaskExecutor
 import io.github.ryoaonetsuki.mira.automation.agent.TaskStatus
+import io.github.ryoaonetsuki.mira.backend.ApiKeyResolver
+import io.github.ryoaonetsuki.mira.backend.KeySource
 import io.github.ryoaonetsuki.mira.data.local.entities.ChatMessageEntity
+import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
 import io.github.ryoaonetsuki.mira.network.GeminiRestClient
 
 data class AutomationResult(
@@ -94,6 +97,23 @@ class MiraAutomationBridge(
     }
 
     companion object {
+        @Volatile
+        private var instance: MiraAutomationBridge? = null
+
+        fun getInstance(context: Context): MiraAutomationBridge {
+            return instance ?: synchronized(this) {
+                instance ?: MiraAutomationBridge(context.applicationContext) {
+                    val appContext = context.applicationContext
+                    val securePrefs = SecurePreferences(appContext)
+                    val resolver = ApiKeyResolver(appContext)
+                    when (val keySource = resolver.resolveKey()) {
+                        is KeySource.UserKey -> keySource.key
+                        else -> securePrefs.getGeminiApiKey() ?: ""
+                    }
+                }.also { instance = it }
+            }
+        }
+
         private val INTENT_PATTERNS = listOf(
             Regex("""\bplay\s+.+\s+on\s+(youtube|spotify|ইউটিউব|স্পটিফাই)\b""", RegexOption.IGNORE_CASE),
             Regex("""\bmessage\s+.+\s+on\s+(whatsapp|মেসেজ|হোয়াটসঅ্যাপ)\b""", RegexOption.IGNORE_CASE),

@@ -112,7 +112,7 @@ private data class ParsedFunctionCall(
  * - Surfaces goAway (timeLeft) rather than only logging.
  * - Surfaces setupComplete.
  * - Surfaces inputAudioTranscription and outputAudioTranscription.
- * - Configurable endpointUrl and headers map (Direct Google API vs Cloudflare Relay).
+ * - Direct Google API Gemini Live WebSocket endpoint.
  * - BYOK security: NEVER logs API keys or raw session resumption handles to logcat.
  */
 class MiraGeminiClient private constructor(

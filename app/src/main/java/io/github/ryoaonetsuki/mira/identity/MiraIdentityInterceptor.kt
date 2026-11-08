@@ -94,14 +94,28 @@ object MiraIdentityInterceptor {
      * @param userQuery The query text from user
      * @param userLanguage The current user language setting (defaults to Bangla if unset)
      * @param forVoice True when invoked from voice service (words only, no URLs); false for chat (clickable markdown link)
+     * @param lastModelTranscript The latest transcript spoken by the model (for echo rejection)
      */
     fun getCannedResponse(
         userQuery: String,
         userLanguage: String? = null,
-        forVoice: Boolean = false
+        forVoice: Boolean = false,
+        lastModelTranscript: String? = null
     ): String? {
-        val lower = userQuery.trim().lowercase(Locale.ROOT)
-        if (lower.isBlank()) return null
+        val trimmed = userQuery.trim()
+        if (trimmed.isBlank()) return null
+        val lower = trimmed.lowercase(Locale.ROOT)
+        // Strip punctuation-only inputs
+        val lettersOrDigits = lower.filter { it.isLetterOrDigit() }
+        if (lettersOrDigits.isEmpty()) return null
+
+        // Interceptor guard: Never fire if userQuery is an echo of the model's own words
+        if (!lastModelTranscript.isNullOrBlank()) {
+            val modelLower = lastModelTranscript.trim().lowercase(Locale.ROOT)
+            if (modelLower == lower || modelLower.contains(lower) || lower.contains(modelLower)) {
+                return null
+            }
+        }
 
         val isBangla = detectIsBangla(userQuery, userLanguage)
 

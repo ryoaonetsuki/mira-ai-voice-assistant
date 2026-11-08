@@ -176,25 +176,28 @@ class EchoRegressionTest {
         val pipeline = TestFramePipeline(echoGuardEnabled = true)
 
         // 1. Mira finishes a loud sentence chunk at t = 1000ms: bot level = 0.35f
+        // Active until 1000 + 100 + 250 = 1350ms (chunk duration + drain margin)
         val botAudioOut = createPcmFrame(0.35f)
         pipeline.onMiraAudioOutChunk(botAudioOut, timestampMs = 1000L)
 
-        // 2. 150ms into pause (t = 1150ms): effective level halved to ~0.175f
+        // 2. Inside drain window (t = 1150ms, t = 1350ms): effective level stays at full 0.35f (no premature decay)
         val effective150 = pipeline.router.getEffectiveBotLevel(1150L)
-        assertEquals(0.175f, effective150, 0.005f)
+        assertEquals("Effective level must not prematurely decay during drain window", 0.35f, effective150, 0.005f)
 
-        // 3. 350ms into pause (t = 1350ms): pause exceeds 300ms cutoff
-        // Effective bot level has decayed to 0.0f
-        val effective350 = pipeline.router.getEffectiveBotLevel(1350L)
-        assertEquals("Effective level must be 0 after 300ms", 0.0f, effective350, 0.0001f)
+        // 3. 150ms after drain window (t = 1500ms): effective level halved to ~0.175f
+        val effectivePostDrain150 = pipeline.router.getEffectiveBotLevel(1500L)
+        assertEquals(0.175f, effectivePostDrain150, 0.005f)
+
+        // 4. 600ms after drain window (t = 1950ms): pause exceeds 600ms cutoff -> 0.0f
+        val effectiveMaxAge = pipeline.router.getEffectiveBotLevel(1950L)
+        assertEquals("Effective level must be 0 after 600ms cutoff", 0.0f, effectiveMaxAge, 0.0001f)
         assertTrue("isBotTalking is still true during inter-sentence pause", pipeline.router.isBotTalking())
 
-        // 4. User speaks at normal conversational volume (mic RMS = 0.18f)
+        // 5. User speaks at normal conversational volume (mic RMS = 0.18f) after pause
         val normalUserPcm = createPcmFrame(0.18f)
-        val forwarded = pipeline.onMicCaptureFrame(normalUserPcm, timestampMs = 1350L)
+        val forwarded = pipeline.onMicCaptureFrame(normalUserPcm, timestampMs = 1950L)
 
-        // 5. Without decay, threshold would be 0.35 * 1.5 + 0.05 = 0.575f (0.18 < 0.575 -> DROPPED!)
-        // With decay, threshold is 0.0 * 1.5 + 0.05 = 0.05f (0.18 > 0.05 -> FORWARDED!)
+        // 6. With decayed floor 0.05f, 0.18 > 0.05 -> FORWARDED
         assertTrue("Normal user speech during bot pause MUST be forwarded", forwarded)
         assertEquals(1, pipeline.forwardedFrames.size)
         assertEquals(0, pipeline.droppedFrames.size)

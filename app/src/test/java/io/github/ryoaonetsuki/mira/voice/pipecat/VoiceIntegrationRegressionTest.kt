@@ -24,8 +24,7 @@ import org.robolectric.RuntimeEnvironment
  * Verifies:
  * 1. Voice and persona changes take effect on next session start.
  * 2. Direct Google API route generates correct endpoint URL, auth header name, and model.
- * 3. Cloudflare Relay route generates correct relay URL, auth header name, and model.
- * 4. deserializeConnectParams plumbed correctly with voice, language, model, system instruction, and handle.
+ * 3. deserializeConnectParams plumbed correctly with voice, language, model, system instruction, and handle.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -50,8 +49,7 @@ class VoiceIntegrationRegressionTest {
         scope: TestScope,
         voiceName: String = "Aoede",
         language: String = "bn-BD",
-        systemPrompt: String = "You are Mira",
-        useRelay: Boolean = true
+        systemPrompt: String = "You are Mira"
     ): GeminiSessionManager {
         return GeminiSessionManager(
             context = context,
@@ -59,7 +57,6 @@ class VoiceIntegrationRegressionTest {
             voiceName = voiceName,
             language = language,
             systemPrompt = systemPrompt,
-            useRelay = useRelay,
             resumptionStore = store,
             listener = listener,
             externalScope = scope,
@@ -154,26 +151,6 @@ class VoiceIntegrationRegressionTest {
         val modelConfig = directOptions.modelConfig as Value.Object
         assertEquals("models/gemini-3.8-live", (modelConfig.value["model"] as Value.Str).value)
         assertFalse("Direct route must NEVER contain transparent", modelConfig.value.containsKey("transparent"))
-    }
-
-    @Test
-    fun testRelayRouteConfiguration() {
-        val relayOptions = MiraGeminiServiceOptions.forRelay(
-            apiKey = "AIzaSyRelayTestKey",
-            relayUrl = "wss://mira-gemini-live-relay.salman-dev.workers.dev/live",
-            model = "models/gemini-3.8-live",
-            voiceName = "Puck",
-            languageCode = "bn-BD",
-            systemInstructionText = "Relay route test"
-        )
-
-        assertEquals("wss://mira-gemini-live-relay.salman-dev.workers.dev/live", relayOptions.endpointUrl)
-        assertEquals("x-mira-gemini-key", relayOptions.authHeaderName)
-        assertEquals("AIzaSyRelayTestKey", relayOptions.apiKey)
-
-        val modelConfig = relayOptions.modelConfig as Value.Object
-        assertEquals("models/gemini-3.8-live", (modelConfig.value["model"] as Value.Str).value)
-        assertFalse("Relay route must NEVER contain transparent", modelConfig.value.containsKey("transparent"))
     }
 
     @Test

@@ -1,14 +1,17 @@
 package io.github.ryoaonetsuki.mira.notifications
 
+import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import io.github.ryoaonetsuki.mira.MainActivity
+import io.github.ryoaonetsuki.mira.R
 import io.github.ryoaonetsuki.mira.service.MicService
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows
 
 @RunWith(RobolectricTestRunner::class)
 class NotificationActionsTest {
@@ -59,5 +62,27 @@ class NotificationActionsTest {
         val muteIntent = Intent(context, MicService::class.java).apply { action = MicService.ACTION_TOGGLE_MUTE }
         assertEquals(MicService.ACTION_TOGGLE_MUTE, muteIntent.action)
         assertEquals(MicService::class.java.name, muteIntent.component?.className)
+    }
+
+    @Test
+    fun testTaskCompletionNotifier_UsesNewSmallIcon() {
+        val context: Context = RuntimeEnvironment.getApplication()
+        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+        TaskCompletionNotifier.notifyChatReply(context, "Hello from Mira")
+
+        val shadowManager = Shadows.shadowOf(notificationManager)
+        val notif = shadowManager.allNotifications.lastOrNull()
+        assertNotNull("Notification should have been posted", notif)
+        assertEquals(
+            "Task notification must use R.drawable.ic_notification_mira",
+            R.drawable.ic_notification_mira,
+            notif?.icon
+        )
+        assertNotEquals(
+            "Task notification must NOT use old logo_chosen",
+            R.drawable.logo_chosen,
+            notif?.icon
+        )
     }
 }

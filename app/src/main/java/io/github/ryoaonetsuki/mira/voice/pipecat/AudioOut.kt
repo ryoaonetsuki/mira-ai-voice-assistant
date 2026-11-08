@@ -36,7 +36,11 @@ import kotlin.concurrent.thread
 private const val BUFFER_MS = 100
 private const val TAG = "AudioOut"
 
-internal class AudioOut(sampleRateHz: Int, onAudioLevelUpdate: (Float) -> Unit) {
+internal class AudioOut(
+    sampleRateHz: Int,
+    onAudioLevelUpdate: (Float) -> Unit,
+    private val onAudioPlayback: ((ByteArray) -> Unit)? = null
+) {
 
     private val queueLock = Object()
     private val queue = LinkedList<ByteArray?>()
@@ -84,6 +88,7 @@ internal class AudioOut(sampleRateHz: Int, onAudioLevelUpdate: (Float) -> Unit) 
                     }
 
                     onAudioLevelUpdate(calculateAudioLevel(item))
+                    onAudioPlayback?.invoke(item)
 
                     var writePtr = 0
                     while (writePtr < item.size) {

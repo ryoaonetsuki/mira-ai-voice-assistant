@@ -96,6 +96,11 @@ dependencies {
     // Networking
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
+    // Pipecat Core RTVI Client (ROUND 19)
+    implementation("ai.pipecat:client:1.2.0")
+    // KotlinX Serialization JSON for RTVI Value structures
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+
     // Room Database
     implementation("androidx.room:room-runtime:2.7.2")
     implementation("androidx.room:room-ktx:2.7.2")

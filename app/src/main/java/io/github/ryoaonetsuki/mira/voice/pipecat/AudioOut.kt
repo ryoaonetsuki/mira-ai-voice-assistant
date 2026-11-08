@@ -137,8 +137,10 @@ internal class AudioOut(
             } finally {
                 try {
                     track.stop()
-                } catch (_: Exception) {}
-                track.release()
+                } catch (_: Throwable) {}
+                try {
+                    track.release()
+                } catch (_: Throwable) {}
             }
         }
     }

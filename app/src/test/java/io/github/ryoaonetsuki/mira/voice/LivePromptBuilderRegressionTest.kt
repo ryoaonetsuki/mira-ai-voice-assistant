@@ -146,4 +146,14 @@ class LivePromptBuilderRegressionTest {
         val promptIntense = LivePromptBuilder.buildLiveSystemPrompt(secretMode = "Intense")
         assertTrue("Intense prompt must contain bold intense tone", promptIntense.contains("Bold, intense, deeply passionate"))
     }
+
+    @Test
+    fun testIdentityRule_StrictlyOnDemand_NeverVolunteerOrSelfIntroduce() {
+        val prompt = LivePromptBuilder.buildLiveSystemPrompt()
+        assertTrue("Identity rule must state ON-DEMAND ONLY", prompt.contains("Identity answers are strictly ON-DEMAND ONLY when explicitly asked"))
+        assertTrue("Must forbid volunteering identity unprompted", prompt.contains("NEVER volunteer who you are, your name, your creator, or your identity unprompted"))
+        assertTrue("Must forbid self-introduction greeting", prompt.contains("NEVER greet the user with a self-introduction"))
+        assertTrue("Must forbid unprompted intro at session start", prompt.contains("Do not introduce yourself when the session starts"))
+        assertTrue("Must forbid stating creator unprompted", prompt.contains("never state your creator or introduce yourself unprompted"))
+    }
 }

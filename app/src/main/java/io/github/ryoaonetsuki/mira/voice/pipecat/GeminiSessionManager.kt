@@ -46,10 +46,10 @@ interface SessionManagerListener {
 }
 
 /**
- * Internal abstraction over a Pipecat RTVI client session to enable clean unit testing
+ * Abstraction over a Pipecat RTVI client session to enable clean unit testing
  * with fakes without opening real network WebSockets.
  */
-internal interface SessionClient {
+interface SessionClient {
     fun connect(options: MiraGeminiServiceOptions)
     fun disconnect()
     fun release()
@@ -59,7 +59,7 @@ internal interface SessionClient {
     val isClosed: Boolean
 }
 
-internal interface SessionClientFactory {
+interface SessionClientFactory {
     fun createClient(
         context: Context,
         options: MiraGeminiServiceOptions,
@@ -68,7 +68,7 @@ internal interface SessionClientFactory {
     ): SessionClient
 }
 
-internal class DefaultSessionClient(
+class DefaultSessionClient(
     val transport: MiraGeminiLiveTransport,
     val pipecatClient: PipecatClient<MiraGeminiLiveTransport, MiraGeminiServiceOptions>
 ) : SessionClient {
@@ -98,7 +98,7 @@ internal class DefaultSessionClient(
     }
 }
 
-internal class DefaultSessionClientFactory : SessionClientFactory {
+class DefaultSessionClientFactory : SessionClientFactory {
     override fun createClient(
         context: Context,
         options: MiraGeminiServiceOptions,
@@ -136,7 +136,7 @@ class GeminiSessionManager(
     val resumptionStore: SessionResumptionStore,
     val listener: SessionManagerListener,
     private val externalScope: CoroutineScope? = null,
-    internal val clientSessionFactory: SessionClientFactory = DefaultSessionClientFactory()
+    val clientSessionFactory: SessionClientFactory = DefaultSessionClientFactory()
 ) {
     companion object {
         private const val TAG = "GeminiSessionManager"

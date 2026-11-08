@@ -115,4 +115,51 @@ class EchoGateDrainTest {
         )
         assertTrue("Loud user barge-in during drain window must still be forwarded", shouldForwardUser)
     }
+
+    @Test
+    fun testDrainAccumulation_RapidChunksAccumulateDrainWindow() {
+        val router = EchoFrameRouter(echoGuardEnabled = true)
+        router.onBotTalking(true)
+
+        // Chunk 1: 100ms at t = 1000ms. Drain margin = 250ms.
+        // End time without second chunk = 1000 + 100 + 250 = 1350ms.
+        router.onBotAudioLevel(0.5f, timestampMs = 1000L, chunkDurationMs = 100L)
+        assertEquals(1350L, router.getAudioActiveUntilMs())
+
+        // Chunk 2: 100ms at t = 1005ms (rapid burst 5ms later).
+        // Since Chunk 1 plays until 1100ms, Chunk 2 plays from 1100ms to 1200ms.
+        // Drain margin = 250ms, so activeUntil must accumulate to 1200 + 250 = 1450ms!
+        router.onBotAudioLevel(0.5f, timestampMs = 1005L, chunkDurationMs = 100L)
+        assertEquals("Rapid chunks must accumulate playback duration into drain window", 1450L, router.getAudioActiveUntilMs())
+
+        // At t = 1360ms: without accumulation, chunk 1's drain window would have expired (1350ms).
+        // With accumulation, chunk 2 is still draining (until 1450ms)!
+        assertTrue("Bot must still be talking at 1360ms due to accumulated drain", router.isBotTalking(1360L))
+        assertEquals(0.5f, router.getEffectiveBotLevel(1360L), 0.001f)
+    }
+
+    @Test
+    fun testTurnComplete_DrainWindowProtectsTailUntilElapsed() {
+        val router = EchoFrameRouter(echoGuardEnabled = true)
+        router.onBotTalking(true)
+        router.onBotAudioLevel(0.4f, timestampMs = 1000L, chunkDurationMs = 100L)
+        // audioActiveUntil = 1350ms
+
+        // Server signals turn complete at t = 1000ms
+        router.onTurnComplete()
+
+        // 1. During drain at 1050ms: bot is still physically outputting audio
+        assertTrue("isBotTalking must remain true during drain after turnComplete", router.isBotTalking(1050L))
+        val echoBlocked = !router.shouldForward(micRms = 0.20f, nowMs = 1050L)
+        assertTrue("Echo during drain must be blocked after turnComplete", echoBlocked)
+
+        // 2. Loud barge-in still passes during drain
+        val bargeInPassed = router.shouldForward(micRms = 0.85f, nowMs = 1050L)
+        assertTrue("Loud barge-in must pass during drain", bargeInPassed)
+
+        // 3. Beyond drain and decay cutoff (t = 2000ms):
+        assertFalse("isBotTalking must become false after drain has elapsed", router.isBotTalking(2000L))
+        val quietUserPassed = router.shouldForward(micRms = 0.02f, nowMs = 2000L)
+        assertTrue("Quiet user turn must pass unconditionally after drain window", quietUserPassed)
+    }
 }

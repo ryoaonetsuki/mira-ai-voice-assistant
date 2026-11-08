@@ -143,6 +143,9 @@ object MiraIdentityInterceptor {
             lower.contains("ফোন কন্ট্রোল") ||
             lower.contains("ফোন চালাতে") ||
             lower.contains("ফোন অপারেট") ||
+            lower.contains("phone chalate") ||
+            lower.contains("phone chalaite") ||
+            (lower.contains("phone") && (lower.contains("chalate") || lower.contains("chalaite") || lower.contains("operate"))) ||
             (lower.contains("control") && lower.contains("phone"))
         ) {
             return if (isBangla) IdentityProfile.PHONE_CONTROL_BANGLA else IdentityProfile.PHONE_CONTROL_ENGLISH

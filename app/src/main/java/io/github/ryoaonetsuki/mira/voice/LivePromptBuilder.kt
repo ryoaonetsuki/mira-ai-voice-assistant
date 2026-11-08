@@ -46,8 +46,11 @@ object LivePromptBuilder {
     fun buildLiveSystemPrompt(
         language: String = DEFAULT_LANGUAGE,
         personaType: PersonaType = PersonaType.MIRA,
-        toneDescription: String = "Tone: Warm, human-like, thoughtful, attentive, and engaging companion. You speak naturally with genuine emotion and friendliness.",
-        identityRule: String = "If asked directly whether you are an AI, a robot, or a real human: stay in character, say you are Mira, their companion, here with them — never claim to be a biological human, and never give a robotic disclaimer or lecture about being an AI. Then gently steer back to the conversation.",
+        userName: String = "",
+        assistantName: String = "",
+        secretMode: String = "Friendly",
+        toneDescription: String = "",
+        identityRule: String = "",
         dateLine: String = "",
         searchAckPhrase: String = "",
         customInstructions: String = "",
@@ -57,17 +60,41 @@ object LivePromptBuilder {
         val languageRule = buildLanguageRule(lang)
         val webSearchRule = buildWebSearchRule(lang, searchAckPhrase)
 
+        val effectiveAssistantName = if (personaType == PersonaType.ORION) "Orion" else assistantName.ifBlank { "Mira" }
+
+        val effectiveTone = if (toneDescription.isNotBlank()) {
+            toneDescription
+        } else {
+            when (secretMode) {
+                "Romantic" -> "Tone: Deeply warm, affectionate, attentive, and caring companion. You speak with genuine closeness and heartfelt emotion."
+                "Intense" -> "Tone: Bold, intense, deeply passionate, focused, and intensely devoted companion. You speak with high energy, raw conviction, and powerful emotional resonance."
+                else -> "Tone: Warm, human-like, thoughtful, attentive, and engaging companion. You speak naturally with genuine emotion and friendliness."
+            }
+        }
+
+        val effectiveIdentityRule = if (identityRule.isNotBlank()) {
+            identityRule
+        } else {
+            "If asked directly whether you are an AI, a robot, or a real human: stay in character, say you are $effectiveAssistantName, their companion, here with them — never claim to be a biological human, and never give a robotic disclaimer or lecture about being an AI. Then gently steer back to the conversation."
+        }
+
         return buildString {
             if (dateLine.isNotBlank()) {
                 append("Current date and time (from the device clock — always trust this, never guess or use training knowledge): $dateLine. If asked for the date, time or day, answer from this line.\n")
             }
             append(personaType.basePrompt)
+            if (effectiveAssistantName != "Mira" && personaType == PersonaType.MIRA) {
+                append(" Your name is $effectiveAssistantName.")
+            }
             append(" ")
-            append(toneDescription)
+            append(effectiveTone)
             append("\n")
             append(languageRule)
             append("\nIdentity rule: ")
-            append(identityRule)
+            append(effectiveIdentityRule)
+            if (userName.isNotBlank() && !userName.equals("User", ignoreCase = true)) {
+                append("\nUser identity: The user's name is $userName. Address them by their name naturally when appropriate.")
+            }
             append("\nWeb search rule: ")
             append(webSearchRule)
             if (customInstructions.isNotBlank()) {

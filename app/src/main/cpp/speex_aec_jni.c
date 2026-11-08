@@ -24,7 +24,10 @@
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
+#define SPEEX_CTX_MAGIC 0x53504558U // "SPEX"
+
 typedef struct {
+    uint32_t magic;
     SpeexEchoState *echo_state;
     SpeexPreprocessState *prep_state;
     SpeexResamplerState *resampler;
@@ -52,6 +55,7 @@ Java_io_github_ryoaonetsuki_mira_voice_pipecat_SpeexAecNative_nativeCreate(
         return 0;
     }
 
+    ctx->magic = SPEEX_CTX_MAGIC;
     ctx->sample_rate = sampleRate;
     ctx->frame_size = frameSize;
     ctx->filter_length = filterLength;
@@ -104,7 +108,7 @@ Java_io_github_ryoaonetsuki_mira_voice_pipecat_SpeexAecNative_nativeReset(
     (void)env;
     (void)clazz;
     NativeSpeexContext *ctx = (NativeSpeexContext *)(intptr_t)handle;
-    if (!ctx) return;
+    if (!ctx || ctx->magic != SPEEX_CTX_MAGIC) return;
 
     if (ctx->echo_state) {
         speex_echo_state_reset(ctx->echo_state);
@@ -123,7 +127,8 @@ Java_io_github_ryoaonetsuki_mira_voice_pipecat_SpeexAecNative_nativeDestroy(
     (void)env;
     (void)clazz;
     NativeSpeexContext *ctx = (NativeSpeexContext *)(intptr_t)handle;
-    if (!ctx) return;
+    if (!ctx || ctx->magic != SPEEX_CTX_MAGIC) return;
+    ctx->magic = 0; // Invalidate magic before releasing members
 
     if (ctx->prep_state) {
         speex_preprocess_state_destroy(ctx->prep_state);
@@ -153,7 +158,7 @@ Java_io_github_ryoaonetsuki_mira_voice_pipecat_SpeexAecNative_nativeProcess(
 ) {
     (void)clazz;
     NativeSpeexContext *ctx = (NativeSpeexContext *)(intptr_t)handle;
-    if (!ctx || !ctx->echo_state) return -1;
+    if (!ctx || ctx->magic != SPEEX_CTX_MAGIC || !ctx->echo_state) return -1;
     if (!jNearEnd || !jOut || length <= 0) return -1;
 
     jshort *nearEnd = (*env)->GetShortArrayElements(env, jNearEnd, NULL);
@@ -201,7 +206,7 @@ Java_io_github_ryoaonetsuki_mira_voice_pipecat_SpeexAecNative_nativeResample(
 ) {
     (void)clazz;
     NativeSpeexContext *ctx = (NativeSpeexContext *)(intptr_t)handle;
-    if (!ctx || !ctx->resampler) return -1;
+    if (!ctx || ctx->magic != SPEEX_CTX_MAGIC || !ctx->resampler) return -1;
     if (!jIn || !jOut || inLen <= 0 || outCapacity <= 0) return -1;
 
     jshort *inBuf = (*env)->GetShortArrayElements(env, jIn, NULL);

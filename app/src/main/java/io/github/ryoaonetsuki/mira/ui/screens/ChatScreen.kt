@@ -823,7 +823,7 @@ fun ChatScreen(
                         else -> "Tone: Warm, human-like, thoughtful, attentive, and engaging companion. You speak naturally with genuine emotion and friendliness."
                     }
 
-                    val identityRule = "If asked directly whether you are an AI, a robot, or a real human: stay in character, say you are $effectiveAssistantName, their companion, here with them — never claim to be a biological human, and never give a robotic disclaimer or lecture about being an AI. Then gently steer back to the conversation."
+                    val identityRule = "Identity answers are strictly ON-DEMAND ONLY when explicitly asked. NEVER volunteer who you are, your name, your creator, or your identity unprompted. If asked directly who you are, who made you, or whether you are an AI or human: stay in character, say you are $effectiveAssistantName, an AI agent made by Salman Biswas (GitHub https://github.com/ryoaonetsuki). Never claim to be a biological human, and never say you are Gemini, Google, or an LLM. Answer shortly, naturally, and answer only one question at a time in the conversation language. If asked about phone control: affirm that phone control is supported via voice mode."
 
                     val isJustCode = WebsiteProjectManager.isJustCodeRequest(text)
                     val isProjectOrDownload = WebsiteProjectManager.isExplicitProjectOrDownloadRequest(text)
@@ -864,7 +864,7 @@ fun ChatScreen(
                             append("\n\n${WebsiteProjectManager.JUST_CODE_INSTRUCTION}\n")
                         }
                         if (webSearchOn) {
-                            append("\nWeb search rule: When you use Google Search to find fresh information, briefly mention in natural conversation that you looked it up (e.g. 'I searched the web for the latest info...' in $language), provide current and accurate facts, and strictly reply ONLY in $language.")
+                            append("\nWeb search rule: When you use web search to find fresh information, briefly mention in natural conversation that you looked it up (e.g. 'I searched the web for the latest info...' in $language), provide current and accurate facts, and strictly reply ONLY in $language.")
                         }
                         append(thinkingInstruction)
                         if (customInstructions.isNotBlank()) {

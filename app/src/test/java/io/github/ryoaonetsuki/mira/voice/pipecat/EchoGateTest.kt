@@ -20,7 +20,7 @@ class EchoGateTest {
         assertEquals("Ratio should be 1.5f (+3.5 dB safety multiplier)", 1.5f, EchoGate.RATIO, 0.0001f)
         assertEquals("Floor should be 0.05f (5% RMS noise floor)", 0.05f, EchoGate.FLOOR, 0.0001f)
         assertEquals("Half-life should be 150ms", 150L, EchoGate.BOT_LEVEL_HALF_LIFE_MS)
-        assertEquals("Max age cutoff should be 300ms", 300L, EchoGate.BOT_LEVEL_MAX_AGE_MS)
+        assertEquals("Max age cutoff should be 600ms", 600L, EchoGate.BOT_LEVEL_MAX_AGE_MS)
     }
 
     @Test
@@ -211,11 +211,11 @@ class EchoGateTest {
     @Test
     fun testComputeEffectiveBotLevel_OldLevelDecaysToZero() {
         val baseTime = 10000L
-        // Age exactly at cutoff (300ms) -> 0.0f
-        assertEquals(0.0f, EchoGate.computeEffectiveBotLevel(0.40f, baseTime, baseTime + 300L), 0.0001f)
-        // Age well beyond cutoff (350ms, 500ms, 2000ms) -> 0.0f
-        assertEquals(0.0f, EchoGate.computeEffectiveBotLevel(0.40f, baseTime, baseTime + 350L), 0.0001f)
-        assertEquals(0.0f, EchoGate.computeEffectiveBotLevel(0.40f, baseTime, baseTime + 500L), 0.0001f)
+        // Age exactly at cutoff (600ms) -> 0.0f
+        assertEquals(0.0f, EchoGate.computeEffectiveBotLevel(0.40f, baseTime, baseTime + 600L), 0.0001f)
+        // Age well beyond cutoff (650ms, 800ms, 2000ms) -> 0.0f
+        assertEquals(0.0f, EchoGate.computeEffectiveBotLevel(0.40f, baseTime, baseTime + 650L), 0.0001f)
+        assertEquals(0.0f, EchoGate.computeEffectiveBotLevel(0.40f, baseTime, baseTime + 800L), 0.0001f)
         assertEquals(0.0f, EchoGate.computeEffectiveBotLevel(0.40f, baseTime, baseTime + 2000L), 0.0001f)
         // Zero timestamp or zero level -> 0.0f
         assertEquals(0.0f, EchoGate.computeEffectiveBotLevel(0.40f, 0L, baseTime), 0.0001f)
@@ -235,10 +235,10 @@ class EchoGateTest {
             EchoGate.shouldForward(micRms = 0.20f, botLevel = freshEffective, isBotTalking = true, echoGuardEnabled = true)
         )
 
-        // 2. During inter-sentence pause (350ms later, no new chunks arrived, isBotTalking still true)
-        val pauseTime = botChunkTime + 350L
+        // 2. During inter-sentence pause (650ms later, no new chunks arrived, isBotTalking still true)
+        val pauseTime = botChunkTime + 650L
         val decayedEffective = EchoGate.computeEffectiveBotLevel(initialBotLevel, botChunkTime, pauseTime)
-        assertEquals("Decayed effective level during 350ms pause must be 0", 0.0f, decayedEffective, 0.0001f)
+        assertEquals("Decayed effective level during 650ms pause must be 0", 0.0f, decayedEffective, 0.0001f)
 
         // 3. Normal user conversational voice (micRms = 0.20f) easily exceeds the decayed floor (0.05f)
         assertTrue(
@@ -266,14 +266,18 @@ class EchoGateTest {
         assertEquals(0.0f, router.getRawBotLevel(), 0.0001f)
         assertEquals(0.0f, router.getEffectiveBotLevel(), 0.0001f)
 
-        // Bot starts talking and plays audio
+        // Bot starts talking and plays audio (100ms chunk + 250ms drain margin = active until 1350L)
         router.onBotTalking(true)
         router.onBotAudioLevel(0.30f, 1000L)
         assertTrue(router.isBotTalking())
         assertEquals(0.30f, router.getRawBotLevel(), 0.0001f)
+        // Inside drain window: no decay
         assertEquals(0.30f, router.getEffectiveBotLevel(1000L), 0.0001f)
-        assertEquals(0.15f, router.getEffectiveBotLevel(1150L), 0.001f)
-        assertEquals(0.0f, router.getEffectiveBotLevel(1300L), 0.0001f)
+        assertEquals(0.30f, router.getEffectiveBotLevel(1150L), 0.0001f)
+        assertEquals(0.30f, router.getEffectiveBotLevel(1350L), 0.0001f)
+        // After drain window (1350L): decays with 150ms half-life
+        assertEquals(0.15f, router.getEffectiveBotLevel(1500L), 0.001f)
+        assertEquals(0.0f, router.getEffectiveBotLevel(1950L), 0.0001f)
 
         // Interrupted resets state
         router.onInterrupted()

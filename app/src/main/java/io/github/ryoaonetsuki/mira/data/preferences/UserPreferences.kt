@@ -16,14 +16,6 @@ class UserPreferences(private val context: Context) {
         it[KEY_USER_NAME] ?: "User"
     }
 
-    val userGenderFlow: Flow<String> = context.dataStore.data.catch { emitDefaults(it) }.map {
-        it[KEY_USER_GENDER] ?: "Not specified"
-    }
-
-    val userPhoneFlow: Flow<String> = context.dataStore.data.catch { emitDefaults(it) }.map {
-        it[KEY_USER_PHONE] ?: ""
-    }
-
     val personaFlow: Flow<String> = context.dataStore.data.catch { emitDefaults(it) }.map {
         it[KEY_PERSONA] ?: "Mira"
     }
@@ -72,31 +64,17 @@ class UserPreferences(private val context: Context) {
         it[KEY_ORB_STYLE] ?: "Mira Neon"
     }
 
-    val fastListeningFlow: Flow<Boolean> = context.dataStore.data.catch { emitDefaults(it) }.map {
-        it[KEY_FAST_LISTENING] ?: true
-    }
-
     val echoGuardFlow: Flow<Boolean> = context.dataStore.data.catch { emitDefaults(it) }.map {
         it[KEY_ECHO_GUARD] ?: true
-    }
-
-    val startOnBootFlow: Flow<Boolean> = context.dataStore.data.catch { emitDefaults(it) }.map {
-        it[KEY_START_ON_BOOT] ?: false
-    }
-
-
-    val drivingModeFlow: Flow<Boolean> = context.dataStore.data.catch { emitDefaults(it) }.map {
-        it[KEY_DRIVING_MODE] ?: false
-    }
-
-    val sleepTimeoutFlow: Flow<Int> = context.dataStore.data.catch { emitDefaults(it) }.map {
-        it[KEY_SLEEP_TIMEOUT] ?: 5
     }
 
     val autoMemoryFlow: Flow<Boolean> = context.dataStore.data.catch { emitDefaults(it) }.map {
         it[KEY_AUTO_MEMORY] ?: true
     }
 
+    val emailSignatureFlow: Flow<String> = context.dataStore.data.catch { emitDefaults(it) }.map {
+        it[KEY_EMAIL_SIGNATURE] ?: "Sent via Mira AI Voice Assistant"
+    }
 
     val musicAppFlow: Flow<String> = context.dataStore.data.catch { emitDefaults(it) }.map {
         it[KEY_MUSIC_APP] ?: "Spotify"
@@ -122,20 +100,12 @@ class UserPreferences(private val context: Context) {
         it[KEY_CAPTION_VOICE] ?: "Witty, bold and tech-savvy"
     }
 
-    val dailyStoryFlow: Flow<Boolean> = context.dataStore.data.catch { emitDefaults(it) }.map {
-        it[KEY_DAILY_STORY] ?: true
-    }
-
     val webSearchEnabledFlow: Flow<Boolean> = context.dataStore.data.catch { emitDefaults(it) }.map {
         it[KEY_WEB_SEARCH_ENABLED] ?: true
     }
 
     val deepThinkingEnabledFlow: Flow<Boolean> = context.dataStore.data.catch { emitDefaults(it) }.map {
         it[KEY_DEEP_THINKING_ENABLED] ?: false
-    }
-
-    val voiceRoutingFlow: Flow<String> = context.dataStore.data.catch { emitDefaults(it) }.map {
-        it[KEY_VOICE_ROUTING] ?: "RELAY"
     }
 
     val lastConversationIdFlow: Flow<String?> = context.dataStore.data.catch { emitDefaults(it) }.map {
@@ -147,8 +117,6 @@ class UserPreferences(private val context: Context) {
     }
 
     suspend fun setUserName(name: String) = context.dataStore.edit { it[KEY_USER_NAME] = name }
-    suspend fun setUserGender(gender: String) = context.dataStore.edit { it[KEY_USER_GENDER] = gender }
-    suspend fun setUserPhone(phone: String) = context.dataStore.edit { it[KEY_USER_PHONE] = phone }
     suspend fun setPersona(persona: String) = context.dataStore.edit { it[KEY_PERSONA] = persona }
     suspend fun setAssistantName(name: String) = context.dataStore.edit { it[KEY_ASSISTANT_NAME] = name }
     suspend fun setLiveModel(model: String) = context.dataStore.edit { it[KEY_LIVE_MODEL] = model }
@@ -167,22 +135,17 @@ class UserPreferences(private val context: Context) {
     }
     suspend fun setThemePalette(palette: String) = setThemeMode(palette)
     suspend fun setOrbStyle(style: String) = context.dataStore.edit { it[KEY_ORB_STYLE] = style }
-    suspend fun setFastListening(enabled: Boolean) = context.dataStore.edit { it[KEY_FAST_LISTENING] = enabled }
     suspend fun setEchoGuard(enabled: Boolean) = context.dataStore.edit { it[KEY_ECHO_GUARD] = enabled }
-    suspend fun setStartOnBoot(enabled: Boolean) = context.dataStore.edit { it[KEY_START_ON_BOOT] = enabled }
-    suspend fun setDrivingMode(enabled: Boolean) = context.dataStore.edit { it[KEY_DRIVING_MODE] = enabled }
-    suspend fun setSleepTimeout(minutes: Int) = context.dataStore.edit { it[KEY_SLEEP_TIMEOUT] = minutes }
     suspend fun setAutoMemory(enabled: Boolean) = context.dataStore.edit { it[KEY_AUTO_MEMORY] = enabled }
+    suspend fun setEmailSignature(signature: String) = context.dataStore.edit { it[KEY_EMAIL_SIGNATURE] = signature }
     suspend fun setMusicApp(app: String) = context.dataStore.edit { it[KEY_MUSIC_APP] = app }
     suspend fun setFavoriteSong(song: String) = context.dataStore.edit { it[KEY_FAVORITE_SONG] = song }
     suspend fun setWhatsappAutoReply(enabled: Boolean) = context.dataStore.edit { it[KEY_WHATSAPP_AUTO_REPLY] = enabled }
     suspend fun setAutoReplyTemplate(template: String) = context.dataStore.edit { it[KEY_AUTO_REPLY_TEMPLATE] = template }
     suspend fun setUserHandle(handle: String) = context.dataStore.edit { it[KEY_USER_HANDLE] = handle }
     suspend fun setCaptionVoice(voice: String) = context.dataStore.edit { it[KEY_CAPTION_VOICE] = voice }
-    suspend fun setDailyStory(enabled: Boolean) = context.dataStore.edit { it[KEY_DAILY_STORY] = enabled }
     suspend fun setWebSearchEnabled(enabled: Boolean) = context.dataStore.edit { it[KEY_WEB_SEARCH_ENABLED] = enabled }
     suspend fun setDeepThinkingEnabled(enabled: Boolean) = context.dataStore.edit { it[KEY_DEEP_THINKING_ENABLED] = enabled }
-    suspend fun setVoiceRouting(routing: String) = context.dataStore.edit { it[KEY_VOICE_ROUTING] = routing }
     suspend fun setLastConversationId(id: String?) = context.dataStore.edit {
         if (id == null) {
             it.remove(KEY_LAST_CONVERSATION_ID)
@@ -193,8 +156,6 @@ class UserPreferences(private val context: Context) {
 
     companion object {
         private val KEY_USER_NAME = stringPreferencesKey("user_name")
-        private val KEY_USER_GENDER = stringPreferencesKey("user_gender")
-        private val KEY_USER_PHONE = stringPreferencesKey("user_phone")
         private val KEY_PERSONA = stringPreferencesKey("persona")
         private val KEY_ASSISTANT_NAME = stringPreferencesKey("assistant_name")
         private val KEY_LIVE_MODEL = stringPreferencesKey("live_model")
@@ -205,22 +166,17 @@ class UserPreferences(private val context: Context) {
         private val KEY_ADULT_CONFIRMED = booleanPreferencesKey("adult_confirmed")
         private val KEY_THEME_PALETTE = stringPreferencesKey("theme_palette")
         private val KEY_ORB_STYLE = stringPreferencesKey("orb_style")
-        private val KEY_FAST_LISTENING = booleanPreferencesKey("fast_listening")
         private val KEY_ECHO_GUARD = booleanPreferencesKey("echo_guard")
-        private val KEY_START_ON_BOOT = booleanPreferencesKey("start_on_boot")
-        private val KEY_DRIVING_MODE = booleanPreferencesKey("driving_mode")
-        private val KEY_SLEEP_TIMEOUT = intPreferencesKey("sleep_timeout")
         private val KEY_AUTO_MEMORY = booleanPreferencesKey("auto_memory")
+        private val KEY_EMAIL_SIGNATURE = stringPreferencesKey("email_signature")
         private val KEY_MUSIC_APP = stringPreferencesKey("music_app")
         private val KEY_FAVORITE_SONG = stringPreferencesKey("favorite_song")
         private val KEY_WHATSAPP_AUTO_REPLY = booleanPreferencesKey("whatsapp_auto_reply")
         private val KEY_AUTO_REPLY_TEMPLATE = stringPreferencesKey("auto_reply_template")
         private val KEY_USER_HANDLE = stringPreferencesKey("user_handle")
         private val KEY_CAPTION_VOICE = stringPreferencesKey("caption_voice")
-        private val KEY_DAILY_STORY = booleanPreferencesKey("daily_story")
         private val KEY_WEB_SEARCH_ENABLED = booleanPreferencesKey("web_search_enabled")
         private val KEY_DEEP_THINKING_ENABLED = booleanPreferencesKey("deep_thinking_enabled")
-        private val KEY_VOICE_ROUTING = stringPreferencesKey("voice_routing")
         private val KEY_LAST_CONVERSATION_ID = stringPreferencesKey("last_conversation_id")
     }
 }

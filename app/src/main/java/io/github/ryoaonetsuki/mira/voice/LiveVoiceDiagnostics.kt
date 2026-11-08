@@ -42,9 +42,10 @@ data class VoiceDiagnosticsData(
     val lastGoAwayTimestamp: Long? = null,
     val lastStage4TimeoutTimestamp: Long? = null,
     val sessionManagerState: String = "IDLE",
-    // Acoustic Echo Cancellation Diagnostics (ROUND 20)
+    // Acoustic Echo Cancellation Diagnostics (ROUND 20, ROUND 22 Turn 5)
     val aecAvailable: Boolean = false,
     val aecEnabled: Boolean = false,
+    val aecEngine: String = "UNKNOWN",
     val audioMode: String = "MODE_NORMAL"
 )
 
@@ -170,6 +171,10 @@ object LiveVoiceDiagnostics {
 
     fun updateAecState(available: Boolean, enabled: Boolean) {
         _data.value = _data.value.copy(aecAvailable = available, aecEnabled = enabled)
+    }
+
+    fun updateAecEngine(engine: String) {
+        _data.value = _data.value.copy(aecEngine = engine)
     }
 
     // Audio Mode & Focus Diagnostics (ROUND 20 Turn 4b)

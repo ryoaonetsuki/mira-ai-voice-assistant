@@ -145,8 +145,8 @@ class LiveVoiceDiagnosticsTest {
     fun testAecEngineDiagnosticsStateAndReset() {
         assertEquals("UNKNOWN", LiveVoiceDiagnostics.data.value.aecEngine)
 
-        LiveVoiceDiagnostics.updateAecEngine("NATIVE_SPEEX")
-        assertEquals("NATIVE_SPEEX", LiveVoiceDiagnostics.data.value.aecEngine)
+        LiveVoiceDiagnostics.updateAecEngine("NATIVE_WEBRTC_AEC3")
+        assertEquals("NATIVE_WEBRTC_AEC3", LiveVoiceDiagnostics.data.value.aecEngine)
 
         LiveVoiceDiagnostics.updateAecEngine("PASSTHROUGH_FALLBACK")
         assertEquals("PASSTHROUGH_FALLBACK", LiveVoiceDiagnostics.data.value.aecEngine)

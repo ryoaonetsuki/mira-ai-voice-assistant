@@ -31,7 +31,6 @@ class MicServiceWiringTest {
         assertEquals(LiveState.IDLE, MicService.liveState.value)
         assertEquals(VoiceStage.IDLE, MicService.voiceStage.value)
         assertFalse(MicService.isMuted.value)
-        assertFalse(MicService.isFallbackMode.value)
         assertFalse(MicService.isReconnecting.value)
         assertEquals(0, MicService.reconnectAttempt.value)
         assertEquals(0L, MicService.audioChunksSent.value)

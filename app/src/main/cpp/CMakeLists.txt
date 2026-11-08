@@ -5,7 +5,7 @@ add_definitions(
     -DFLOATING_POINT
     -DUSE_SMALLFT
     -DVAR_ARRAYS
-    -DEXPORT=__attribute__((visibility("default")))
+    -DEXPORT=
 )
 
 include_directories(

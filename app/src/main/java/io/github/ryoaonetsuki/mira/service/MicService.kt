@@ -57,6 +57,78 @@ enum class VoiceStage(val label: String) {
 }
 
 /**
+ * Factory for constructing the ongoing CallStyle notification for Mira voice sessions.
+ * Extracted from MicService to allow direct unit testing without instantiating the full Service lifecycle.
+ */
+internal object CallNotificationFactory {
+    const val CHANNEL_ID = "mira_call_channel"
+
+    fun build(
+        context: Context,
+        isMuted: Boolean = false,
+        isReconnecting: Boolean = false,
+        liveState: LiveState = LiveState.IDLE
+    ): Notification {
+        val stopIntent = Intent(context, MicService::class.java).apply { action = MicService.ACTION_STOP }
+        val stopPendingIntent = PendingIntent.getService(
+            context, 1, stopIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val muteIntent = Intent(context, MicService::class.java).apply { action = MicService.ACTION_TOGGLE_MUTE }
+        val mutePendingIntent = PendingIntent.getService(
+            context, 2, muteIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val openAppIntent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        val openAppPendingIntent = PendingIntent.getActivity(
+            context, 0, openAppIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val muteActionTitle = if (isMuted) "Unmute" else "Mute"
+        val muteIcon = if (isMuted) android.R.drawable.ic_lock_silent_mode_off else android.R.drawable.ic_lock_silent_mode
+
+        val statusText = when {
+            isMuted -> "Microphone muted • Tap Unmute to speak"
+            isReconnecting -> "Reconnecting to Mira Live..."
+            liveState == LiveState.CONNECTING -> "Connecting to Mira Live..."
+            liveState == LiveState.SPEAKING -> "Mira is speaking..."
+            liveState == LiveState.LISTENING -> "Listening • Mira Live call active"
+            else -> "Live voice call active"
+        }
+
+        val miraPerson = Person.Builder()
+            .setName("Mira")
+            .setIcon(IconCompat.createWithResource(context, R.drawable.logo_chosen))
+            .build()
+
+        val callStyle = NotificationCompat.CallStyle.forOngoingCall(miraPerson, stopPendingIntent)
+
+        return NotificationCompat.Builder(context, CHANNEL_ID)
+            .setContentTitle("Mira AI Voice Call")
+            .setContentText(statusText)
+            .setSmallIcon(R.drawable.ic_notification_mira)
+            .setContentIntent(openAppPendingIntent)
+            .setStyle(callStyle)
+            .addAction(muteIcon, muteActionTitle, mutePendingIntent)
+            .setOngoing(true)
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setOnlyAlertOnce(true)
+            .build()
+    }
+
+    fun buildCallNotification(
+        context: Context,
+        isMuted: Boolean = false,
+        isReconnecting: Boolean = false,
+        liveState: LiveState = LiveState.IDLE
+    ): Notification = build(context, isMuted, isReconnecting, liveState)
+}
+
+/**
  * Foreground service managing Mira voice sessions.
  *
  * ROUND 19 Architecture:
@@ -217,57 +289,12 @@ class MicService : Service() {
     }
 
     fun buildCallNotification(): Notification {
-        val stopIntent = Intent(this, MicService::class.java).apply { action = ACTION_STOP }
-        val stopPendingIntent = PendingIntent.getService(
-            this, 1, stopIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        return CallNotificationFactory.build(
+            context = this,
+            isMuted = _isMuted.value,
+            isReconnecting = _isReconnecting.value,
+            liveState = _liveState.value
         )
-
-        val muteIntent = Intent(this, MicService::class.java).apply { action = ACTION_TOGGLE_MUTE }
-        val mutePendingIntent = PendingIntent.getService(
-            this, 2, muteIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val openAppIntent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
-        }
-        val openAppPendingIntent = PendingIntent.getActivity(
-            this, 0, openAppIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val isMutedState = _isMuted.value
-        val isReconnectingState = _isReconnecting.value
-        val muteActionTitle = if (isMutedState) "Unmute" else "Mute"
-        val muteIcon = if (isMutedState) android.R.drawable.ic_lock_silent_mode_off else android.R.drawable.ic_lock_silent_mode
-
-        val statusText = when {
-            isMutedState -> "Microphone muted • Tap Unmute to speak"
-            isReconnectingState -> "Reconnecting to Mira Live..."
-            _liveState.value == LiveState.CONNECTING -> "Connecting to Mira Live..."
-            _liveState.value == LiveState.SPEAKING -> "Mira is speaking..."
-            _liveState.value == LiveState.LISTENING -> "Listening • Mira Live call active"
-            else -> "Live voice call active"
-        }
-
-        val miraPerson = Person.Builder()
-            .setName("Mira")
-            .setIcon(IconCompat.createWithResource(this, R.drawable.logo_chosen))
-            .build()
-
-        val callStyle = NotificationCompat.CallStyle.forOngoingCall(miraPerson, stopPendingIntent)
-
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Mira AI Voice Call")
-            .setContentText(statusText)
-            .setSmallIcon(R.drawable.ic_notification_mira)
-            .setContentIntent(openAppPendingIntent)
-            .setStyle(callStyle)
-            .addAction(muteIcon, muteActionTitle, mutePendingIntent)
-            .setOngoing(true)
-            .setCategory(NotificationCompat.CATEGORY_CALL)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setOnlyAlertOnce(true)
-            .build()
     }
 
     private fun startForegroundWithNotification() {
@@ -821,7 +848,7 @@ class MicService : Service() {
 
     companion object {
         private const val TAG = "MIRA_LIVE_VOICE"
-        private const val CHANNEL_ID = "mira_call_channel"
+        private const val CHANNEL_ID = CallNotificationFactory.CHANNEL_ID
         private const val MIC_CHANNEL_ID = "mira_mic_channel"
         private const val NOTIFICATION_ID = 1001
 

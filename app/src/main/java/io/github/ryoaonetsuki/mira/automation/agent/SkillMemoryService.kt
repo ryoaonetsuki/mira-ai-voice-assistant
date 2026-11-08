@@ -140,6 +140,13 @@ class SkillMemoryService(
     val cleaned = steps.filter { it.action != TaskStep.ACTION_DONE && it.isSupported }
     val normalized = Skill.normalize(goal)
 
+    if (cleaned.isEmpty()) {
+      logWarning("saveOrUpdate skipped: no valid steps provided for goal '$goal'")
+      val existingIndex = skills.indexOfFirst { it.normalizedGoal == normalized }
+      if (existingIndex >= 0) return skills[existingIndex]
+      return Skill(goal = goal, steps = emptyList())
+    }
+
     val existingIndex = skills.indexOfFirst { it.normalizedGoal == normalized }
     if (existingIndex >= 0) {
       val existing = skills[existingIndex]

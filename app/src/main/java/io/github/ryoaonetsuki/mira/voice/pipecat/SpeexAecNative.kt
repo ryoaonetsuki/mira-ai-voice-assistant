@@ -15,7 +15,11 @@ internal object SpeexAecNative {
         System.loadLibrary("mira_speex_aec")
         true
     } catch (t: Throwable) {
-        Log.w(TAG, "Native library mira_speex_aec could not be loaded: ${t.message}")
+        try {
+            Log.w(TAG, "Native library mira_speex_aec could not be loaded: ${t.message}")
+        } catch (_: Throwable) {
+            // Android Log stub on host JVM
+        }
         false
     }
 

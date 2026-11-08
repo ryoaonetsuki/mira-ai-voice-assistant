@@ -50,8 +50,14 @@ import ai.pipecat.client.types.Value
 import ai.pipecat.client.utils.ThreadRef
 import android.annotation.SuppressLint
 import android.content.Context
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
+import io.github.ryoaonetsuki.mira.voice.LiveVoiceDiagnostics
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
@@ -119,11 +125,62 @@ class MiraGeminiLiveTransport(
 
     private var state = TransportState.Disconnected
     private val appContext = androidContext.applicationContext
+    private val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
     private lateinit var transportContext: TransportContext
     private lateinit var thread: ThreadRef
 
     private var client: MiraGeminiClient? = null
+    private var audioFocusRequest: AudioFocusRequest? = null
+    private val isAudioModeInCommunication = AtomicBoolean(false)
+
+    internal fun acquireCommunicationMode() {
+        if (isAudioModeInCommunication.compareAndSet(false, true)) {
+            try {
+                audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+                val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+                    .setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .build()
+                    )
+                    .setOnAudioFocusChangeListener({ focusChange ->
+                        Log.i(TAG, "Audio focus changed: $focusChange")
+                    }, Handler(Looper.getMainLooper()))
+                    .build()
+                audioFocusRequest = focusRequest
+
+                val focusResult = audioManager.requestAudioFocus(focusRequest)
+                val focusStatus = if (focusResult == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+                    "granted"
+                } else {
+                    Log.w(TAG, "Audio focus denied (result: $focusResult)")
+                    "denied"
+                }
+                Log.i(TAG, "Audio mode set to MODE_IN_COMMUNICATION, focus requested/$focusStatus")
+                LiveVoiceDiagnostics.updateAudioMode("MODE_IN_COMMUNICATION")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error acquiring communication mode / audio focus", e)
+            }
+        }
+    }
+
+    internal fun restoreNormalAudioMode() {
+        if (isAudioModeInCommunication.compareAndSet(true, false)) {
+            try {
+                audioFocusRequest?.let { req ->
+                    audioManager.abandonAudioFocusRequest(req)
+                    audioFocusRequest = null
+                }
+                audioManager.mode = AudioManager.MODE_NORMAL
+                Log.i(TAG, "Audio mode restored to MODE_NORMAL, focus abandoned")
+                LiveVoiceDiagnostics.updateAudioMode("MODE_NORMAL")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error restoring audio mode / abandoning audio focus", e)
+            }
+        }
+    }
 
     override fun initialize(ctx: TransportContext) {
         transportContext = ctx
@@ -188,19 +245,22 @@ class MiraGeminiLiveTransport(
                 ((transportParams.modelConfig as? Value.Object)
                     ?.value?.get("model") as? Value.Str)?.value ?: "models/gemini-3.8-live"
 
+            acquireCommunicationMode()
+
             withPromise(thread) { promise ->
-                client = MiraGeminiClient.connect(
-                    MiraGeminiClient.Config(
-                        apiKey = transportParams.apiKey,
-                        endpointUrl = transportParams.endpointUrl,
-                        authHeaderName = transportParams.authHeaderName,
-                        headers = transportParams.headers,
-                        modelConfig = transportParams.modelConfig,
-                        initialMessage = transportParams.initialUserMessage,
-                        initialMicEnabled = transportContext.options.enableMic,
-                        echoGuardEnabled = transportParams.echoGuardEnabled
-                    ),
-                    object : MiraGeminiClient.Listener {
+                try {
+                    client = MiraGeminiClient.connect(
+                        MiraGeminiClient.Config(
+                            apiKey = transportParams.apiKey,
+                            endpointUrl = transportParams.endpointUrl,
+                            authHeaderName = transportParams.authHeaderName,
+                            headers = transportParams.headers,
+                            modelConfig = transportParams.modelConfig,
+                            initialMessage = transportParams.initialUserMessage,
+                            initialMicEnabled = transportContext.options.enableMic,
+                            echoGuardEnabled = transportParams.echoGuardEnabled
+                        ),
+                        object : MiraGeminiClient.Listener {
                         override fun onConnected() {
                             thread.runOnThread {
                                 val cb = transportContext.callbacks
@@ -229,6 +289,7 @@ class MiraGeminiLiveTransport(
                         override fun onSessionEnded(reason: String, t: Throwable?) {
                             thread.runOnThread {
                                 Log.i(TAG, "onSessionEnded: $reason", t)
+                                restoreNormalAudioMode()
                                 setState(TransportState.Disconnected)
                                 transportContext.onConnectionEnd()
                                 transportContext.callbacks.onDisconnected()
@@ -378,10 +439,16 @@ class MiraGeminiLiveTransport(
                         }
                     }
                 )
+            } catch (t: Throwable) {
+                Log.e(TAG, "Failed to connect client", t)
+                restoreNormalAudioMode()
+                promise.resolveErr(RTVIError.OtherError("Failed to connect client: ${t.message}"))
             }
         }
+    }
 
     override fun disconnect(): Future<Unit, RTVIError> = thread.runOnThreadReturningFuture {
+        restoreNormalAudioMode()
         client?.close()
         resolvedPromiseOk(thread, Unit)
     }
@@ -439,7 +506,6 @@ class MiraGeminiLiveTransport(
         resolvedPromiseOk(thread, listOf(AudioDevices.Earpiece, AudioDevices.Speakerphone))
 
     override fun updateMic(micId: MediaDeviceId): Future<Unit, RTVIError> {
-        val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         audioManager.isSpeakerphoneOn = (micId == AudioDevices.Speakerphone.id)
         return resolvedPromiseOk(thread, Unit)
     }
@@ -447,7 +513,6 @@ class MiraGeminiLiveTransport(
     override fun updateCam(camId: MediaDeviceId) = operationNotSupported<Unit>()
 
     override fun selectedMic(): MediaDeviceInfo {
-        val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         return when (audioManager.isSpeakerphoneOn) {
             true -> AudioDevices.Speakerphone
             false -> AudioDevices.Earpiece
@@ -477,6 +542,7 @@ class MiraGeminiLiveTransport(
 
     override fun release() {
         thread.assertCurrent()
+        restoreNormalAudioMode()
         client?.close()
         client = null
     }

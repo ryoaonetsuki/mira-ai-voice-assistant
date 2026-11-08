@@ -55,6 +55,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -776,7 +777,11 @@ fun ChatScreen(
 
                     // Layer 1 — MiraIdentityInterceptor: Canned identity check before sending
                     if (currentStaged == null) {
-                        val cannedIdentityReply = io.github.ryoaonetsuki.mira.identity.MiraIdentityInterceptor.getCannedResponse(text)
+                        val cannedIdentityReply = io.github.ryoaonetsuki.mira.identity.MiraIdentityInterceptor.getCannedResponse(
+                            userQuery = text,
+                            userLanguage = language,
+                            forVoice = false
+                        )
                         if (cannedIdentityReply != null) {
                             safeInsertMessage(
                                 context,
@@ -3152,7 +3157,7 @@ private fun parseTableRow(line: String): List<String> {
 fun parseTextBlocks(lines: List<String>): List<TextBlock> {
     val blocks = mutableListOf<TextBlock>()
     var i = 0
-    val linkRegex = Regex("\\[([^\\]]+)\\]\\((mira://[^)]+|https?://[^)]+)\\)")
+    val linkRegex = Regex("\\[([^\\]]+)\\]\\((mira://[^)]+)\\)")
 
     while (i < lines.size) {
         val line = lines[i]
@@ -3429,6 +3434,8 @@ private fun parseInlineMarkdown(raw: String): AnnotatedString {
                     val closeParen = raw.indexOf(')', closeBracket + 2)
                     if (closeParen != -1) {
                         val label = raw.substring(i + 1, closeBracket)
+                        val url = raw.substring(closeBracket + 2, closeParen)
+                        pushLink(LinkAnnotation.Url(url))
                         pushStyle(
                             SpanStyle(
                                 color = Color(0xFF89B4FA),
@@ -3437,6 +3444,7 @@ private fun parseInlineMarkdown(raw: String): AnnotatedString {
                             )
                         )
                         append(label)
+                        pop()
                         pop()
                         i = closeParen + 1
                         continue

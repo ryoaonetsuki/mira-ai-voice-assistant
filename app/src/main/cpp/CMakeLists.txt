@@ -308,6 +308,7 @@ set(WEBRTC_SSE2_SOURCES
 )
 
 set(WEBRTC_NEON_SOURCES
+    ${WEBRTC_ROOT}/modules/audio_processing/aecm/aecm_core_neon.cc
     ${WEBRTC_ROOT}/common_audio/fir_filter_neon.cc
     ${WEBRTC_ROOT}/common_audio/resampler/sinc_resampler_neon.cc
     ${WEBRTC_ROOT}/common_audio/signal_processing/cross_correlation_neon.c

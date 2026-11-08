@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.provider.Settings
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.Person
@@ -745,11 +746,53 @@ class MicService : Service() {
         }
 
         // Autonomous Screen Agent wiring: BEFORE existing handling
-        if (io.github.ryoaonetsuki.mira.automation.MiraAutomationBridge.isAutomationIntent(cleanText) &&
-            MiraAccessibilityService.isEnabled(applicationContext)
-        ) {
+        if (io.github.ryoaonetsuki.mira.automation.MiraAutomationBridge.isAutomationIntent(cleanText)) {
             // Suppress the Live model's spoken reply for THAT turn only
             sessionManager?.sendUserMessage("[Automation command detected: \"$cleanText\". Do not reply or speak. Keep silent.]")
+
+            val serviceEnabled = MiraAccessibilityService.isEnabled(applicationContext)
+            if (!serviceEnabled) {
+                val isBangla = io.github.ryoaonetsuki.mira.identity.MiraIdentityInterceptor.detectIsBangla(
+                    cleanText,
+                    cachedLanguage
+                )
+                val disabledMessage = if (isBangla) {
+                    "ফোন নিয়ন্ত্রণের জন্য Mira অ্যাক্সেসিবিলিটি সার্ভিস চালু করতে হবে।"
+                } else {
+                    "Please enable Mira screen control in accessibility settings to control the phone."
+                }
+                _modelTranscript.value = disabledMessage
+
+                serviceScope.launch(Dispatchers.IO) {
+                    val wasMuted = _isMuted.value
+                    if (!wasMuted) {
+                        _isMuted.value = true
+                        sessionManager?.enableMic(false)
+                    }
+                    try {
+                        // Guide user with one tap to accessibility settings
+                        try {
+                            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            applicationContext.startActivity(intent)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "MIRA_LIVE_VOICE: Could not open accessibility settings: ${e.message}")
+                        }
+
+                        // Speak explanation aloud via existing TTS path
+                        speakAutomationResult(disabledMessage)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "MIRA_LIVE_VOICE: Error speaking accessibility disabled guidance: ${e.message}", e)
+                    } finally {
+                        if (!wasMuted) {
+                            _isMuted.value = false
+                            sessionManager?.enableMic(true)
+                        }
+                    }
+                }
+                return
+            }
 
             serviceScope.launch(Dispatchers.IO) {
                 val wasMuted = _isMuted.value

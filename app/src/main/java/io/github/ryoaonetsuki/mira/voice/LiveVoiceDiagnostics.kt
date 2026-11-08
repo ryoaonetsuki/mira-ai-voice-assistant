@@ -33,7 +33,7 @@ data class VoiceDiagnosticsData(
     val diagnosticStages: List<DiagnosticStageResult> = emptyList(),
     val diagnosticLastRunAt: Long? = null,
     val diagnosticOutcome: String? = null,
-    val activeRoute: String = "RELAY",
+    val activeRoute: String = "DIRECT",
     val activeVariant: String = "STANDARD",
     val frameLogs: List<String> = emptyList(),
     // Reconnection Diagnostics (ROUND 19)
@@ -82,7 +82,7 @@ object LiveVoiceDiagnostics {
 
     fun initDiagnosticStages(
         stages: List<DiagnosticStageResult>,
-        route: String = "RELAY",
+        route: String = "DIRECT",
         variant: String = "STANDARD"
     ) {
         _data.value = _data.value.copy(

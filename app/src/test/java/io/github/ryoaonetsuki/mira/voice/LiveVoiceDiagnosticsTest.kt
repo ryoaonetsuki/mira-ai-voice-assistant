@@ -142,12 +142,28 @@ class LiveVoiceDiagnosticsTest {
     }
 
     @Test
+    fun testAudioModeDiagnosticsStateAndReset() {
+        assertEquals("MODE_NORMAL", LiveVoiceDiagnostics.data.value.audioMode)
+
+        LiveVoiceDiagnostics.updateAudioMode("MODE_IN_COMMUNICATION")
+        assertEquals("MODE_IN_COMMUNICATION", LiveVoiceDiagnostics.data.value.audioMode)
+
+        LiveVoiceDiagnostics.updateAudioMode("MODE_NORMAL")
+        assertEquals("MODE_NORMAL", LiveVoiceDiagnostics.data.value.audioMode)
+
+        LiveVoiceDiagnostics.updateAudioMode("MODE_IN_COMMUNICATION")
+        LiveVoiceDiagnostics.reset()
+        assertEquals("MODE_NORMAL", LiveVoiceDiagnostics.data.value.audioMode)
+    }
+
+    @Test
     fun testReset() {
         LiveVoiceDiagnostics.recordReconnectAttempt(4)
         LiveVoiceDiagnostics.recordGoAway(12345L)
         LiveVoiceDiagnostics.recordStage4Timeout(67890L)
         LiveVoiceDiagnostics.updateSessionManagerState("RECONNECTING")
         LiveVoiceDiagnostics.updateAecState(available = true, enabled = true)
+        LiveVoiceDiagnostics.updateAudioMode("MODE_IN_COMMUNICATION")
 
         LiveVoiceDiagnostics.reset()
 
@@ -158,5 +174,6 @@ class LiveVoiceDiagnosticsTest {
         assertNull(LiveVoiceDiagnostics.data.value.lastResumptionHandleEvent)
         assertFalse(LiveVoiceDiagnostics.data.value.aecAvailable)
         assertFalse(LiveVoiceDiagnostics.data.value.aecEnabled)
+        assertEquals("MODE_NORMAL", LiveVoiceDiagnostics.data.value.audioMode)
     }
 }

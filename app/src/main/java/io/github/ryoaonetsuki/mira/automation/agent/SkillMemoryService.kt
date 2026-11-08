@@ -1,0 +1,208 @@
+// Ported from Jarvis (github.com/AbuZar-Ansarii/Jarvis), MIT Licence, Copyright (c) 2026 AbuZar Ansarii — Dart → Kotlin port for Mira.
+package io.github.ryoaonetsuki.mira.automation.agent
+
+import android.content.Context
+import android.util.Log
+import org.json.JSONArray
+import org.json.JSONObject
+
+interface SkillStore {
+  fun loadRaw(): String?
+  fun saveRaw(json: String)
+}
+
+class SharedPreferencesSkillStore(
+  private val context: Context
+) : SkillStore {
+  private val prefs by lazy {
+    val targetContext = runCatching { context.applicationContext }.getOrNull() ?: context
+    targetContext.getSharedPreferences("mira_skills", Context.MODE_PRIVATE)
+  }
+
+  override fun loadRaw(): String? {
+    return prefs.getString(SkillMemoryService.STORAGE_KEY, null)
+  }
+
+  override fun saveRaw(json: String) {
+    prefs.edit().putString(SkillMemoryService.STORAGE_KEY, json).apply()
+  }
+}
+
+/**
+ * Local "macro replay" memory: stores successful action sequences per goal
+ * so repeated tasks skip LLM calls entirely.
+ *
+ * Storage: SharedPreferences key `skill_memory_v1` (JSON list). Kept
+ * deliberately simple — skills are small and few.
+ */
+class SkillMemoryService(
+  private val store: SkillStore
+) {
+  private val lock = Any()
+  private var cache: MutableList<Skill>? = null
+
+  private fun load(): MutableList<Skill> {
+    cache?.let { return it }
+    val raw = try {
+      store.loadRaw()
+    } catch (e: Throwable) {
+      logWarning("Failed to load raw skill memory: ${e.message}")
+      null
+    }
+    if (raw.isNullOrBlank()) {
+      val emptyList = mutableListOf<Skill>()
+      cache = emptyList
+      return emptyList
+    }
+    return try {
+      val array = JSONArray(raw)
+      val list = mutableListOf<Skill>()
+      for (i in 0 until array.length()) {
+        val obj = array.optJSONObject(i)
+        if (obj != null) {
+          list.add(Skill.fromJson(obj))
+        }
+      }
+      cache = list
+      list
+    } catch (e: Throwable) {
+      logWarning("Corrupt skill memory JSON, resetting to empty: ${e.message}")
+      val emptyList = mutableListOf<Skill>()
+      cache = emptyList
+      emptyList
+    }
+  }
+
+  private fun persist() {
+    val skills = cache ?: return
+    try {
+      val array = JSONArray()
+      for (skill in skills) {
+        array.put(skill.toJson())
+      }
+      store.saveRaw(array.toString())
+    } catch (e: Throwable) {
+      logWarning("Failed to persist skill memory: ${e.message}")
+    }
+  }
+
+  fun all(): List<Skill> = synchronized(lock) {
+    return load().toList()
+  }
+
+  /**
+   * Finds a stored skill matching [goal]: exact normalized match first,
+   * then token Jaccard similarity >= 0.75.
+   */
+  fun findMatch(goal: String): Skill? = synchronized(lock) {
+    val normalized = Skill.normalize(goal)
+    if (normalized.isEmpty()) return null
+    val skills = load()
+
+    for (s in skills) {
+      if (s.normalizedGoal == normalized) return s
+    }
+    var best: Skill? = null
+    var bestScore = 0.0
+    for (s in skills) {
+      val score = Skill.similarity(normalized, s.normalizedGoal)
+      if (score > bestScore) {
+        bestScore = score
+        best = s
+      }
+    }
+    return if (bestScore >= MATCH_THRESHOLD) best else null
+  }
+
+  /**
+   * Stores (or refreshes) the action sequence for [goal]. Terminal `done`
+   * steps are stripped since replay ends when the list is exhausted.
+   */
+  fun saveOrUpdate(goal: String, steps: List<TaskStep>): Skill = synchronized(lock) {
+    val skills = load()
+    val cleaned = steps.filter { it.action != TaskStep.ACTION_DONE && it.isSupported }
+    val normalized = Skill.normalize(goal)
+
+    val existingIndex = skills.indexOfFirst { it.normalizedGoal == normalized }
+    if (existingIndex >= 0) {
+      val existing = skills[existingIndex]
+      val updated = Skill(
+        id = existing.id,
+        goal = goal,
+        steps = cleaned,
+        successCount = existing.successCount,
+        lastUsedAt = System.currentTimeMillis(),
+        createdAt = existing.createdAt
+      )
+      skills[existingIndex] = updated
+      persist()
+      return updated
+    }
+
+    val skill = Skill(
+      goal = goal,
+      steps = cleaned
+    )
+    skills.add(0, skill)
+    while (skills.size > MAX_SKILLS) {
+      skills.removeAt(skills.lastIndex)
+    }
+    persist()
+    return skill
+  }
+
+  fun markReplayOutcome(skillId: String, success: Boolean): Unit = synchronized(lock) {
+    val skills = load()
+    val index = skills.indexOfFirst { it.id == skillId }
+    if (index < 0) return
+    if (success) {
+      skills[index].successCount += 1
+      skills[index].lastUsedAt = System.currentTimeMillis()
+    } else {
+      // A skill that failed to replay is likely stale (app UI changed):
+      // drop it so the next run relearns from the AI.
+      skills.removeAt(index)
+    }
+    persist()
+  }
+
+  fun delete(skillId: String): Unit = synchronized(lock) {
+    val skills = load()
+    val removed = skills.removeAll { it.id == skillId }
+    if (removed) {
+      persist()
+    }
+  }
+
+  fun clear(): Unit = synchronized(lock) {
+    val skills = load()
+    skills.clear()
+    persist()
+  }
+
+  private fun logWarning(msg: String) {
+    try {
+      Log.w(TAG, msg)
+    } catch (_: Throwable) {
+      // Ignored in pure JVM test environments where Log is not mocked
+    }
+  }
+
+  companion object {
+    private const val TAG = "SkillMemoryService"
+    const val STORAGE_KEY: String = "skill_memory_v1"
+    const val MATCH_THRESHOLD: Double = 0.75
+    const val MAX_SKILLS: Int = 100
+
+    @Volatile
+    private var instance: SkillMemoryService? = null
+
+    fun getInstance(context: Context): SkillMemoryService {
+      return instance ?: synchronized(this) {
+        instance ?: SkillMemoryService(SharedPreferencesSkillStore(context)).also {
+          instance = it
+        }
+      }
+    }
+  }
+}

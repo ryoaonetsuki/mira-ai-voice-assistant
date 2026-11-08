@@ -285,12 +285,16 @@ class EchoGateTest {
         assertEquals(0.0f, router.getRawBotLevel(), 0.0001f)
         assertEquals(0.0f, router.getEffectiveBotLevel(1000L), 0.0001f)
 
-        // Bot starts talking again, then turn completes
+        // Bot starts talking again, then turn completes — Round 24 Turn 5:
+        // onTurnComplete preserves the drain window (audioActiveUntil = 2000 + 100 + 250 = 2350L)
+        // so the AudioTrack speaker tail keeps the gate closed; the raw level is preserved too.
         router.onBotTalking(true)
         router.onBotAudioLevel(0.25f, 2000L)
-        assertTrue(router.isBotTalking())
+        assertTrue(router.isBotTalking(2100L))
         router.onTurnComplete()
-        assertFalse(router.isBotTalking())
-        assertEquals(0.0f, router.getRawBotLevel(), 0.0001f)
+        assertTrue(router.isBotTalking(2100L))
+        assertEquals(0.25f, router.getRawBotLevel(), 0.0001f)
+        // After the drain window expires, the gate opens again
+        assertFalse(router.isBotTalking(3000L))
     }
 }

@@ -647,7 +647,7 @@ object MacroRunner {
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setContentTitle("Mira is controlling the screen")
             .setContentText("$title — $stepText")
-            .setSmallIcon(R.drawable.logo_chosen)
+            .setSmallIcon(R.drawable.ic_notification_mira)
             .setContentIntent(openPendingIntent)
             .addAction(android.R.drawable.ic_media_pause, "Stop", stopPendingIntent)
             .setOngoing(true)

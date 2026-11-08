@@ -67,8 +67,8 @@ fun SettingsHubScreen(
         SettingsHubGroup(
             categoryName = "Integrations & Tools",
             items = listOf(
-                SettingsHubRow("Connectors", "GitHub, Telegram, Notion, Spotify, Linear, Todoist", R.drawable.ic_fluent_link_24_regular, Screen.SettingsConnectors.route),
-                SettingsHubRow("Email", "Send-as address, signature, AI email composer", R.drawable.ic_fluent_mail_24_regular, Screen.SettingsEmail.route),
+                SettingsHubRow("Connectors", "GitHub, Telegram, Notion, GitLab, Linear, Todoist", R.drawable.ic_fluent_link_24_regular, Screen.SettingsConnectors.route),
+                SettingsHubRow("Email", "Email signature, AI email composer", R.drawable.ic_fluent_mail_24_regular, Screen.SettingsEmail.route),
                 SettingsHubRow("Messages & WhatsApp", "Auto-reply template, Notification listener", R.drawable.ic_fluent_chat_24_regular, Screen.SettingsMessages.route),
                 SettingsHubRow("Social Media", "Social handle, caption voice", R.drawable.ic_fluent_share_24_regular, Screen.SettingsSocial.route),
                 SettingsHubRow("Optional Integrations", "Google Maps API key", R.drawable.ic_fluent_options_24_regular, Screen.SettingsOptional.route)

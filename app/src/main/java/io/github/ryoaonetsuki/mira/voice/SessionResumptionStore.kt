@@ -38,8 +38,8 @@ class SessionResumptionStore(context: Context) {
             val age = currentTimeMs - timestamp
             if (timestamp <= 0L || age >= TTL_MS || age < 0L) {
                 Log.d(TAG, "Stored session resumption handle expired (ageMs=$age, ttlMs=$TTL_MS); clearing")
-                LiveVoiceDiagnostics.recordResumptionHandleEvent("expired (len=${handle.length})")
                 clearHandle()
+                LiveVoiceDiagnostics.recordResumptionHandleEvent("expired (len=${handle.length})")
                 return null
             }
 

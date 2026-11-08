@@ -15,6 +15,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -47,19 +48,20 @@ fun AppTopBar(
                 text = title,
                 fontSize = 19.sp,
                 fontWeight = FontWeight.Bold,
-                color = palette.textPrimary
+                color = palette.textPrimary,
+                modifier = Modifier.padding(top = 4.dp)
             )
         },
         navigationIcon = {
             IconButton(
                 onClick = onMenuClick,
-                modifier = Modifier.padding(start = 4.dp)
+                modifier = Modifier.padding(start = 4.dp, top = 4.dp)
             ) {
                 Icon(
                     painter = painterResource(id = R.drawable.ic_fluent_navigation_24_regular),
                     contentDescription = "Open Drawer",
                     tint = palette.textPrimary,
-                    modifier = Modifier.size(22.dp)
+                    modifier = Modifier.size(24.dp)
                 )
             }
         },
@@ -84,35 +86,32 @@ fun AppTopBar(
             }
 
             // Notification bell with unread badge
-            Box(
-                contentAlignment = Alignment.Center,
+            IconButton(
+                onClick = onNotificationsClick,
                 modifier = Modifier.padding(end = 4.dp)
             ) {
-                IconButton(onClick = onNotificationsClick) {
+                BadgedBox(
+                    badge = {
+                        if (unreadNotifsCount > 0) {
+                            Badge(
+                                containerColor = palette.primary,
+                                contentColor = Color.White
+                            ) {
+                                Text(
+                                    text = if (unreadNotifsCount > 9) "9+" else unreadNotifsCount.toString(),
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+                ) {
                     Icon(
                         painter = painterResource(id = R.drawable.ic_fluent_alert_24_regular),
                         contentDescription = "Notifications",
                         tint = palette.textPrimary,
                         modifier = Modifier.size(22.dp)
                     )
-                }
-                if (unreadNotifsCount > 0) {
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(top = 6.dp, end = 6.dp)
-                            .size(16.dp)
-                            .clip(CircleShape)
-                            .background(palette.primary)
-                    ) {
-                        Text(
-                            text = if (unreadNotifsCount > 9) "9+" else unreadNotifsCount.toString(),
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = palette.background
-                        )
-                    }
                 }
             }
 

@@ -180,7 +180,8 @@ class VoiceIntegrationRegressionTest {
     fun testDeserializeConnectParamsVoicePlumbing() {
         val transport = MiraGeminiLiveTransport(context)
         val startBotRequest = APIRequest(
-            endpoint = "https://example.com/start"
+            endpoint = "https://example.com/start",
+            requestData = Value.Null
         )
 
         // 1. JSON with custom voice, language, model, system instruction, resumption handle

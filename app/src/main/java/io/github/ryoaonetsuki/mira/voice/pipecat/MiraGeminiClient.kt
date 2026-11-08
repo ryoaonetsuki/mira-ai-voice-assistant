@@ -45,6 +45,8 @@ import okio.ByteString
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 
@@ -130,6 +132,7 @@ class MiraGeminiClient private constructor(
         val modelConfig: Value,
         val initialMessage: String? = null,
         val initialMicEnabled: Boolean = true,
+        val echoGuardEnabled: Boolean = true,
     )
 
     interface Listener {
@@ -189,6 +192,8 @@ class MiraGeminiClient private constructor(
 
                 val inputSampleRate = 16000
                 val audioInCallback = AtomicReference<((ByteArray) -> Unit)?>(null)
+                val echoRouter = EchoFrameRouter(echoGuardEnabled = config.echoGuardEnabled)
+                var isUserTalking = false
 
                 val audioIn = AudioIn(
                     sampleRateHz = inputSampleRate,
@@ -200,11 +205,11 @@ class MiraGeminiClient private constructor(
                 )
                 val audioOut = AudioOut(
                     sampleRateHz = 24000,
-                    onAudioLevelUpdate = listener::onBotAudioLevel
+                    onAudioLevelUpdate = { level ->
+                        echoRouter.onBotAudioLevel(level)
+                        listener.onBotAudioLevel(level)
+                    }
                 )
-
-                var isBotTalking = false
-                var isUserTalking = false
 
                 isMicMutedRef.set { audioIn.muted }
                 val listenerRef = AtomicReference(listener)
@@ -399,6 +404,7 @@ class MiraGeminiClient private constructor(
                     audioIn.stop()
                     audioOut.interrupt()
                     audioOut.stop()
+                    echoRouter.onTurnComplete()
                 }
 
                 while (true) {
@@ -453,8 +459,28 @@ class MiraGeminiClient private constructor(
                             listenerRef.get()?.onSetupComplete()
                             listenerRef.get()?.onConnected()
 
+                            val droppedFrameCount = AtomicInteger(0)
+                            val lastDropLogTimeMs = AtomicLong(0L)
+
                             audioInCallback.set { buf ->
-                                postEvent(ClientThreadEvent.SendAudioData(buf))
+                                val micRms = calculateAudioLevel(buf)
+                                val effectiveBotLevel = echoRouter.getEffectiveBotLevel()
+                                val botTalking = echoRouter.isBotTalking()
+
+                                if (EchoGate.shouldForward(micRms, effectiveBotLevel, botTalking, config.echoGuardEnabled)) {
+                                    postEvent(ClientThreadEvent.SendAudioData(buf))
+                                } else {
+                                    val dropped = droppedFrameCount.incrementAndGet()
+                                    val now = System.currentTimeMillis()
+                                    val lastLog = lastDropLogTimeMs.get()
+                                    if (now - lastLog >= 1000L && lastDropLogTimeMs.compareAndSet(lastLog, now)) {
+                                        droppedFrameCount.set(0)
+                                        Log.d(
+                                            TAG,
+                                            "EchoGate: dropped $dropped echo frames in last second (botLevel=$effectiveBotLevel, micRms=$micRms)"
+                                        )
+                                    }
+                                }
                             }
                         }
 
@@ -494,8 +520,8 @@ class MiraGeminiClient private constructor(
                             }
 
                             if (event.modelParts.isNotEmpty()) {
-                                if (!isBotTalking) {
-                                    isBotTalking = true
+                                if (!echoRouter.isBotTalking()) {
+                                    echoRouter.onBotTalking(true)
                                     listenerRef.get()?.onBotTalking(true)
                                 }
                                 if (isUserTalking) {
@@ -516,7 +542,7 @@ class MiraGeminiClient private constructor(
 
                             if (event.interrupted) {
                                 Log.i(TAG, "User interrupted model output")
-                                isBotTalking = false
+                                echoRouter.onInterrupted()
                                 isUserTalking = true
                                 listenerRef.get()?.onUserTalking(true)
                                 listenerRef.get()?.onBotTalking(false)
@@ -525,8 +551,8 @@ class MiraGeminiClient private constructor(
 
                             if (event.turnComplete) {
                                 Log.d(TAG, "Model turn complete")
-                                if (isBotTalking) {
-                                    isBotTalking = false
+                                if (echoRouter.isBotTalking()) {
+                                    echoRouter.onTurnComplete()
                                     listenerRef.get()?.onBotTalking(false)
                                 }
                                 if (!isUserTalking) {

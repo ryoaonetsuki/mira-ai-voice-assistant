@@ -254,6 +254,9 @@ class SoftwareAcousticEchoCanceller(
     private val farEndLock = Any()
     private val delayedChunks = ArrayDeque<DelayedChunk>()
     private val consumableBuffer = ArrayDeque<Short>()
+    private var nextPlaybackStartTimeMs: Long = 0L
+
+    internal fun getNextPlaybackStartTimeMs(): Long = synchronized(farEndLock) { nextPlaybackStartTimeMs }
 
     /**
      * Enqueues playback audio chunks from the speaker (far-end reference).
@@ -275,11 +278,20 @@ class SoftwareAcousticEchoCanceller(
 
         val now = clock()
         val delay = referenceDelayMs
-        val readyAt = now + delay
+        val earliestStart = now + delay
+        val chunkDurationMs = (shorts16k.size.toLong() * 1000L) / sampleRateHz
 
         synchronized(farEndLock) {
             if (released) return
-            if (delay <= 0) {
+            val readyAt = if (delay <= 0) {
+                0L
+            } else {
+                val start = if (earliestStart > nextPlaybackStartTimeMs) earliestStart else nextPlaybackStartTimeMs
+                nextPlaybackStartTimeMs = start + chunkDurationMs
+                start
+            }
+
+            if (delay <= 0 || readyAt <= 0L) {
                 for (s in shorts16k) {
                     consumableBuffer.addLast(s)
                 }
@@ -372,6 +384,7 @@ class SoftwareAcousticEchoCanceller(
         synchronized(farEndLock) {
             delayedChunks.clear()
             consumableBuffer.clear()
+            nextPlaybackStartTimeMs = 0L
         }
         try {
             engine.reset()
@@ -393,6 +406,7 @@ class SoftwareAcousticEchoCanceller(
         synchronized(farEndLock) {
             delayedChunks.clear()
             consumableBuffer.clear()
+            nextPlaybackStartTimeMs = 0L
         }
         try {
             engine.release()

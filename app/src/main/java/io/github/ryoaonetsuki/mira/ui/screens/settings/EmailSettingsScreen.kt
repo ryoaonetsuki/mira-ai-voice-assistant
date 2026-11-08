@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.ryoaonetsuki.mira.R
 import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
+import io.github.ryoaonetsuki.mira.data.preferences.UserPreferences
 import io.github.ryoaonetsuki.mira.network.GeminiRestClient
 import io.github.ryoaonetsuki.mira.ui.components.MiraButton
 import io.github.ryoaonetsuki.mira.ui.components.MiraCard
@@ -33,10 +34,15 @@ fun EmailSettingsScreen(
     val palette = LocalMiraPalette.current
     val scope = rememberCoroutineScope()
     val securePrefs = remember { SecurePreferences(context) }
+    val userPrefs = remember { UserPreferences(context) }
     val restClient = remember { GeminiRestClient() }
 
-    var sendAsEmail by remember { mutableStateOf("user@example.com") }
-    var signatureInput by remember { mutableStateOf("Sent via Mira AI Voice Assistant") }
+    val savedSignature by userPrefs.emailSignatureFlow.collectAsState(initial = "Sent via Mira AI Voice Assistant")
+    var signatureInput by remember { mutableStateOf(savedSignature) }
+
+    LaunchedEffect(savedSignature) {
+        signatureInput = savedSignature
+    }
 
     var recipientInput by remember { mutableStateOf("") }
     var emailSubjectInput by remember { mutableStateOf("") }
@@ -93,7 +99,7 @@ fun EmailSettingsScreen(
             item {
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
-                    text = "Sender Profile",
+                    text = "Outgoing Email Signature",
                     fontSize = 13.5.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = palette.primary
@@ -102,22 +108,25 @@ fun EmailSettingsScreen(
                 Spacer(modifier = Modifier.height(6.dp))
 
                 MiraCard(modifier = Modifier.fillMaxWidth()) {
-                    OutlinedTextField(
-                        value = sendAsEmail,
-                        onValueChange = { sendAsEmail = it },
-                        label = { Text("Send email as (Email address)") },
-                        singleLine = true,
-                        shape = RoundedCornerShape(12.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = palette.primary,
-                            unfocusedBorderColor = palette.borderSubtle
-                        ),
-                        modifier = Modifier.fillMaxWidth()
+                    Text(
+                        text = "Email Signature",
+                        fontSize = 14.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = palette.textPrimary
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Appended to outgoing emails drafted with Mira AI.",
+                        fontSize = 12.sp,
+                        color = palette.textSecondary
                     )
                     Spacer(modifier = Modifier.height(10.dp))
                     OutlinedTextField(
                         value = signatureInput,
-                        onValueChange = { signatureInput = it },
+                        onValueChange = {
+                            signatureInput = it
+                            scope.launch { userPrefs.setEmailSignature(it) }
+                        },
                         label = { Text("Signature") },
                         shape = RoundedCornerShape(12.dp),
                         colors = OutlinedTextFieldDefaults.colors(

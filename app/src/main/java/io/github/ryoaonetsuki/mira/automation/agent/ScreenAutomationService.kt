@@ -49,9 +49,9 @@ data class ScreenNode(
     }
 }
 
-class ScreenAutomationService(private val context: Context? = null) {
+class ScreenAutomationService(private val context: Context? = null) : AutomationPort {
 
-    fun isServiceEnabled(): Boolean {
+    override fun isServiceEnabled(): Boolean {
         return try {
             val ctx = context
             if (ctx != null) {
@@ -65,7 +65,7 @@ class ScreenAutomationService(private val context: Context? = null) {
         }
     }
 
-    fun dumpScreen(): List<ScreenNode> {
+    override fun dumpScreen(): List<ScreenNode> {
         return try {
             val service = MiraAccessibilityService.instance ?: return emptyList()
             service.dumpScreen().map { ScreenNode.fromMap(it) }
@@ -75,7 +75,7 @@ class ScreenAutomationService(private val context: Context? = null) {
         }
     }
 
-    fun formatNodes(nodes: List<ScreenNode>): String {
+    override fun formatNodes(nodes: List<ScreenNode>): String {
         val eligible = nodes.filter { node ->
             node.text.isNotBlank() ||
                 node.contentDescription.isNotBlank() ||
@@ -85,7 +85,7 @@ class ScreenAutomationService(private val context: Context? = null) {
         return eligible.take(120).joinToString("\n") { formatSingleNode(it) }
     }
 
-    fun getCompressedScreenDescription(nodes: List<ScreenNode>, goal: String): String {
+    override fun getCompressedScreenDescription(nodes: List<ScreenNode>, goal: String): String {
         val eligible = nodes.filter { node ->
             node.text.isNotBlank() ||
                 node.contentDescription.isNotBlank() ||
@@ -129,7 +129,7 @@ class ScreenAutomationService(private val context: Context? = null) {
         return goalWords.any { it in nodeWords }
     }
 
-    fun clickText(text: String, nodes: List<ScreenNode>): Boolean {
+    override fun clickText(text: String, nodes: List<ScreenNode>): Boolean {
         return try {
             val service = MiraAccessibilityService.instance ?: return false
             if (text.isBlank()) return false
@@ -203,7 +203,7 @@ class ScreenAutomationService(private val context: Context? = null) {
         return null
     }
 
-    fun clickAt(x: Float, y: Float): Boolean {
+    override fun clickAt(x: Float, y: Float): Boolean {
         return try {
             val service = MiraAccessibilityService.instance ?: return false
             service.clickAt(x, y)
@@ -213,7 +213,7 @@ class ScreenAutomationService(private val context: Context? = null) {
         }
     }
 
-    fun typeText(text: String): Boolean {
+    override fun typeText(text: String): Boolean {
         return try {
             val service = MiraAccessibilityService.instance ?: return false
             service.typeText(text)
@@ -223,7 +223,7 @@ class ScreenAutomationService(private val context: Context? = null) {
         }
     }
 
-    fun pressEnter(): Boolean {
+    override fun pressEnter(): Boolean {
         return try {
             val service = MiraAccessibilityService.instance ?: return false
             service.pressKey("enter")
@@ -233,7 +233,7 @@ class ScreenAutomationService(private val context: Context? = null) {
         }
     }
 
-    fun scroll(direction: String): Boolean {
+    override fun scroll(direction: String): Boolean {
         return try {
             val service = MiraAccessibilityService.instance ?: return false
             service.scroll(direction)
@@ -243,7 +243,7 @@ class ScreenAutomationService(private val context: Context? = null) {
         }
     }
 
-    fun swipe(startX: Float, startY: Float, endX: Float, endY: Float, durationMs: Long): Boolean {
+    override fun swipe(startX: Float, startY: Float, endX: Float, endY: Float, durationMs: Long): Boolean {
         return try {
             val service = MiraAccessibilityService.instance ?: return false
             service.swipe(startX, startY, endX, endY, durationMs)
@@ -253,7 +253,7 @@ class ScreenAutomationService(private val context: Context? = null) {
         }
     }
 
-    fun pressBack(): Boolean {
+    override fun pressBack(): Boolean {
         return try {
             val service = MiraAccessibilityService.instance ?: return false
             service.pressKey("back")
@@ -263,7 +263,7 @@ class ScreenAutomationService(private val context: Context? = null) {
         }
     }
 
-    fun pressHome(): Boolean {
+    override fun pressHome(): Boolean {
         return try {
             val service = MiraAccessibilityService.instance ?: return false
             service.pressKey("home")
@@ -273,7 +273,7 @@ class ScreenAutomationService(private val context: Context? = null) {
         }
     }
 
-    fun openApp(query: String): String? {
+    override fun openApp(query: String): String? {
         return try {
             val ctx = context ?: return null
             val pm = ctx.packageManager
@@ -313,6 +313,14 @@ class ScreenAutomationService(private val context: Context? = null) {
             null
         } catch (e: Throwable) {
             Log.e(TAG, "openApp failed for query: $query", e)
+            null
+        }
+    }
+
+    override fun getCurrentPackage(): String? {
+        return try {
+            MiraAccessibilityService.instance?.rootInActiveWindow?.packageName?.toString()
+        } catch (_: Throwable) {
             null
         }
     }

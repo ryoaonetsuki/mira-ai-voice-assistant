@@ -1,5 +1,6 @@
 package io.github.ryoaonetsuki.mira.network
 
+import io.github.ryoaonetsuki.mira.voice.LanguageUtils
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
@@ -47,8 +48,9 @@ object DateTimeInfo {
 /**
  * Top-level helper function returning the formatted current date/time line:
  * e.g. "Today is Friday, 6 November 2026. Current time is 10:54 AM (Asia/Dhaka, UTC+06:00). Bengali date: ৬ নভেম্বর, ২০২৬."
+ * When a non-Bangla language is selected, the Bengali date line is omitted to avoid leaking Bangla into the prompt.
  */
-fun currentDateTimeLine(): String {
+fun currentDateTimeLine(language: String = "Bangla (Bengali)"): String {
     val cal = Calendar.getInstance()
     val now = cal.time
 
@@ -71,10 +73,15 @@ fun currentDateTimeLine(): String {
     val minutes = (absOffset % 3600000) / 60000
     val offsetStr = String.format(Locale.ENGLISH, "UTC%s%02d:%02d", sign, hours, minutes)
 
-    // Bengali date with manual Bengali digits
-    val bnDay = DateTimeInfo.toBengaliDigits(day.toString())
-    val bnMonth = DateTimeInfo.getBengaliMonthName(cal.get(Calendar.MONTH))
-    val bnYear = DateTimeInfo.toBengaliDigits(year.toString())
+    val base = "Today is $weekday, $day $month $year. Current time is $time ($zoneId, $offsetStr)."
 
-    return "Today is $weekday, $day $month $year. Current time is $time ($zoneId, $offsetStr). Bengali date: $bnDay $bnMonth, $bnYear."
+    return if (LanguageUtils.isBangla(language)) {
+        // Bengali date with manual Bengali digits
+        val bnDay = DateTimeInfo.toBengaliDigits(day.toString())
+        val bnMonth = DateTimeInfo.getBengaliMonthName(cal.get(Calendar.MONTH))
+        val bnYear = DateTimeInfo.toBengaliDigits(year.toString())
+        "$base Bengali date: $bnDay $bnMonth, $bnYear."
+    } else {
+        base
+    }
 }

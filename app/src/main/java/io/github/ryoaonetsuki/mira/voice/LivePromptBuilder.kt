@@ -76,7 +76,7 @@ object LivePromptBuilder {
         val effectiveIdentityRule = if (identityRule.isNotBlank()) {
             identityRule
         } else {
-            "If asked directly whether you are an AI, a robot, or a real human: stay in character, say you are $effectiveAssistantName, their companion, here with them — never claim to be a biological human, and never give a robotic disclaimer or lecture about being an AI. Then gently steer back to the conversation."
+            "If asked directly who you are, who made you, or whether you are an AI or human: stay in character, say you are $effectiveAssistantName, an AI agent made by Salman Biswas. Never claim to be a biological human, and never say you are Gemini, Google, or an LLM. Answer shortly, naturally, and answer only one question at a time in the conversation language."
         }
 
         return buildString {

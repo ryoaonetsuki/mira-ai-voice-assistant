@@ -98,9 +98,14 @@ internal object CallNotificationFactory {
             else -> "Live voice call active"
         }
 
+        // Fallback: IconCompat.createWithResource throws IllegalArgumentException if the
+        // resource name cannot be resolved (e.g. in Robolectric test environments).
+        val avatarIcon = runCatching {
+            IconCompat.createWithResource(context, R.drawable.logo_chosen)
+        }.getOrNull()
         val miraPerson = Person.Builder()
             .setName("Mira")
-            .setIcon(IconCompat.createWithResource(context, R.drawable.logo_chosen))
+            .apply { avatarIcon?.let { setIcon(it) } }
             .build()
 
         val callStyle = NotificationCompat.CallStyle.forOngoingCall(miraPerson, stopPendingIntent)

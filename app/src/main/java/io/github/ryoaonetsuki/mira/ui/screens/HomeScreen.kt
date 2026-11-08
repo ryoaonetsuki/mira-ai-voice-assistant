@@ -42,6 +42,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -379,14 +380,14 @@ private fun HomeBottomNavBar(
                     }
                 }
 
-                // Memory tab
+                // Skills tab
                 BottomNavItem(
-                    regularIcon = R.drawable.ic_fluent_sparkle_24_regular,
-                    filledIcon = R.drawable.ic_fluent_sparkle_24_filled,
-                    label = "Memory",
+                    regularIcon = R.drawable.ic_fluent_flash_24_regular,
+                    filledIcon = R.drawable.ic_fluent_flash_24_filled,
+                    label = stringResource(R.string.nav_skills),
                     selected = false,
                     palette = palette,
-                    onClick = { onNavigate(Screen.Memories.route) }
+                    onClick = { onNavigate(Screen.Skills.route) }
                 )
 
                 // Chat tab

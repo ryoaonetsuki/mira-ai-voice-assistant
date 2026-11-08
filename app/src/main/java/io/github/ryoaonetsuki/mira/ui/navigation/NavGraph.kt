@@ -239,6 +239,10 @@ fun MiraNavGraph(
                 ExtensionsScreen(onBack = { navController.popBackStack() })
             }
 
+            composable(Screen.Skills.route) {
+                SkillsScreen(onBack = { navController.popBackStack() })
+            }
+
 
             composable(Screen.Browser.route) {
                 BrowserScreen(onBack = { navController.popBackStack() })

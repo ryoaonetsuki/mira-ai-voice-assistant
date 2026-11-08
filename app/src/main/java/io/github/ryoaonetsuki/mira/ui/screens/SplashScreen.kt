@@ -55,16 +55,6 @@ fun SplashScreen(
     val palette = LocalMiraPalette.current
 
     val infiniteTransition = rememberInfiniteTransition(label = "SplashBreathing")
-    val scale by infiniteTransition.animateFloat(
-        initialValue = 0.96f,
-        targetValue = 1.04f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1600, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "LogoPulse"
-    )
-
     val glowAlpha by infiniteTransition.animateFloat(
         initialValue = 0.25f,
         targetValue = 0.65f,
@@ -185,29 +175,23 @@ fun SplashScreen(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier.size(190.dp)
             ) {
-                // Volumetric outer halo - draw phase animated
+                // Volumetric outer halo - separate ambient background element
                 Box(
                     modifier = Modifier
                         .size(180.dp)
                         .graphicsLayer {
-                            scaleX = scale
-                            scaleY = scale
                             this.alpha = glowAlpha
                         }
                         .clip(CircleShape)
                         .background(haloBrush)
                 )
 
-                // Logo image - draw phase animated
+                // Logo image - static, no bobbing or pulse
                 Image(
                     painter = painterResource(id = R.drawable.logo_chosen),
                     contentDescription = "Mira Logo",
                     modifier = Modifier
                         .size(136.dp)
-                        .graphicsLayer {
-                            scaleX = scale
-                            scaleY = scale
-                        }
                         .clip(CircleShape)
                         .border(
                             width = 2.dp,

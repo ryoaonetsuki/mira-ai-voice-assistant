@@ -1,0 +1,299 @@
+package io.github.ryoaonetsuki.mira.automation.agent
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class ScreenAutomationServiceTest {
+
+    // =========================================================================
+    // 1. formatNodes Tests
+    // =========================================================================
+
+    @Test
+    fun formatNodes_emptyList_returnsEmptyString() {
+        val service = ScreenAutomationService()
+        assertEquals("", service.formatNodes(emptyList()))
+    }
+
+    @Test
+    fun formatNodes_nodeLineFormat_containsIndexTextAndCoordinates() {
+        val service = ScreenAutomationService()
+        val node = ScreenNode(
+            index = 7,
+            text = "Confirm Booking",
+            contentDescription = "Confirm your hotel booking",
+            className = "android.widget.Button",
+            viewId = "btn_confirm",
+            isClickable = true,
+            isEditable = false,
+            isScrollable = false,
+            isCheckable = false,
+            isEnabled = true,
+            left = 100,
+            top = 200,
+            right = 300,
+            bottom = 250,
+            centerX = 200,
+            centerY = 225
+        )
+        val output = service.formatNodes(listOf(node))
+        assertTrue("Expected output to contain index [7]", output.contains("[7]"))
+        assertTrue("Expected output to contain text", output.contains("text=\"Confirm Booking\""))
+        assertTrue("Expected output to contain desc", output.contains("desc=\"Confirm your hotel booking\""))
+        assertTrue("Expected output to contain class", output.contains("class=android.widget.Button"))
+        assertTrue("Expected output to contain clickable", output.contains("clickable=true"))
+        assertTrue("Expected output to contain coordinates 200,225", output.contains("200,225"))
+    }
+
+    @Test
+    fun formatNodes_moreThan120Nodes_cappedAt120() {
+        val service = ScreenAutomationService()
+        val nodes = (0 until 150).map { i ->
+            ScreenNode(
+                index = i,
+                text = "Node $i",
+                contentDescription = "Desc $i",
+                className = "android.view.View",
+                viewId = "view_$i",
+                isClickable = true,
+                isEditable = false,
+                isScrollable = false,
+                isCheckable = false,
+                isEnabled = true,
+                left = 0,
+                top = i * 10,
+                right = 100,
+                bottom = (i + 1) * 10,
+                centerX = 50,
+                centerY = i * 10 + 5
+            )
+        }
+        val output = service.formatNodes(nodes)
+        val lines = output.lines()
+        assertEquals(120, lines.size)
+        assertTrue(lines.first().contains("[0]"))
+        assertTrue(lines.last().contains("[119]"))
+    }
+
+    @Test
+    fun formatNodes_textTruncatedTo60Chars() {
+        val service = ScreenAutomationService()
+        val longText = "This is a very long text string that exceeds sixty characters easily for testing truncation"
+        val node = ScreenNode(
+            index = 1,
+            text = longText,
+            contentDescription = "",
+            className = "android.widget.TextView",
+            viewId = "text_view",
+            isClickable = false,
+            isEditable = false,
+            isScrollable = false,
+            isCheckable = false,
+            isEnabled = true,
+            left = 0,
+            top = 0,
+            right = 100,
+            bottom = 50,
+            centerX = 50,
+            centerY = 25
+        )
+        val output = service.formatNodes(listOf(node))
+        val expectedTruncated = longText.take(60)
+        assertTrue(output.contains("text=\"$expectedTruncated\""))
+        assertFalse(output.contains(longText.take(61)))
+    }
+
+    @Test
+    fun formatNodes_skipsEmptyTextAndDescUnlessEditableOrScrollable() {
+        val service = ScreenAutomationService()
+        val emptyNode = ScreenNode(
+            index = 0,
+            text = "",
+            contentDescription = "",
+            className = "android.view.ViewGroup",
+            viewId = "container",
+            isClickable = false,
+            isEditable = false,
+            isScrollable = false,
+            isCheckable = false,
+            isEnabled = true,
+            left = 0, top = 0, right = 100, bottom = 100, centerX = 50, centerY = 50
+        )
+        val editableNode = ScreenNode(
+            index = 1,
+            text = "",
+            contentDescription = "",
+            className = "android.widget.EditText",
+            viewId = "input",
+            isClickable = true,
+            isEditable = true,
+            isScrollable = false,
+            isCheckable = false,
+            isEnabled = true,
+            left = 0, top = 100, right = 100, bottom = 150, centerX = 50, centerY = 125
+        )
+        val scrollableNode = ScreenNode(
+            index = 2,
+            text = "",
+            contentDescription = "",
+            className = "android.widget.ScrollView",
+            viewId = "scroll",
+            isClickable = false,
+            isEditable = false,
+            isScrollable = true,
+            isCheckable = false,
+            isEnabled = true,
+            left = 0, top = 150, right = 100, bottom = 250, centerX = 50, centerY = 200
+        )
+        val output = service.formatNodes(listOf(emptyNode, editableNode, scrollableNode))
+        assertFalse(output.contains("[0]"))
+        assertTrue(output.contains("[1]"))
+        assertTrue(output.contains("[2]"))
+    }
+
+    // =========================================================================
+    // 2. getCompressedScreenDescription Tests
+    // =========================================================================
+
+    @Test
+    fun getCompressedScreenDescription_containsGoalLine() {
+        val service = ScreenAutomationService()
+        val output = service.getCompressedScreenDescription(emptyList(), "Search for hotels in Tokyo")
+        assertEquals("Goal: Search for hotels in Tokyo", output)
+    }
+
+    @Test
+    fun getCompressedScreenDescription_goalRelevantNodesComeFirst() {
+        val service = ScreenAutomationService()
+        val unrelatedClickable = ScreenNode(
+            index = 0,
+            text = "Home Menu",
+            contentDescription = "Main menu",
+            className = "android.widget.Button",
+            viewId = "btn_home",
+            isClickable = true,
+            isEditable = false,
+            isScrollable = false,
+            isCheckable = false,
+            isEnabled = true,
+            left = 0, top = 0, right = 50, bottom = 50, centerX = 25, centerY = 25
+        )
+        val goalRelevantNode = ScreenNode(
+            index = 1,
+            text = "Search Tokyo Hotels",
+            contentDescription = "",
+            className = "android.widget.TextView",
+            viewId = "txt_search",
+            isClickable = false,
+            isEditable = false,
+            isScrollable = false,
+            isCheckable = false,
+            isEnabled = true,
+            left = 0, top = 60, right = 100, bottom = 90, centerX = 50, centerY = 75
+        )
+        val output = service.getCompressedScreenDescription(
+            listOf(unrelatedClickable, goalRelevantNode),
+            "Search Tokyo"
+        )
+        val lines = output.lines()
+        assertEquals("Goal: Search Tokyo", lines[0])
+        assertTrue("Goal relevant node [1] should come first", lines[1].contains("[1]"))
+        assertTrue("Clickable node [0] should come second", lines[2].contains("[0]"))
+    }
+
+    @Test
+    fun getCompressedScreenDescription_cappedAt40Nodes() {
+        val service = ScreenAutomationService()
+        val nodes = (0 until 60).map { i ->
+            ScreenNode(
+                index = i,
+                text = "Result item $i",
+                contentDescription = "",
+                className = "android.widget.TextView",
+                viewId = "item_$i",
+                isClickable = true,
+                isEditable = false,
+                isScrollable = false,
+                isCheckable = false,
+                isEnabled = true,
+                left = 0,
+                top = i * 20,
+                right = 100,
+                bottom = (i + 1) * 20,
+                centerX = 50,
+                centerY = i * 20 + 10
+            )
+        }
+        val output = service.getCompressedScreenDescription(nodes, "Find results")
+        val lines = output.lines()
+        assertEquals("Goal: Find results", lines[0])
+        assertEquals(41, lines.size) // 1 goal line + 40 nodes
+    }
+
+    // =========================================================================
+    // 3. ScreenNode fromMap Tests
+    // =========================================================================
+
+    @Test
+    fun screenNode_fromMap_convertsAllFields() {
+        val map = mapOf<String, Any?>(
+            "index" to 42,
+            "text" to "Send Message",
+            "contentDescription" to "Send button description",
+            "className" to "android.widget.ImageButton",
+            "viewId" to "io.github.ryoaonetsuki.mira:id/send_btn",
+            "isClickable" to true,
+            "isEditable" to false,
+            "isScrollable" to false,
+            "isCheckable" to false,
+            "isEnabled" to true,
+            "left" to 10,
+            "top" to 20,
+            "right" to 110,
+            "bottom" to 120,
+            "centerX" to 60,
+            "centerY" to 70
+        )
+        val node = ScreenNode.fromMap(map)
+        assertEquals(42, node.index)
+        assertEquals("Send Message", node.text)
+        assertEquals("Send button description", node.contentDescription)
+        assertEquals("android.widget.ImageButton", node.className)
+        assertEquals("io.github.ryoaonetsuki.mira:id/send_btn", node.viewId)
+        assertTrue(node.isClickable)
+        assertFalse(node.isEditable)
+        assertFalse(node.isScrollable)
+        assertFalse(node.isCheckable)
+        assertTrue(node.isEnabled)
+        assertEquals(10, node.left)
+        assertEquals(20, node.top)
+        assertEquals(110, node.right)
+        assertEquals(120, node.bottom)
+        assertEquals(60, node.centerX)
+        assertEquals(70, node.centerY)
+    }
+
+    @Test
+    fun screenNode_fromMap_handlesMissingAndNullValuesSafely() {
+        val emptyMap = emptyMap<String, Any?>()
+        val node = ScreenNode.fromMap(emptyMap)
+        assertEquals(0, node.index)
+        assertEquals("", node.text)
+        assertEquals("", node.contentDescription)
+        assertEquals("", node.className)
+        assertEquals("", node.viewId)
+        assertFalse(node.isClickable)
+        assertFalse(node.isEditable)
+        assertFalse(node.isScrollable)
+        assertFalse(node.isCheckable)
+        assertTrue(node.isEnabled)
+        assertEquals(0, node.left)
+        assertEquals(0, node.top)
+        assertEquals(0, node.right)
+        assertEquals(0, node.bottom)
+        assertEquals(0, node.centerX)
+        assertEquals(0, node.centerY)
+    }
+}

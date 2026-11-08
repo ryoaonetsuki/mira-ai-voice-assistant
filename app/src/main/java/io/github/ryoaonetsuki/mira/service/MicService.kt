@@ -189,11 +189,13 @@ class MicService : Service() {
             stopForegroundAction = {
                 try {
                     stopForeground(STOP_FOREGROUND_REMOVE)
-                } catch (_: Exception) {}
+                } catch (_: Throwable) {}
             },
             cancelNotificationAction = { id ->
-                val manager = getSystemService(NotificationManager::class.java)
-                manager?.cancel(id)
+                try {
+                    val manager = getSystemService(NotificationManager::class.java)
+                    manager?.cancel(id)
+                } catch (_: Throwable) {}
             }
         )
     }
@@ -481,7 +483,7 @@ class MicService : Service() {
             Log.w(TAG, "MIRA_LIVE_VOICE: Session start cancelled right after manager creation (gen=$generation, current=${sessionGenerationToken.get()})")
             try {
                 manager.stopSession()
-            } catch (_: Exception) {}
+            } catch (_: Throwable) {}
             return
         }
 
@@ -500,6 +502,16 @@ class MicService : Service() {
                     _micAmplitude.value = 0f
                 }
             }
+        }
+
+        if (generation != sessionGenerationToken.get() || !isActive) {
+            Log.w(TAG, "MIRA_LIVE_VOICE: Session start cancelled before startSession() (gen=$generation, current=${sessionGenerationToken.get()})")
+            try {
+                manager.stopSession()
+            } catch (_: Throwable) {}
+            sessionManager = null
+            activeSessionManager = null
+            return
         }
 
         manager.startSession()

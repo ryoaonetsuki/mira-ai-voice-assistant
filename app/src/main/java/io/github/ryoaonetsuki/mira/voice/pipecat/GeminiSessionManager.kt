@@ -105,7 +105,7 @@ class DefaultSessionClientFactory : SessionClientFactory {
         sessionListener: MiraGeminiLiveTransport.SessionListener,
         callbacks: PipecatEventCallbacks
     ): SessionClient {
-        val transport = MiraGeminiLiveTransport(context, sessionListener)
+        val transport = MiraGeminiLiveTransport(context, sessionListener, echoGuardEnabled = options.echoGuardEnabled)
         val pipecatClient = PipecatClient(
             transport = transport,
             options = PipecatClientOptions(callbacks = callbacks)
@@ -135,7 +135,8 @@ class GeminiSessionManager(
     val resumptionStore: SessionResumptionStore,
     val listener: SessionManagerListener,
     private val externalScope: CoroutineScope? = null,
-    val clientSessionFactory: SessionClientFactory = DefaultSessionClientFactory()
+    val clientSessionFactory: SessionClientFactory = DefaultSessionClientFactory(),
+    val echoGuardEnabled: Boolean = true
 ) {
     companion object {
         private const val TAG = "GeminiSessionManager"
@@ -213,7 +214,8 @@ class GeminiSessionManager(
             voiceName = voiceName,
             languageCode = language,
             systemInstructionText = systemPrompt,
-            resumptionHandle = resumptionHandle
+            resumptionHandle = resumptionHandle,
+            echoGuardEnabled = echoGuardEnabled
         )
     }
 

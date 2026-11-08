@@ -132,7 +132,6 @@ class GeminiSessionManager(
     val voiceName: String,
     val language: String = DEFAULT_LANGUAGE,
     val systemPrompt: String = "",
-    val useRelay: Boolean = true,
     val resumptionStore: SessionResumptionStore,
     val listener: SessionManagerListener,
     private val externalScope: CoroutineScope? = null,
@@ -208,25 +207,14 @@ class GeminiSessionManager(
     }
 
     private fun buildServiceOptions(resumptionHandle: String?): MiraGeminiServiceOptions {
-        return if (useRelay) {
-            MiraGeminiServiceOptions.forRelay(
-                apiKey = apiKey,
-                model = LIVE_MODEL,
-                voiceName = voiceName,
-                languageCode = language,
-                systemInstructionText = systemPrompt,
-                resumptionHandle = resumptionHandle
-            )
-        } else {
-            MiraGeminiServiceOptions.forDirect(
-                apiKey = apiKey,
-                model = LIVE_MODEL,
-                voiceName = voiceName,
-                languageCode = language,
-                systemInstructionText = systemPrompt,
-                resumptionHandle = resumptionHandle
-            )
-        }
+        return MiraGeminiServiceOptions.forDirect(
+            apiKey = apiKey,
+            model = LIVE_MODEL,
+            voiceName = voiceName,
+            languageCode = language,
+            systemInstructionText = systemPrompt,
+            resumptionHandle = resumptionHandle
+        )
     }
 
     fun startSession() {

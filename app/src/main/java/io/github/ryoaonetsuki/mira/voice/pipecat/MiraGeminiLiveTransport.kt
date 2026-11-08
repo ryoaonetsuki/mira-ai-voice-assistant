@@ -80,7 +80,8 @@ private val LOCAL_PARTICIPANT = Participant(
  */
 class MiraGeminiLiveTransport(
     androidContext: Context,
-    var sessionListener: SessionListener? = null
+    var sessionListener: SessionListener? = null,
+    val echoGuardEnabled: Boolean = true
 ) : Transport<MiraGeminiServiceOptions>() {
 
     companion object {
@@ -143,6 +144,7 @@ class MiraGeminiLiveTransport(
         val model = obj.optString("model", "models/gemini-3.8-live")
         val systemInstruction = if (obj.has("system_instruction")) obj.getString("system_instruction") else obj.optString("system_instruction_text", "")
         val resumptionHandle = obj.optString("resumption_handle", null).takeIf { !it.isNullOrBlank() }
+        val echoGuard = obj.optBoolean("echo_guard", echoGuardEnabled)
 
         return MiraGeminiServiceOptions(
             apiKey = apiKey,
@@ -155,7 +157,8 @@ class MiraGeminiLiveTransport(
                 systemInstructionText = systemInstruction,
                 resumptionHandle = resumptionHandle
             ),
-            initialUserMessage = initialUserMessage
+            initialUserMessage = initialUserMessage,
+            echoGuardEnabled = echoGuard
         )
     }
 
@@ -194,7 +197,8 @@ class MiraGeminiLiveTransport(
                         headers = transportParams.headers,
                         modelConfig = transportParams.modelConfig,
                         initialMessage = transportParams.initialUserMessage,
-                        initialMicEnabled = transportContext.options.enableMic
+                        initialMicEnabled = transportContext.options.enableMic,
+                        echoGuardEnabled = transportParams.echoGuardEnabled
                     ),
                     object : MiraGeminiClient.Listener {
                         override fun onConnected() {

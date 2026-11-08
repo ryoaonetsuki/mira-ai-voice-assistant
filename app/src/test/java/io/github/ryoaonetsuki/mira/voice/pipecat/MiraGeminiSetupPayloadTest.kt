@@ -1,7 +1,6 @@
 package io.github.ryoaonetsuki.mira.voice.pipecat
 
 import ai.pipecat.client.types.Value
-import ai.pipecat.client.types.ValueSerializer
 import kotlinx.serialization.json.Json
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -80,7 +79,7 @@ class MiraGeminiSetupPayloadTest {
         assertTrue("outputAudioTranscription must be present", modelConfig.value.containsKey("outputAudioTranscription"))
 
         // 2. Serialized JSON format verification
-        val jsonString = json.encodeToString(ValueSerializer, modelConfig)
+        val jsonString = modelConfig.toJsonString(json)
         val jsonObj = JSONObject(jsonString)
 
         assertEquals("models/gemini-3.8-live", jsonObj.getString("model"))
@@ -113,7 +112,7 @@ class MiraGeminiSetupPayloadTest {
         assertEquals(storedHandle, handleValue?.value)
 
         // Verify JSON serialization of resumption handle
-        val jsonString = json.encodeToString(ValueSerializer, modelConfig)
+        val jsonString = modelConfig.toJsonString(json)
         val jsonObj = JSONObject(jsonString)
         val jsonResumption = jsonObj.getJSONObject("sessionResumption")
         assertTrue("JSON sessionResumption must have handle", jsonResumption.has("handle"))
@@ -139,8 +138,37 @@ class MiraGeminiSetupPayloadTest {
         val modelConfig = buildPipecatModelConfig(systemInstructionText = "")
         assertEquals(Value.Null, modelConfig.value["systemInstruction"])
 
-        val jsonString = json.encodeToString(ValueSerializer, modelConfig)
+        val jsonString = modelConfig.toJsonString(json)
         val jsonObj = JSONObject(jsonString)
         assertTrue(jsonObj.isNull("systemInstruction"))
+    }
+
+    @Test
+    fun testValueSerialization_AllVariants() {
+        val complexValue = Value.Object(
+            "str" to Value.Str("hello"),
+            "numInt" to Value.Number(42.0),
+            "numFloat" to Value.Number(3.14),
+            "boolTrue" to Value.Bool(true),
+            "boolFalse" to Value.Bool(false),
+            "nullVal" to Value.Null,
+            "array" to Value.Array(listOf(Value.Str("a"), Value.Number(1.0))),
+            "nested" to Value.Object("nestedKey" to Value.Str("nestedValue"))
+        )
+
+        val jsonString = complexValue.toJsonString(json)
+        val jsonObj = JSONObject(jsonString)
+
+        assertEquals("hello", jsonObj.getString("str"))
+        assertEquals(42, jsonObj.getInt("numInt"))
+        assertEquals(3.14, jsonObj.getDouble("numFloat"), 0.001)
+        assertTrue(jsonObj.getBoolean("boolTrue"))
+        assertFalse(jsonObj.getBoolean("boolFalse"))
+        assertTrue(jsonObj.isNull("nullVal"))
+        val arr = jsonObj.getJSONArray("array")
+        assertEquals(2, arr.length())
+        assertEquals("a", arr.getString(0))
+        assertEquals(1, arr.getInt(1))
+        assertEquals("nestedValue", jsonObj.getJSONObject("nested").getString("nestedKey"))
     }
 }

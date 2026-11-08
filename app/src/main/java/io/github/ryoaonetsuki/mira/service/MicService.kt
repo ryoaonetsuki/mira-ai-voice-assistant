@@ -714,7 +714,11 @@ class MicService : Service() {
         }
 
         // Layer 1 — MiraIdentityInterceptor wiring: BEFORE sending transcribed text to Gemini
-        val cannedIdentityResponse = io.github.ryoaonetsuki.mira.identity.MiraIdentityInterceptor.getCannedResponse(cleanText)
+        val cannedIdentityResponse = io.github.ryoaonetsuki.mira.identity.MiraIdentityInterceptor.getCannedResponse(
+            userQuery = cleanText,
+            userLanguage = cachedLanguage,
+            forVoice = true
+        )
         if (cannedIdentityResponse != null) {
             // Suppress the Live model's spoken reply for THAT turn only
             sessionManager?.sendUserMessage("[Identity question detected: \"$cleanText\". Do not reply or speak. Keep silent.]")

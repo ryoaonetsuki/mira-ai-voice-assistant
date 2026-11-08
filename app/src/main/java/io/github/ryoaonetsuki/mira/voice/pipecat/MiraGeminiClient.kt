@@ -192,7 +192,9 @@ class MiraGeminiClient private constructor(
             fun postEvent(event: ClientThreadEvent) = events.put(event)
 
             thread(name = "MiraGeminiClient") {
-                val okHttpClient: OkHttpClient = OkHttpClient.Builder().build()
+                val okHttpClient: OkHttpClient = OkHttpClient.Builder()
+                    .pingInterval(15, java.util.concurrent.TimeUnit.SECONDS)
+                    .build()
 
                 val inputSampleRate = 16000
                 val audioInCallback = AtomicReference<((ByteArray) -> Unit)?>(null)
@@ -274,22 +276,29 @@ class MiraGeminiClient private constructor(
                         try {
                             val root = JSONObject(msg)
 
+                            fun checkResumptionUpdate(obj: JSONObject) {
+                                if (obj.has("sessionResumptionUpdate")) {
+                                    val sru = obj.getJSONObject("sessionResumptionUpdate")
+                                    val newHandle = sru.optString("newHandle", "").ifEmpty { sru.optString("handle", "") }
+                                    val resumable = sru.optBoolean("resumable", false)
+                                    postEvent(ClientThreadEvent.SessionResumptionUpdateReceived(newHandle, resumable))
+                                }
+                            }
+
+                            fun checkGoAway(obj: JSONObject) {
+                                if (obj.has("goAway")) {
+                                    val ga = obj.getJSONObject("goAway")
+                                    val timeLeft = ga.optString("timeLeft", "")
+                                    postEvent(ClientThreadEvent.GoAwayReceived(timeLeft))
+                                }
+                            }
+
                             if (root.has("setupComplete")) {
                                 postEvent(ClientThreadEvent.SetupCompleteReceived)
                             }
 
-                            if (root.has("sessionResumptionUpdate")) {
-                                val sru = root.getJSONObject("sessionResumptionUpdate")
-                                val newHandle = sru.optString("newHandle", "")
-                                val resumable = sru.optBoolean("resumable", false)
-                                postEvent(ClientThreadEvent.SessionResumptionUpdateReceived(newHandle, resumable))
-                            }
-
-                            if (root.has("goAway")) {
-                                val ga = root.getJSONObject("goAway")
-                                val timeLeft = ga.optString("timeLeft", "")
-                                postEvent(ClientThreadEvent.GoAwayReceived(timeLeft))
-                            }
+                            checkResumptionUpdate(root)
+                            checkGoAway(root)
 
                             if (root.has("inputAudioTranscription")) {
                                 val text = root.getJSONObject("inputAudioTranscription").optString("text")
@@ -303,6 +312,8 @@ class MiraGeminiClient private constructor(
 
                             if (root.has("serverContent")) {
                                 val sc = root.getJSONObject("serverContent")
+                                checkResumptionUpdate(sc)
+                                checkGoAway(sc)
 
                                 val inputTrans = sc.optJSONObject("inputAudioTranscription")
                                     ?: sc.optJSONObject("inputTranscription")
@@ -422,6 +433,7 @@ class MiraGeminiClient private constructor(
 
                 fun stopAudio() {
                     if (!isAudioStopped.compareAndSet(false, true)) return
+                    audioInCallback.set(null)
                     audioIn.stop()
                     audioOut.interrupt()
                     audioOut.stop()
@@ -453,7 +465,10 @@ class MiraGeminiClient private constructor(
 
                         ClientThreadEvent.Stop -> {
                             stopAudio()
-                            ws.close(1000, "user requested close")
+                            val closedCleanly = ws.close(1000, "user requested close")
+                            if (!closedCleanly) {
+                                ws.cancel()
+                            }
                         }
 
                         ClientThreadEvent.WebsocketClosed -> {
@@ -574,10 +589,8 @@ class MiraGeminiClient private constructor(
 
                             if (event.turnComplete) {
                                 Log.d(TAG, "Model turn complete")
-                                if (echoRouter.isBotTalking()) {
-                                    echoRouter.onTurnComplete()
-                                    listenerRef.get()?.onBotTalking(false)
-                                }
+                                echoRouter.onTurnComplete()
+                                listenerRef.get()?.onBotTalking(false)
                                 if (!isUserTalking) {
                                     isUserTalking = true
                                     listenerRef.get()?.onUserTalking(true)

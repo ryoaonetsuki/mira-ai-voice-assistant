@@ -9,10 +9,19 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.DrawableRes
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -26,6 +35,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -48,6 +60,8 @@ import io.github.ryoaonetsuki.mira.ui.navigation.Screen
 import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlin.math.PI
+import kotlin.math.sin
 
 @Composable
 fun HomeScreen(
@@ -251,6 +265,7 @@ fun HomeScreen(
         // Floating Bottom Navigation Bar (Home | Vision | BIG centre Voice | Memory | Chat)
         HomeBottomNavBar(
             isLive = isLive,
+            micAmplitude = micAmp,
             context = context,
             palette = palette,
             onNavigate = onNavigate
@@ -261,6 +276,7 @@ fun HomeScreen(
 @Composable
 private fun HomeBottomNavBar(
     isLive: Boolean,
+    micAmplitude: Float,
     context: Context,
     palette: io.github.ryoaonetsuki.mira.ui.theme.MiraPalette,
     onNavigate: (String) -> Unit
@@ -279,12 +295,8 @@ private fun HomeBottomNavBar(
         }
     }
 
-    val micButtonGradient = remember(palette.primary, palette.secondary, isLive) {
-        if (isLive) {
-            Brush.verticalGradient(listOf(Color(0xFFEF4444), Color(0xFFDC2626)))
-        } else {
-            Brush.verticalGradient(listOf(palette.primary, palette.secondary))
-        }
+    val micButtonGradient = remember(palette.primary, palette.secondary) {
+        Brush.verticalGradient(listOf(palette.primary, palette.secondary))
     }
 
     Box(
@@ -352,12 +364,19 @@ private fun HomeBottomNavBar(
                             }
                         }
                 ) {
-                    Icon(
-                        painter = painterResource(id = if (isLive) R.drawable.ic_fluent_stop_24_filled else R.drawable.ic_fluent_mic_24_regular),
-                        contentDescription = if (isLive) "Stop Session" else "Talk to Mira",
-                        tint = Color.White,
-                        modifier = Modifier.size(26.dp)
-                    )
+                    if (isLive) {
+                        VoiceWaveformBars(
+                            amplitude = micAmplitude,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    } else {
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_fluent_mic_24_regular),
+                            contentDescription = "Talk to Mira",
+                            tint = Color.White,
+                            modifier = Modifier.size(26.dp)
+                        )
+                    }
                 }
 
                 // Memory tab
@@ -380,6 +399,61 @@ private fun HomeBottomNavBar(
                     onClick = { onNavigate(Screen.Chat.route) }
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun VoiceWaveformBars(
+    amplitude: Float,
+    modifier: Modifier = Modifier
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "VoiceBarsPhaseTransition")
+    val phase by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = (2 * PI).toFloat(),
+        animationSpec = infiniteRepeatable(
+            animation = tween(1200, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "VoiceBarsPhase"
+    )
+
+    val smoothedAmp by animateFloatAsState(
+        targetValue = amplitude.coerceIn(0f, 1f),
+        animationSpec = spring(
+            dampingRatio = 0.8f,
+            stiffness = Spring.StiffnessHigh
+        ),
+        label = "VoiceBarsSmoothedAmp"
+    )
+
+    Canvas(modifier = modifier) {
+        val barCount = 5
+        val barWidth = 3.dp.toPx()
+        val totalBarsWidth = barWidth * barCount
+        val spacing = (size.width - totalBarsWidth) / (barCount - 1)
+
+        val profile = floatArrayOf(0.45f, 0.75f, 1.0f, 0.75f, 0.45f)
+        val baseMin = 4.dp.toPx()
+        val baseMax = 7.dp.toPx()
+        val maxHeight = (size.height - 2.dp.toPx()).coerceAtLeast(baseMax)
+
+        for (i in 0 until barCount) {
+            val barPhase = phase + i * 1.25f
+            val wave = sin(barPhase)
+            val base = baseMin + (baseMax - baseMin) * profile[i] + 1.2.dp.toPx() * wave
+            val variation = (maxHeight - baseMax) * profile[i] * (1f + 0.2f * wave)
+            val barHeight = (base + smoothedAmp * variation).coerceIn(baseMin, maxHeight)
+            val x = i * (barWidth + spacing)
+            val y = (size.height - barHeight) / 2f
+
+            drawRoundRect(
+                color = Color.White,
+                topLeft = Offset(x, y),
+                size = Size(barWidth, barHeight),
+                cornerRadius = CornerRadius(barWidth / 2f, barWidth / 2f)
+            )
         }
     }
 }

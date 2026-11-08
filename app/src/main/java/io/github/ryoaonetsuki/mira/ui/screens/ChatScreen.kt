@@ -2392,20 +2392,24 @@ fun PillToggle(
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+            modifier = Modifier
+                .fillMaxHeight()
+                .padding(horizontal = 9.dp)
         ) {
             Icon(
                 painter = painterResource(iconRes),
                 contentDescription = label,
                 tint = if (isActive) palette.primary else palette.textSecondary,
-                modifier = Modifier.size(14.dp)
+                modifier = Modifier.size(15.dp)
             )
-            Spacer(modifier = Modifier.width(4.dp))
+            Spacer(modifier = Modifier.width(4.5.dp))
             Text(
                 text = label,
                 fontSize = 12.sp,
-                fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
-                color = if (isActive) palette.primary else palette.textSecondary
+                fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Medium,
+                color = if (isActive) palette.primary else palette.textSecondary,
+                lineHeight = 16.sp,
+                maxLines = 1
             )
         }
     }

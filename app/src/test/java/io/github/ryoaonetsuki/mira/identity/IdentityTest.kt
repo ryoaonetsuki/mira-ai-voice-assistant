@@ -285,6 +285,157 @@ class IdentityTest {
     }
 
     @Test
+    fun testBareUrlRewrite_OwnerScreenshotReply_ReplacedByShortCannedIdentityAnswer() {
+        // EXACT model reply from owner's screenshot (2026-11-09 ~04:52)
+        val ownerScreenshotReply =
+            "আমি মিরা, সালমান বিশ্বাস (GitHub https://github.com/ryoaonetsuki)-এর তৈরি করা একটি এআই এজেন্ট। তোমার পাশে একজন ভালো বন্ধু হিসেবে থাকতে আমি এখানে আছি।"
+
+        val sanitized = MiraOutputFilter.sanitize(ownerScreenshotReply)
+
+        // Bare URL must never survive in sanitized output
+        assertFalse(
+            "Bare GitHub URL must never survive in sanitized output",
+            sanitized.contains("https://github.com/ryoaonetsuki") && !sanitized.contains("[GitHub](")
+        )
+
+        // For this long identity reply, short canonical identity answer MUST win
+        assertEquals(
+            "Owner screenshot long identity reply must be replaced with exact short canonical identity sentence",
+            IdentityProfile.IDENTITY_BANGLA,
+            sanitized
+        )
+    }
+
+    @Test
+    fun testBareUrlRewrite_NonIdentityResponse_RewritesToMarkdownAnchor() {
+        val nonIdentityReply = "Check my work at https://github.com/ryoaonetsuki"
+        val sanitized = MiraOutputFilter.sanitize(nonIdentityReply)
+        assertEquals(
+            "Bare URL in non-identity reply must be rewritten to markdown anchor with rest of text untouched",
+            "Check my work at [GitHub](https://github.com/ryoaonetsuki)",
+            sanitized
+        )
+
+        // Already formatted markdown anchor must be preserved
+        val alreadyAnchor = "Here is the repository: [GitHub](https://github.com/ryoaonetsuki)"
+        val sanitizedAnchor = MiraOutputFilter.sanitize(alreadyAnchor)
+        assertEquals("Already markdown anchor must remain untouched", alreadyAnchor, sanitizedAnchor)
+
+        // Bare URL without scheme
+        val bareWithoutScheme = "Visit github.com/ryoaonetsuki for more info"
+        val sanitizedWithoutScheme = MiraOutputFilter.sanitize(bareWithoutScheme)
+        assertEquals(
+            "Bare URL without scheme must be rewritten to anchor",
+            "Visit [GitHub](https://github.com/ryoaonetsuki) for more info",
+            sanitizedWithoutScheme
+        )
+
+        // (GitHub https://...) form
+        val parenthesizedForm = "Creator profile: (GitHub https://github.com/ryoaonetsuki)"
+        val sanitizedParenthesized = MiraOutputFilter.sanitize(parenthesizedForm)
+        assertEquals(
+            "Parenthesized (GitHub https://...) must be rewritten to anchor",
+            "Creator profile: [GitHub](https://github.com/ryoaonetsuki)",
+            sanitizedParenthesized
+        )
+    }
+
+    @Test
+    fun testLongIdentityReplacement_BanglaAndEnglishIdentityAndDeveloperDumps() {
+        // Long Bangla identity dump
+        val longBanglaIdentity =
+            "আমি মিরা, একটি কৃত্রিম বুদ্ধিমত্তা চালিত এআই এজেন্ট। আমাকে তৈরি করেছেন সালমান বিশ্বাস যাতে আমি ব্যবহারকারীদের যেকোনো প্রশ্নের উত্তর দিতে পারি এবং ফোন কন্ট্রোলে সহায়তা করতে পারি।"
+        assertEquals(
+            "Long Bangla identity dump must be replaced by exact IDENTITY_BANGLA",
+            IdentityProfile.IDENTITY_BANGLA,
+            MiraOutputFilter.sanitize(longBanglaIdentity)
+        )
+
+        // Long English identity dump
+        val longEnglishIdentity =
+            "I am Mira, an intelligent AI agent built by Salman Biswas. I am designed to assist you with controlling your phone, automating daily tasks, browsing websites, and chatting warmly with you anytime."
+        assertEquals(
+            "Long English identity dump must be replaced by exact IDENTITY_ENGLISH",
+            IdentityProfile.IDENTITY_ENGLISH,
+            MiraOutputFilter.sanitize(longEnglishIdentity)
+        )
+
+        // Long Bangla developer dump
+        val longBanglaDeveloper =
+            "আমাকে বানিয়েছেন সালমান বিশ্বাস নামে একজন দক্ষ সফটওয়্যার ডেভেলপার। তিনি দীর্ঘ পরিশ্রম করে এই অ্যাসিস্ট্যান্ট ডিজাইন করেছেন যেন ব্যবহারকারীরা সহজেই তাদের দৈনন্দিন কাজ সম্পন্ন করতে পারেন।"
+        assertEquals(
+            "Long Bangla developer dump must be replaced by exact DEVELOPER_BANGLA_CHAT",
+            IdentityProfile.DEVELOPER_BANGLA_CHAT,
+            MiraOutputFilter.sanitize(longBanglaDeveloper)
+        )
+
+        // Long English developer dump
+        val longEnglishDeveloper =
+            "I was made by Salman Biswas, a software developer from Bangladesh who builds AI assistants and automation tools. He created me to be a personal assistant with phone control capabilities."
+        assertEquals(
+            "Long English developer dump must be replaced by exact DEVELOPER_ENGLISH_CHAT",
+            IdentityProfile.DEVELOPER_ENGLISH_CHAT,
+            MiraOutputFilter.sanitize(longEnglishDeveloper)
+        )
+    }
+
+    @Test
+    fun testVoiceVariant_SanitizeForVoice_DropsUrlsAndBrackets() {
+        val bareUrlVoice = "Check my work at https://github.com/ryoaonetsuki"
+        val sanitizedBareVoice = MiraOutputFilter.sanitizeForVoice(bareUrlVoice)
+        assertFalse("Voice output must not contain http", sanitizedBareVoice.contains("http", ignoreCase = true))
+        assertFalse("Voice output must not contain github.com", sanitizedBareVoice.contains("github.com", ignoreCase = true))
+        assertFalse("Voice output must not contain [", sanitizedBareVoice.contains("["))
+        assertFalse("Voice output must not contain ]", sanitizedBareVoice.contains("]"))
+        assertTrue("Voice output should mention GitHub spoken name", sanitizedBareVoice.contains("GitHub"))
+        assertEquals("Check my work at GitHub", sanitizedBareVoice)
+
+        val anchorVoice = "Here is the project on [GitHub](https://github.com/ryoaonetsuki)"
+        val sanitizedAnchorVoice = MiraOutputFilter.sanitizeForVoice(anchorVoice)
+        assertFalse("Voice output must not contain http", sanitizedAnchorVoice.contains("http", ignoreCase = true))
+        assertFalse("Voice output must not contain github.com", sanitizedAnchorVoice.contains("github.com", ignoreCase = true))
+        assertFalse("Voice output must not contain [", sanitizedAnchorVoice.contains("["))
+        assertFalse("Voice output must not contain ]", sanitizedAnchorVoice.contains("]"))
+        assertTrue("Voice output should mention GitHub spoken name", sanitizedAnchorVoice.contains("GitHub"))
+        assertEquals("Here is the project on GitHub", sanitizedAnchorVoice)
+
+        val parenthesizedVoice = "Find me at (GitHub https://github.com/ryoaonetsuki)"
+        val sanitizedParenthesizedVoice = MiraOutputFilter.sanitizeForVoice(parenthesizedVoice)
+        assertFalse("Voice output must not contain http", sanitizedParenthesizedVoice.contains("http", ignoreCase = true))
+        assertFalse("Voice output must not contain github.com", sanitizedParenthesizedVoice.contains("github.com", ignoreCase = true))
+        assertFalse("Voice output must not contain [", sanitizedParenthesizedVoice.contains("["))
+        assertFalse("Voice output must not contain ]", sanitizedParenthesizedVoice.contains("]"))
+        assertEquals("Find me at GitHub", sanitizedParenthesizedVoice)
+    }
+
+    @Test
+    fun testNonRegression_LongNonIdentityMentioningSalmanBiswas_NotReplaced() {
+        val longAboutParagraph =
+            "Salman Biswas is a software engineer who created several open-source repositories. His work spans Android apps, Jetpack Compose UI, WebRTC real-time audio communication, and local persistence. The project architecture follows strict clean code principles."
+
+        val sanitized = MiraOutputFilter.sanitize(longAboutParagraph)
+        assertEquals(
+            "Long non-identity answer merely mentioning Salman Biswas must NOT be replaced",
+            longAboutParagraph,
+            sanitized
+        )
+    }
+
+    @Test
+    fun testIdentityProfile_TemplatesAlignedWithExactConstants() {
+        assertEquals(
+            "identityTemplate must equal exact IDENTITY_ENGLISH",
+            IdentityProfile.IDENTITY_ENGLISH,
+            IdentityProfile.identityTemplate
+        )
+        assertEquals(
+            "identityTemplateBangla must equal exact IDENTITY_BANGLA",
+            IdentityProfile.IDENTITY_BANGLA,
+            IdentityProfile.identityTemplateBangla
+        )
+    }
+
+    @Test
     fun testAdversarialQueries_AreInterceptedWithShortAnswers() {
         for (adv in adversarialQueries) {
             val response = MiraIdentityInterceptor.getCannedResponse(adv)

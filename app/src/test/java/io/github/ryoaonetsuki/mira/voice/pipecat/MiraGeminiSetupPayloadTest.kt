@@ -59,7 +59,7 @@ class MiraGeminiSetupPayloadTest {
         assertFalse("Top-level transparent MUST NOT be present", modelConfig.value.containsKey("transparent"))
 
         // Speech config verification
-        val speechConfig = genConfig.value["speechConfig"] as? Value.Object
+        val speechConfig = genConfig?.value?.get("speechConfig") as? Value.Object
         assertNotNull("speechConfig must exist", speechConfig)
         assertEquals("bn-BD", (speechConfig?.value?.get("languageCode") as? Value.Str)?.value)
         val voiceConfig = speechConfig?.value?.get("voiceConfig") as? Value.Object

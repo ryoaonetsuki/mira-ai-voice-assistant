@@ -9,7 +9,6 @@ import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
-import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 
@@ -202,9 +201,7 @@ class CallNotificationStopPathRegressionTest {
 
     @Test
     fun testBuildCallNotification_usesNewSmallIcon_andConfiguresCallStyleWithEndAndMute() {
-        val serviceController = Robolectric.buildService(MicService::class.java).create()
-        val service = serviceController.get()
-        val notification = service.buildCallNotification()
+        val notification = CallNotificationFactory.build(context, isMuted = false)
 
         // 1. Assert uses the NEW small-icon resource
         assertEquals(
@@ -248,6 +245,11 @@ class CallNotificationStopPathRegressionTest {
         // 6. Assert Mute action is present
         val muteAction = notification.actions?.find { it.title == "Mute" || it.title == "Unmute" }
         assertNotNull("Mute action must be present in notification actions", muteAction)
+        assertEquals("Mute", muteAction?.title)
+
+        val mutedNotification = CallNotificationFactory.build(context, isMuted = true)
+        val unmuteAction = mutedNotification.actions?.find { it.title == "Unmute" }
+        assertNotNull("Unmute action must be present when isMuted=true", unmuteAction)
 
         // 7. Assert End / Hang up action is configured in CallStyle extras or actions
         val hasEndIntent = notification.extras.containsKey("android.declineIntent") ||
@@ -269,10 +271,8 @@ class CallNotificationStopPathRegressionTest {
             (oldBuilderNotification.flags and Notification.FLAG_ONLY_ALERT_ONCE) != 0
         )
 
-        // 2. Service-built call notification DOES carry FLAG_ONLY_ALERT_ONCE
-        val serviceController = Robolectric.buildService(MicService::class.java).create()
-        val service = serviceController.get()
-        val callNotification = service.buildCallNotification()
+        // 2. Factory-built call notification DOES carry FLAG_ONLY_ALERT_ONCE
+        val callNotification = CallNotificationFactory.build(context)
         assertTrue(
             "Service-built call notification must carry FLAG_ONLY_ALERT_ONCE",
             (callNotification.flags and Notification.FLAG_ONLY_ALERT_ONCE) != 0
@@ -306,9 +306,15 @@ class CallNotificationStopPathRegressionTest {
         assertEquals(0, silentUpdatesCount)
 
         // Repeated updates on state change (e.g. LISTENING -> SPEAKING -> LISTENING)
-        trackingController.postCallNotificationIfForeground { service.buildCallNotification() }
-        trackingController.postCallNotificationIfForeground { service.buildCallNotification() }
-        trackingController.postCallNotificationIfForeground { service.buildCallNotification() }
+        trackingController.postCallNotificationIfForeground {
+            CallNotificationFactory.build(context, liveState = LiveState.SPEAKING)
+        }
+        trackingController.postCallNotificationIfForeground {
+            CallNotificationFactory.build(context, liveState = LiveState.LISTENING)
+        }
+        trackingController.postCallNotificationIfForeground {
+            CallNotificationFactory.build(context, isMuted = true)
+        }
 
         // Assert: NO additional alerting posts produced; all 3 updates were silent
         assertEquals("Repeated updates must NOT trigger new alerting posts", 1, alertingPostsCount)

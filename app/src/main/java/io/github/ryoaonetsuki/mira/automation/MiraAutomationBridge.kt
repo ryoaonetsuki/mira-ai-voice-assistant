@@ -96,6 +96,32 @@ class MiraAutomationBridge(
         }
     }
 
+    suspend fun executeSkill(skill: io.github.ryoaonetsuki.mira.automation.agent.Skill): AutomationResult {
+        if (isRunning) {
+            return AutomationResult(TaskStatus.FAILED, "Another task is already running", 0)
+        }
+
+        val automation: AutomationPort = ScreenAutomationService(context)
+        val skills = SkillMemoryService.getInstance(context)
+
+        val executor = TaskExecutor(
+            automation = automation,
+            skills = skills,
+            think = null
+        )
+        activeExecutor = executor
+        return try {
+            val result = executor.replaySkillDirect(skill)
+            AutomationResult(
+                status = result.status,
+                message = result.message,
+                stepsUsed = result.stepsUsed
+            )
+        } finally {
+            activeExecutor = null
+        }
+    }
+
     companion object {
         @Volatile
         private var instance: MiraAutomationBridge? = null
@@ -116,18 +142,29 @@ class MiraAutomationBridge(
 
         private val INTENT_PATTERNS = listOf(
             Regex("""\bplay\s+.+\s+on\s+(youtube|spotify|ইউটিউব|স্পটিফাই)\b""", RegexOption.IGNORE_CASE),
+            Regex("""\bplay\s+.+\b""", RegexOption.IGNORE_CASE),
             Regex("""\bmessage\s+.+\s+on\s+(whatsapp|মেসেজ|হোয়াটসঅ্যাপ)\b""", RegexOption.IGNORE_CASE),
             Regex("""\btext\s+.+\s+on\s+(whatsapp|মেসেজ|হোয়াটসঅ্যাপ)\b""", RegexOption.IGNORE_CASE),
-            Regex("""\bcall\s+.+\s+on\s+(whatsapp|ফোন|হোয়াটসঅ্যাপ)\b""", RegexOption.IGNORE_CASE)
+            Regex("""\bcall\s+.+\s+on\s+(whatsapp|ফোন|হোয়াটসঅ্যাপ)\b""", RegexOption.IGNORE_CASE),
+            Regex("""\b(control|operate)\s+(the\s+|my\s+|this\s+)?phone\b""", RegexOption.IGNORE_CASE),
+            Regex("""\bphone\s+control\b""", RegexOption.IGNORE_CASE),
+            Regex("""\bফোন\s+(কন্ট্রোল|নিয়ন্ত্রণ)\b""", RegexOption.IGNORE_CASE),
+            Regex("""\b(gaan|gan)\s+(bajao|chalao)\b""", RegexOption.IGNORE_CASE)
         )
 
         private val ENGLISH_VERBS = setOf(
             "open", "launch", "start", "play", "message", "text", "call",
-            "search", "find", "show", "turn on", "turn off", "set", "take a photo"
+            "search", "find", "show", "turn on", "turn off", "set", "take a photo",
+            "control", "operate"
         )
 
         private val BANGLA_VERBS = listOf(
-            "খুলো", "খোলো", "চালাও", "পাঠাও", "কল", "খুঁজো"
+            "খুলো", "খোলো", "চালাও", "পাঠাও", "কল", "খুঁজো", "কন্ট্রোল", "নিয়ন্ত্রণ"
+        )
+
+        private val ROMAN_BENGALI_VERBS = setOf(
+            "kholo", "khulo", "chalao", "chalaw", "pathao", "pathaw",
+            "bajao", "bajaw", "dekhao", "dekhaw", "koro", "korun", "koren"
         )
 
         private val KNOWN_APPS = setOf(
@@ -142,12 +179,12 @@ class MiraAutomationBridge(
             if (trimmed.isEmpty()) return false
             val lower = trimmed.lowercase()
 
-            // 1. Explicit pattern matches ("play <song> on youtube", "message <name> on whatsapp")
+            // 1. Explicit pattern matches ("play <song> on youtube", "message <name> on whatsapp", "phone control")
             for (pattern in INTENT_PATTERNS) {
                 if (pattern.containsMatchIn(lower)) return true
             }
 
-            // 2. Automation verb check
+            // 2. Automation verb check (English, Bangla, Roman Bengali)
             val hasEnglishVerb = ENGLISH_VERBS.any { verb ->
                 if (verb.contains(" ")) {
                     lower.contains(verb)
@@ -156,14 +193,17 @@ class MiraAutomationBridge(
                 }
             }
             val hasBanglaVerb = BANGLA_VERBS.any { lower.contains(it) }
-            val hasVerb = hasEnglishVerb || hasBanglaVerb
+            val hasRomanVerb = ROMAN_BENGALI_VERBS.any { verb ->
+                Regex("""\b${Regex.escape(verb)}\b""").containsMatchIn(lower)
+            }
+            val hasVerb = hasEnglishVerb || hasBanglaVerb || hasRomanVerb
 
             if (!hasVerb) return false
 
-            // 3. Target app name check
+            // 3. Target app name check (prefix word boundary to support Bengali/Roman suffixes like -e, -এ, -te)
             val hasApp = KNOWN_APPS.any { app ->
                 if (app.all { it.isLetterOrDigit() && it.code < 128 }) {
-                    Regex("""\b${Regex.escape(app)}\b""").containsMatchIn(lower)
+                    Regex("""\b${Regex.escape(app)}""").containsMatchIn(lower)
                 } else {
                     lower.contains(app)
                 }

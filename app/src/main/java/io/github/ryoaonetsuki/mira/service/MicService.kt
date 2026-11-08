@@ -156,6 +156,17 @@ class MicService : Service() {
 
     private lateinit var resumptionStore: SessionResumptionStore
 
+    private val automationBridge by lazy {
+        io.github.ryoaonetsuki.mira.automation.MiraAutomationBridge(applicationContext) {
+            val securePrefs = SecurePreferences(applicationContext)
+            val resolver = io.github.ryoaonetsuki.mira.backend.ApiKeyResolver(applicationContext)
+            when (val keySource = resolver.resolveKey()) {
+                is io.github.ryoaonetsuki.mira.backend.KeySource.UserKey -> keySource.key
+                else -> securePrefs.getGeminiApiKey() ?: ""
+            }
+        }
+    }
+
     private val notificationController by lazy {
         CallNotificationController(
             startForegroundAction = { id, notification ->
@@ -678,29 +689,79 @@ class MicService : Service() {
     private fun handleUserVoiceTurn(text: String) {
         val cleanText = text.trim()
         val words = cleanText.split("\\s+".toRegex()).filter { it.isNotBlank() }
+        val lower = text.trim().lowercase(Locale.ROOT)
+        val stopTokens = lower.split("\\s+".toRegex()).filter { it.isNotBlank() }
+        val stopWords = setOf("stop", "thamo", "থামো")
+        val isStop = stopTokens.any { it in stopWords }
 
-        // Emergency macro voice stop
-        if (MacroRunner.isRunning.value) {
-            val lower = text.trim().lowercase(Locale.ROOT)
-            val stopTokens = lower.split("\\s+".toRegex())
-            val stopWords = setOf("stop", "thamo", "থামো")
-            if (stopTokens.any { it in stopWords }) {
+        // Emergency macro / agent voice stop
+        if (isStop && (MacroRunner.isRunning.value || automationBridge.isRunning)) {
+            if (MacroRunner.isRunning.value) {
                 MacroRunner.cancel("Stopped by voice: $text")
-                serviceScope.launch(Dispatchers.IO) {
+            }
+            if (automationBridge.isRunning) {
+                automationBridge.cancel()
+            }
+            serviceScope.launch(Dispatchers.IO) {
+                try {
+                    val db = MiraDatabase.getInstance(applicationContext)
+                    db.notificationDao().insertNotification(
+                        NotificationEntity(
+                            title = "Macro Stopped",
+                            message = "Screen automation stopped via voice command: $text",
+                            type = "macro"
+                        )
+                    )
+                } catch (e: Exception) {
+                    Log.w(TAG, "MIRA_LIVE_VOICE: Could not record notification: ${e.message}")
+                }
+            }
+            return
+        }
+
+        // Autonomous Screen Agent wiring: BEFORE existing handling
+        if (io.github.ryoaonetsuki.mira.automation.MiraAutomationBridge.isAutomationIntent(cleanText) &&
+            MiraAccessibilityService.isEnabled(applicationContext)
+        ) {
+            // Suppress the Live model's spoken reply for THAT turn only
+            sessionManager?.sendUserMessage("[Automation command detected: \"$cleanText\". Do not reply or speak. Keep silent.]")
+
+            serviceScope.launch(Dispatchers.IO) {
+                val wasMuted = _isMuted.value
+                if (!wasMuted) {
+                    _isMuted.value = true
+                    sessionManager?.enableMic(false)
+                }
+                try {
+                    val result = automationBridge.executeGoal(cleanText)
+
+                    // Record notification like existing macro notifications
                     try {
                         val db = MiraDatabase.getInstance(applicationContext)
                         db.notificationDao().insertNotification(
                             NotificationEntity(
-                                title = "Macro Stopped",
-                                message = "Screen automation stopped via voice command: $text",
+                                title = if (result.status == io.github.ryoaonetsuki.mira.automation.agent.TaskStatus.SUCCESS)
+                                    "Task Completed" else "Task Failed",
+                                message = result.message,
                                 type = "macro"
                             )
                         )
                     } catch (e: Exception) {
-                        Log.w(TAG, "MIRA_LIVE_VOICE: Could not record notification: ${e.message}")
+                        Log.w(TAG, "MIRA_LIVE_VOICE: Could not record automation notification: ${e.message}")
+                    }
+
+                    // Speak result message via existing TTS path
+                    speakAutomationResult(result.message)
+                } catch (e: Exception) {
+                    Log.e(TAG, "MIRA_LIVE_VOICE: Error executing voice automation: ${e.message}", e)
+                } finally {
+                    if (!wasMuted) {
+                        _isMuted.value = false
+                        sessionManager?.enableMic(true)
                     }
                 }
             }
+            return
         }
 
         // Debounce connector command execution
@@ -769,6 +830,44 @@ class MicService : Service() {
                     }
                 }
             }
+        }
+    }
+
+    private suspend fun speakAutomationResult(message: String) {
+        if (message.isBlank()) return
+        try {
+            val resolver = io.github.ryoaonetsuki.mira.backend.ApiKeyResolver(applicationContext)
+            val securePrefs = SecurePreferences(applicationContext)
+            val keySource = resolver.resolveKey()
+            val rawApiKey = (keySource as? io.github.ryoaonetsuki.mira.backend.KeySource.UserKey)?.key
+                ?: (securePrefs.getGeminiApiKey() ?: "")
+            val useServer = keySource is io.github.ryoaonetsuki.mira.backend.KeySource.ServerKey
+            val ttsClient = io.github.ryoaonetsuki.mira.network.GeminiTtsClient(applicationContext)
+            val result = ttsClient.speakText(
+                apiKey = rawApiKey,
+                text = message,
+                voiceName = cachedVoiceName,
+                useServerProxy = useServer
+            )
+            if (result.isSuccess) {
+                val pcmBytes = result.getOrThrow()
+                val player = AudioPlayer { isSpeaking ->
+                    handlePlaybackSpeakingChanged(isSpeaking)
+                }
+                player.beginPreview()
+                val rampedBytes = AudioPlayer.applyPreviewFadeRamps(pcmBytes)
+                val chunkSize = 4096
+                var offset = 0
+                while (offset < rampedBytes.size) {
+                    val length = minOf(chunkSize, rampedBytes.size - offset)
+                    player.playAudioChunk(rampedBytes.copyOfRange(offset, offset + length))
+                    offset += length
+                    delay(10)
+                }
+                player.endPreviewCleanly()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "MIRA_LIVE_VOICE: Failed to speak automation result via TTS: ${e.message}")
         }
     }
 

@@ -125,6 +125,7 @@ class MiraGeminiClient private constructor(
     private val onClose: () -> Unit,
     private val setMicMuted: (Boolean) -> Unit,
     private val isMicMuted: () -> Boolean,
+    private val onStopAudioPlayback: () -> Unit = {},
 ) {
     data class Config(
         val apiKey: String,
@@ -177,6 +178,7 @@ class MiraGeminiClient private constructor(
             val modelTranscript: String?
         ) : ClientThreadEvent
         class SetMicMute(val muted: Boolean) : ClientThreadEvent
+        data object StopAudioPlayback : ClientThreadEvent
     }
 
     companion object {
@@ -598,6 +600,11 @@ class MiraGeminiClient private constructor(
                         is ClientThreadEvent.SetMicMute -> {
                             audioIn.muted = event.muted
                         }
+
+                        ClientThreadEvent.StopAudioPlayback -> {
+                            audioOut.interrupt()
+                            echoRouter.onInterrupted()
+                        }
                     }
                 }
             }
@@ -617,6 +624,9 @@ class MiraGeminiClient private constructor(
                 },
                 setMicMuted = {
                     postEvent(ClientThreadEvent.SetMicMute(it))
+                },
+                onStopAudioPlayback = {
+                    postEvent(ClientThreadEvent.StopAudioPlayback)
                 }
             )
         }
@@ -627,6 +637,8 @@ class MiraGeminiClient private constructor(
         set(muted) {
             setMicMuted(muted)
         }
+
+    fun stopAudioPlayback() = onStopAudioPlayback()
 
     fun sendUserMessage(role: String, content: String) =
         onSendUserMessage(AppendedMessage(role = role, content = content))

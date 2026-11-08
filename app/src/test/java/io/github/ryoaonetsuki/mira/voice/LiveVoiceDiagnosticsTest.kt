@@ -131,7 +131,7 @@ class LiveVoiceDiagnosticsTest {
         assertTrue(LiveVoiceDiagnostics.data.value.aecAvailable)
         assertFalse(LiveVoiceDiagnostics.data.value.aecEnabled)
 
-        LiveVoiceDiagnostics.updateAec(available = false, enabled = false)
+        LiveVoiceDiagnostics.updateAecState(available = false, enabled = false)
         assertFalse(LiveVoiceDiagnostics.data.value.aecAvailable)
         assertFalse(LiveVoiceDiagnostics.data.value.aecEnabled)
 

@@ -151,6 +151,7 @@ class VoiceIntegrationRegressionTest {
         val modelConfig = directOptions.modelConfig as Value.Object
         assertEquals("models/gemini-3.8-live", (modelConfig.value["model"] as Value.Str).value)
         assertFalse("Direct route must NEVER contain transparent", modelConfig.value.containsKey("transparent"))
+        assertTrue("Direct route must have echoGuardEnabled defaulting to true", directOptions.echoGuardEnabled)
     }
 
     @Test
@@ -208,5 +209,6 @@ class VoiceIntegrationRegressionTest {
         assertEquals("Aoede", (defaultPrebuilt.value["voiceName"] as Value.Str).value)
         assertEquals("bn-BD", (defaultSpeechConfig.value["languageCode"] as Value.Str).value)
         assertFalse((defaultModelConfig.value["sessionResumption"] as Value.Object).value.containsKey("handle"))
+        assertTrue("Deserialized options must default echoGuardEnabled to true", defaultOptions.echoGuardEnabled)
     }
 }

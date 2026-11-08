@@ -115,11 +115,39 @@ class LiveVoiceDiagnosticsTest {
     }
 
     @Test
+    fun testAecDiagnosticsStateAndReset() {
+        assertFalse(LiveVoiceDiagnostics.data.value.aecAvailable)
+        assertFalse(LiveVoiceDiagnostics.data.value.aecEnabled)
+
+        LiveVoiceDiagnostics.updateAecAvailable(true)
+        assertTrue(LiveVoiceDiagnostics.data.value.aecAvailable)
+        assertFalse(LiveVoiceDiagnostics.data.value.aecEnabled)
+
+        LiveVoiceDiagnostics.updateAecEnabled(true)
+        assertTrue(LiveVoiceDiagnostics.data.value.aecAvailable)
+        assertTrue(LiveVoiceDiagnostics.data.value.aecEnabled)
+
+        LiveVoiceDiagnostics.updateAecState(available = true, enabled = false)
+        assertTrue(LiveVoiceDiagnostics.data.value.aecAvailable)
+        assertFalse(LiveVoiceDiagnostics.data.value.aecEnabled)
+
+        LiveVoiceDiagnostics.updateAec(available = false, enabled = false)
+        assertFalse(LiveVoiceDiagnostics.data.value.aecAvailable)
+        assertFalse(LiveVoiceDiagnostics.data.value.aecEnabled)
+
+        LiveVoiceDiagnostics.updateAecState(available = true, enabled = true)
+        LiveVoiceDiagnostics.reset()
+        assertFalse(LiveVoiceDiagnostics.data.value.aecAvailable)
+        assertFalse(LiveVoiceDiagnostics.data.value.aecEnabled)
+    }
+
+    @Test
     fun testReset() {
         LiveVoiceDiagnostics.recordReconnectAttempt(4)
         LiveVoiceDiagnostics.recordGoAway(12345L)
         LiveVoiceDiagnostics.recordStage4Timeout(67890L)
         LiveVoiceDiagnostics.updateSessionManagerState("RECONNECTING")
+        LiveVoiceDiagnostics.updateAecState(available = true, enabled = true)
 
         LiveVoiceDiagnostics.reset()
 
@@ -128,5 +156,7 @@ class LiveVoiceDiagnosticsTest {
         assertNull(LiveVoiceDiagnostics.data.value.lastStage4TimeoutTimestamp)
         assertEquals("IDLE", LiveVoiceDiagnostics.data.value.sessionManagerState)
         assertNull(LiveVoiceDiagnostics.data.value.lastResumptionHandleEvent)
+        assertFalse(LiveVoiceDiagnostics.data.value.aecAvailable)
+        assertFalse(LiveVoiceDiagnostics.data.value.aecEnabled)
     }
 }

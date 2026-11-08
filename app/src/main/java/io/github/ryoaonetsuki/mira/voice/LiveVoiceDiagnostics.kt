@@ -171,10 +171,6 @@ object LiveVoiceDiagnostics {
         _data.value = _data.value.copy(aecAvailable = available, aecEnabled = enabled)
     }
 
-    fun updateAec(available: Boolean, enabled: Boolean) {
-        _data.value = _data.value.copy(aecAvailable = available, aecEnabled = enabled)
-    }
-
     fun reset() {
         _data.value = VoiceDiagnosticsData(
             liveCapabilityResult = _data.value.liveCapabilityResult

@@ -68,16 +68,12 @@ class MicService : Service() {
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     private var sessionManager: GeminiSessionManager? = null
-    private var audioRecorder: AudioRecorder? = null
-    private var audioPlayer: AudioPlayer? = null
-    private var liveClient: GeminiLiveClient? = null
     private val handledTranscripts = Collections.synchronizedSet(mutableSetOf<String>())
     private var connectorJob: Job? = null
     private var liveSearchJob: Job? = null
     private var connectingWatchdogJob: Job? = null
 
     // Legacy Fallback voice mode & session (unreachable unless explicitly enabled)
-    private var fallbackSession: FallbackVoiceSession? = null
     private var androidTts: TextToSpeech? = null
     private var isFallbackMode: Boolean
         get() = _isFallbackMode.value
@@ -89,7 +85,6 @@ class MicService : Service() {
     private var cachedLanguage: String = "Bangla (Bengali)"
 
     private lateinit var resumptionStore: SessionResumptionStore
-    private var vad: VoiceActivityDetector? = null
 
     /**
      * Guarantees terminal ERROR state and complete resource cleanup on every failure path.
@@ -120,28 +115,6 @@ class MicService : Service() {
         }
         sessionManager = null
         activeSessionManager = null
-
-        try {
-            audioRecorder?.stopRecording()
-        } catch (e: Exception) {
-            Log.w(TAG, "Error stopping recorder on terminal error: ${e.message}")
-        }
-        audioRecorder = null
-
-        try {
-            audioPlayer?.stopImmediatelyAndFlush()
-            audioPlayer?.release()
-        } catch (e: Exception) {
-            Log.w(TAG, "Error stopping player on terminal error: ${e.message}")
-        }
-        audioPlayer = null
-
-        try {
-            liveClient?.endSession()
-        } catch (e: Exception) {
-            Log.w(TAG, "Error ending live client on terminal error: ${e.message}")
-        }
-        liveClient = null
     }
 
     private fun handlePlaybackSpeakingChanged(isSpeaking: Boolean) {
@@ -356,9 +329,6 @@ class MicService : Service() {
             val customInstructions = userPrefs.customInstructionsFlow.first()
             val language = userPrefs.languageFlow.first()
             val secretMode = userPrefs.secretModeFlow.first()
-            val voiceRouting = userPrefs.voiceRoutingFlow.first()
-            val useRelay = (voiceRouting != "DIRECT")
-            val fastListening = userPrefs.fastListeningFlow.first()
             val echoGuard = userPrefs.echoGuardFlow.first()
 
             cachedVoiceName = voiceName
@@ -408,9 +378,9 @@ class MicService : Service() {
                 append("\nKeep answers natural, conversational, and suitable for spoken dialogue. Never volunteer that you are an AI unprompted, and never use robotic disclaimers.")
             }
 
-            val bcp47Language = GeminiLiveClient.mapLanguageToBcp47(language)
+            val bcp47Language = LanguageUtils.mapLanguageToBcp47(language)
 
-            Log.i(TAG, "MIRA_LIVE_VOICE: Initializing GeminiSessionManager with voice=$voiceName, language=$bcp47Language, useRelay=$useRelay, fastListening=$fastListening, echoGuard=$echoGuard")
+            Log.i(TAG, "MIRA_LIVE_VOICE: Initializing GeminiSessionManager with voice=$voiceName, language=$bcp47Language, echoGuard=$echoGuard")
 
             _liveState.value = LiveState.CONNECTING
             _voiceStage.value = VoiceStage.CONNECTING
@@ -432,7 +402,6 @@ class MicService : Service() {
                 voiceName = voiceName,
                 language = bcp47Language,
                 systemPrompt = fullSystemPrompt,
-                useRelay = useRelay,
                 resumptionStore = resumptionStore,
                 listener = createSessionListener(),
                 externalScope = serviceScope
@@ -440,7 +409,7 @@ class MicService : Service() {
             sessionManager = manager
             activeSessionManager = manager
 
-            LiveVoiceDiagnostics.updateActiveRoute(if (useRelay) "RELAY" else "DIRECT")
+            LiveVoiceDiagnostics.updateActiveRoute("DIRECT")
             LiveVoiceDiagnostics.updateStage("CONNECTING")
 
             // Connect manager.audioLevel to _micAmplitude (the orb driver)
@@ -772,8 +741,6 @@ class MicService : Service() {
     private fun stopLiveVoiceSessionInternal() {
         connectingWatchdogJob?.cancel()
         connectingWatchdogJob = null
-        vad?.reset()
-        vad = null
         connectorJob?.cancel()
         connectorJob = null
         liveSearchJob?.cancel()
@@ -784,24 +751,11 @@ class MicService : Service() {
         sessionManager = null
         activeSessionManager = null
 
-        audioRecorder?.stopRecording()
-        audioRecorder = null
-        fallbackSession?.stop()
-        fallbackSession = null
         try {
             androidTts?.stop()
             androidTts?.shutdown()
         } catch (_: Exception) {}
         androidTts = null
-        try {
-            audioPlayer?.stopImmediatelyAndFlush()
-            audioPlayer?.release()
-        } catch (_: Exception) {}
-        audioPlayer = null
-        try {
-            liveClient?.endSession()
-        } catch (_: Exception) {}
-        liveClient = null
 
         isFallbackMode = false
         _isReconnecting.value = false

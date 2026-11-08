@@ -4,9 +4,30 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.pow
+import kotlin.math.sqrt
 
 /**
- * Speaking-state echo gate safety net for Mira Gemini Live voice (ROUND 20 Turns 3-4).
+ * Calculates normalized RMS audio level [0.0f, 1.0f] from 16-bit PCM mono data.
+ */
+internal fun calculateAudioLevel(pcmData: ByteArray): Float {
+    var sumSquares = 0.0
+    val numSamples = pcmData.size / 2
+    if (numSamples == 0) return 0f
+
+    for (i in 0 until numSamples) {
+        val low = pcmData[i * 2].toInt() and 0xFF
+        val high = pcmData[i * 2 + 1].toInt() and 0xFF
+        val sample = ((high shl 8) or low).toShort()
+        val sampleValue = sample.toDouble()
+        sumSquares += sampleValue * sampleValue
+    }
+
+    val rms = sqrt(sumSquares / numSamples)
+    return (rms / 32768.0).toFloat().coerceIn(0.0f, 1.0f)
+}
+
+/**
+ * Speaking-state echo gate safety net for Mira Gemini Live voice (ROUND 20 Turns 3-4, ROUND 22 Turn 5).
  *
  * Prevents Mira's loudspeaker playback from leaking back into the mic and triggering
  * premature Gemini server-side VAD interruption (serverContent.interrupted=true), which
@@ -18,12 +39,11 @@ import kotlin.math.pow
  * - If [isBotTalking] is true -> forwards ONLY when microphone energy clearly exceeds
  *   Mira's own playback level: micRms > (effectiveBotLevel * RATIO + FLOOR).
  *
- * Decay Model:
- * During inter-phrase or inter-sentence pauses in Mira's speech, AudioOut does not write chunks,
- * leaving the latest bot audio level stale-high while [isBotTalking] remains true.
- * To allow natural user interruption during these pauses, [computeEffectiveBotLevel] decays
- * the bot playback level exponentially with half-life [BOT_LEVEL_HALF_LIFE_MS] (150ms),
- * dropping to 0 once age exceeds [BOT_LEVEL_MAX_AGE_MS] (300ms).
+ * Drain-Aware Decay Model:
+ * During active playback and while AudioTrack drains buffered audio (chunk duration + 250ms margin),
+ * [computeEffectiveBotLevel] preserves the bot playback level without decay. Only after this drain
+ * window has elapsed does the level decay exponentially with half-life [BOT_LEVEL_HALF_LIFE_MS] (150ms),
+ * dropping to 0 once age exceeds [BOT_LEVEL_MAX_AGE_MS] (600ms).
  */
 object EchoGate {
     /**
@@ -52,26 +72,32 @@ object EchoGate {
 
     /**
      * Maximum age in milliseconds after which playback level is treated as completely silent (0.0f).
-     * Normal conversational inter-sentence pauses exceed 250-400ms.
+     * Raised from 300ms to 600ms (Round 22 Turn 5) to account for AudioTrack buffering.
      */
-    const val BOT_LEVEL_MAX_AGE_MS: Long = 300L
+    const val BOT_LEVEL_MAX_AGE_MS: Long = 600L
 
     /**
-     * Computes the effective bot playback level decaying exponentially with age.
+     * Computes the effective bot playback level decaying exponentially with age after the drain window.
      *
      * @param lastLevel Normalized RMS [0.0, 1.0] of latest bot speaker chunk.
      * @param lastLevelTimestampMs Timestamp (ms) when [lastLevel] was recorded.
      * @param nowMs Current timestamp (ms), defaults to [System.currentTimeMillis].
-     * @return Effective decayed level in [0.0, 1.0]. Returns [lastLevel] if fresh,
-     *         decays smoothly by 50% every 150ms, and drops to 0.0f at age >= 300ms.
+     * @param audioActiveUntilMs Timestamp (ms) until which audio is actively playing or draining.
+     * @return Effective level in [0.0, 1.0]. Returns [lastLevel] (no decay) while nowMs < audioActiveUntilMs,
+     *         decays smoothly by 50% every 150ms thereafter, and drops to 0.0f at age >= 600ms.
      */
     fun computeEffectiveBotLevel(
         lastLevel: Float,
         lastLevelTimestampMs: Long,
-        nowMs: Long = System.currentTimeMillis()
+        nowMs: Long = System.currentTimeMillis(),
+        audioActiveUntilMs: Long = lastLevelTimestampMs
     ): Float {
         if (lastLevel <= 0f || lastLevelTimestampMs <= 0L) return 0f
-        val ageMs = nowMs - lastLevelTimestampMs
+        val effectiveStartMs = maxOf(lastLevelTimestampMs, audioActiveUntilMs)
+        if (nowMs < effectiveStartMs) {
+            return lastLevel
+        }
+        val ageMs = nowMs - effectiveStartMs
         if (ageMs <= 0L) return lastLevel
         if (ageMs >= BOT_LEVEL_MAX_AGE_MS) return 0f
         val decay = (0.5).pow(ageMs.toDouble() / BOT_LEVEL_HALF_LIFE_MS.toDouble()).toFloat()
@@ -107,44 +133,62 @@ object EchoGate {
 class EchoFrameRouter(
     val echoGuardEnabled: Boolean = true
 ) {
+    companion object {
+        const val DRAIN_MARGIN_MS: Long = 250L
+        const val DEFAULT_CHUNK_DURATION_MS: Long = 100L
+    }
+
     private val isBotTalking = AtomicBoolean(false)
     private val latestBotAudioLevel = AtomicReference(0f)
     private val latestBotAudioLevelTimestamp = AtomicLong(0L)
+    private val audioActiveUntil = AtomicLong(0L)
 
     fun onBotTalking(talking: Boolean) {
         isBotTalking.set(talking)
         if (!talking) {
             latestBotAudioLevel.set(0f)
             latestBotAudioLevelTimestamp.set(0L)
+            audioActiveUntil.set(0L)
         }
     }
 
-    fun onBotAudioLevel(level: Float, timestampMs: Long = System.currentTimeMillis()) {
+    fun onBotAudioLevel(
+        level: Float,
+        timestampMs: Long = System.currentTimeMillis(),
+        chunkDurationMs: Long = DEFAULT_CHUNK_DURATION_MS
+    ) {
         latestBotAudioLevel.set(level)
         latestBotAudioLevelTimestamp.set(timestampMs)
+        val activeUntil = timestampMs + chunkDurationMs + DRAIN_MARGIN_MS
+        audioActiveUntil.set(activeUntil)
     }
 
     fun onInterrupted() {
         isBotTalking.set(false)
         latestBotAudioLevel.set(0f)
         latestBotAudioLevelTimestamp.set(0L)
+        audioActiveUntil.set(0L)
     }
 
     fun onTurnComplete() {
         isBotTalking.set(false)
         latestBotAudioLevel.set(0f)
         latestBotAudioLevelTimestamp.set(0L)
+        audioActiveUntil.set(0L)
     }
 
     fun isBotTalking(): Boolean = isBotTalking.get()
 
     fun getRawBotLevel(): Float = latestBotAudioLevel.get()
 
+    fun getAudioActiveUntilMs(): Long = audioActiveUntil.get()
+
     fun getEffectiveBotLevel(nowMs: Long = System.currentTimeMillis()): Float {
         return EchoGate.computeEffectiveBotLevel(
-            latestBotAudioLevel.get(),
-            latestBotAudioLevelTimestamp.get(),
-            nowMs
+            lastLevel = latestBotAudioLevel.get(),
+            lastLevelTimestampMs = latestBotAudioLevelTimestamp.get(),
+            nowMs = nowMs,
+            audioActiveUntilMs = audioActiveUntil.get()
         )
     }
 

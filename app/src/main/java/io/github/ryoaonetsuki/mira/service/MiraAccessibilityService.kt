@@ -115,12 +115,37 @@ class MiraAccessibilityService : AccessibilityService() {
                     }
                 }
             }
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
+                if (pkg.isNotEmpty() && pkg != "com.android.systemui") {
+                    val map = mutableMapOf<String, Any>(
+                        "type" to "window",
+                        "package" to pkg,
+                        "timestamp" to System.currentTimeMillis()
+                    )
+                    synchronized(macroEvents) {
+                        macroEvents.add(map)
+                    }
+                }
+            }
         }
     }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        try {
+            val info = serviceInfo ?: android.accessibilityservice.AccessibilityServiceInfo()
+            info.eventTypes = AccessibilityEvent.TYPES_ALL_MASK
+            info.feedbackType = android.accessibilityservice.AccessibilityServiceInfo.FEEDBACK_GENERIC
+            info.notificationTimeout = 100
+            info.flags = info.flags or
+                android.accessibilityservice.AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
+                android.accessibilityservice.AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
+                android.accessibilityservice.AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
+            serviceInfo = info
+        } catch (e: Throwable) {
+            Log.w(TAG, "Could not configure AccessibilityServiceInfo: ${e.message}")
+        }
         Log.i(TAG, "MiraAccessibilityService connected and ready")
     }
 
@@ -489,24 +514,46 @@ class MiraAccessibilityService : AccessibilityService() {
 
         fun convertEventsToSteps(events: List<Map<String, Any>>): List<TaskStep> {
             val steps = mutableListOf<TaskStep>()
+            var lastPkg: String? = null
+
             for (event in events) {
-                when (event["type"] as? String) {
+                val pkg = (event["package"] as? String)?.trim().orEmpty()
+                val type = event["type"] as? String
+
+                // Jarvis import (macro_recorder_service.dart): Launch target application before interaction if package is external
+                if (pkg.isNotEmpty() && pkg != lastPkg && pkg != OWN_PACKAGE && pkg != "com.android.systemui") {
+                    if (steps.isEmpty() || lastPkg != null) {
+                        steps.add(
+                            TaskStep(
+                                action = TaskStep.ACTION_OPEN_APP,
+                                params = mapOf("app" to pkg),
+                                reasoning = "Macro launch target application \"$pkg\""
+                            )
+                        )
+                    }
+                    lastPkg = pkg
+                }
+
+                when (type) {
                     "click" -> {
                         val label = (event["label"] as? String)?.trim() ?: ""
+                        val x = (event["x"] as? Number)?.toInt() ?: 0
+                        val y = (event["y"] as? Number)?.toInt() ?: 0
+
                         if (label.isNotEmpty()) {
                             steps.add(
                                 TaskStep(
                                     action = TaskStep.ACTION_CLICK_TEXT,
-                                    params = mapOf("text" to label)
+                                    params = mapOf("text" to label),
+                                    reasoning = "Macro click on \"$label\""
                                 )
                             )
-                        } else {
-                            val x = (event["x"] as? Number)?.toInt() ?: 0
-                            val y = (event["y"] as? Number)?.toInt() ?: 0
+                        } else if (x > 0 && y > 0) {
                             steps.add(
                                 TaskStep(
                                     action = TaskStep.ACTION_CLICK_AT,
-                                    params = mapOf("x" to x, "y" to y)
+                                    params = mapOf("x" to x, "y" to y),
+                                    reasoning = "Macro click at coordinates ($x, $y)"
                                 )
                             )
                         }
@@ -517,7 +564,16 @@ class MiraAccessibilityService : AccessibilityService() {
                             steps.add(
                                 TaskStep(
                                     action = TaskStep.ACTION_TYPE_TEXT,
-                                    params = mapOf("text" to text)
+                                    params = mapOf("text" to text),
+                                    reasoning = "Macro enter text \"$text\""
+                                )
+                            )
+                            // Jarvis import: submit input with IME enter after typing
+                            steps.add(
+                                TaskStep(
+                                    action = TaskStep.ACTION_PRESS_ENTER,
+                                    params = emptyMap(),
+                                    reasoning = "Macro submit input"
                                 )
                             )
                         }
@@ -527,7 +583,8 @@ class MiraAccessibilityService : AccessibilityService() {
                         steps.add(
                             TaskStep(
                                 action = TaskStep.ACTION_SCROLL,
-                                params = mapOf("direction" to direction)
+                                params = mapOf("direction" to direction),
+                                reasoning = "Macro scroll $direction"
                             )
                         )
                     }

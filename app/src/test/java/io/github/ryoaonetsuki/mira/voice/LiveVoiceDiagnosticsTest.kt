@@ -17,9 +17,9 @@ class LiveVoiceDiagnosticsTest {
     @Before
     fun setUp() {
         context = RuntimeEnvironment.getApplication()
-        LiveVoiceDiagnostics.reset()
         store = SessionResumptionStore(context)
         store.clearHandle()
+        LiveVoiceDiagnostics.reset()
     }
 
     @Test

@@ -82,12 +82,20 @@ class DefaultSessionClient(
 
     override fun disconnect() {
         _isClosed = true
-        pipecatClient.disconnect()
+        try {
+            pipecatClient.disconnect()
+        } catch (t: Throwable) {
+            Log.w("DefaultSessionClient", "Exception in disconnect: ${t.message}")
+        }
     }
 
     override fun release() {
         _isClosed = true
-        pipecatClient.release()
+        try {
+            pipecatClient.release()
+        } catch (t: Throwable) {
+            Log.w("DefaultSessionClient", "Exception in release: ${t.message}")
+        }
     }
 
     override fun enableMic(enabled: Boolean) {
@@ -224,7 +232,10 @@ class GeminiSessionManager(
 
     fun startSession() {
         Log.i(TAG, "MIRA_LIVE_VOICE: startSession() requested")
-        isExplicitlyStopped.set(false)
+        if (isExplicitlyStopped.get()) {
+            Log.w(TAG, "MIRA_LIVE_VOICE: startSession() ignored on an explicitly stopped manager instance")
+            return
+        }
         retryCount = 0
 
         if (!acquireLiveSessionSlot()) {
@@ -292,9 +303,13 @@ class GeminiSessionManager(
         if (client != null && !client.isClosed) {
             try {
                 client.disconnect()
+            } catch (t: Throwable) {
+                Log.w(TAG, "MIRA_LIVE_VOICE: Exception disconnecting previous client: ${t.message}")
+            }
+            try {
                 client.release()
-            } catch (e: Exception) {
-                Log.w(TAG, "MIRA_LIVE_VOICE: Exception closing previous client: ${e.message}")
+            } catch (t: Throwable) {
+                Log.w(TAG, "MIRA_LIVE_VOICE: Exception releasing previous client: ${t.message}")
             }
         }
     }
@@ -473,18 +488,15 @@ class GeminiSessionManager(
             Log.d(TAG, "MIRA_LIVE_VOICE: sessionResumptionUpdate ignored outside CONNECTED state (state=${_state.value})")
             return
         }
-        if (isBotSpeaking) {
-            Log.d(TAG, "MIRA_LIVE_VOICE: sessionResumptionUpdate ignored during active model generation/speaking")
-            return
-        }
-        if (activeFunctionCalls.get() > 0) {
-            Log.d(TAG, "MIRA_LIVE_VOICE: sessionResumptionUpdate ignored during active function call")
+        if (handle.isBlank()) {
+            Log.w(TAG, "MIRA_LIVE_VOICE: sessionResumptionUpdate ignored (empty handle)")
             return
         }
 
         // Security: NEVER log handle value — length and status only
         Log.i(TAG, "MIRA_LIVE_VOICE: Saving valid resumption handle (length=${handle.length})")
         resumptionStore.saveHandle(handle)
+        LiveVoiceDiagnostics.recordResumptionHandleEvent("saved (len=${handle.length})")
     }
 
     private fun handleGoAway(timeLeft: String, epoch: Int = currentEpoch.get()) {
@@ -498,11 +510,11 @@ class GeminiSessionManager(
         val hasValidHandle = !storedHandle.isNullOrBlank()
 
         Log.w(TAG, "MIRA_LIVE_VOICE: Server GoAway received (timeLeft=$timeLeft, hasValidHandle=$hasValidHandle)")
+        LiveVoiceDiagnostics.recordGoAway()
 
         if (!hasValidHandle) {
-            Log.w(TAG, "MIRA_LIVE_VOICE: GoAway received without valid handle; treating as normal disconnect")
-            handleSessionEnded("goAway without valid handle", null, epoch)
-            return
+            Log.w(TAG, "MIRA_LIVE_VOICE: GoAway received without valid handle; context will not be resumed")
+            LiveVoiceDiagnostics.updateLastError("Server GoAway received with no resumption handle — context cannot be resumed")
         }
 
         transitionTo(SessionManagerState.GOAWAY_RECEIVED)
@@ -526,11 +538,11 @@ class GeminiSessionManager(
         isBotSpeaking = false
         isUserSpeaking = false
 
-        // If disconnected before reaching CONNECTED (failed resumption or setup handshake),
-        // clear stored handle to fall back to fresh session.
-        if (_state.value == SessionManagerState.CONNECTING ||
-            _state.value == SessionManagerState.CONFIGURING ||
-            _state.value == SessionManagerState.RECONNECTING) {
+        // If disconnected while CONFIGURING (setup / resumption handshake rejected by server),
+        // clear stored handle to fall back to a fresh session on retry.
+        // Never clear stored handle when CONNECTED or RECONNECTING, as reconnect must resume.
+        if (_state.value == SessionManagerState.CONFIGURING) {
+            Log.w(TAG, "MIRA_LIVE_VOICE: Disconnected while CONFIGURING; clearing rejected resumption handle")
             resumptionStore.clearHandle()
         }
 
@@ -582,8 +594,11 @@ class GeminiSessionManager(
             val resumptionHandle = resumptionStore.consumeHandle()
             if (resumptionHandle != null) {
                 Log.i(TAG, "MIRA_LIVE_VOICE: Reconnecting with consumed resumption handle (length=${resumptionHandle.length})")
+                LiveVoiceDiagnostics.recordResumptionHandleEvent("reconnecting_with_handle (len=${resumptionHandle.length})")
             } else {
-                Log.i(TAG, "MIRA_LIVE_VOICE: Reconnecting with fresh session (no valid handle)")
+                Log.w(TAG, "MIRA_LIVE_VOICE: Reconnecting with fresh session (no valid handle)")
+                LiveVoiceDiagnostics.recordResumptionHandleEvent("reconnecting_fresh_no_handle")
+                LiveVoiceDiagnostics.updateLastError("Resumption unavailable — restarting voice conversation")
             }
 
             connectInternal(resumptionHandle = resumptionHandle)

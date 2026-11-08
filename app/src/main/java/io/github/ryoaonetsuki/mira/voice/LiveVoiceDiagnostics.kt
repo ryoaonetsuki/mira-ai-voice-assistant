@@ -35,7 +35,13 @@ data class VoiceDiagnosticsData(
     val diagnosticOutcome: String? = null,
     val activeRoute: String = "RELAY",
     val activeVariant: String = "STANDARD",
-    val frameLogs: List<String> = emptyList()
+    val frameLogs: List<String> = emptyList(),
+    // Reconnection Diagnostics (ROUND 19)
+    val reconnectAttemptCount: Int = 0,
+    val lastResumptionHandleEvent: String? = null,
+    val lastGoAwayTimestamp: Long? = null,
+    val lastStage4TimeoutTimestamp: Long? = null,
+    val sessionManagerState: String = "IDLE"
 )
 
 object LiveVoiceDiagnostics {
@@ -122,6 +128,31 @@ object LiveVoiceDiagnostics {
             diagnosticOutcome = outcome,
             diagnosticLastRunAt = System.currentTimeMillis()
         )
+    }
+
+    // Reconnection Diagnostics (ROUND 19)
+    fun recordReconnectAttempt(attempt: Int) {
+        _data.value = _data.value.copy(reconnectAttemptCount = attempt)
+        addFrameLog("RECONNECT_ATTEMPT attempt=$attempt")
+    }
+
+    fun recordResumptionHandleEvent(event: String) {
+        _data.value = _data.value.copy(lastResumptionHandleEvent = event)
+        addFrameLog("RESUMPTION_HANDLE event=$event")
+    }
+
+    fun recordGoAway(timestampMs: Long = System.currentTimeMillis()) {
+        _data.value = _data.value.copy(lastGoAwayTimestamp = timestampMs)
+        addFrameLog("GOAWAY_RECEIVED timestamp=$timestampMs")
+    }
+
+    fun recordStage4Timeout(timestampMs: Long = System.currentTimeMillis()) {
+        _data.value = _data.value.copy(lastStage4TimeoutTimestamp = timestampMs)
+        addFrameLog("STAGE4_TIMEOUT timestamp=$timestampMs")
+    }
+
+    fun updateSessionManagerState(state: String) {
+        _data.value = _data.value.copy(sessionManagerState = state)
     }
 
     fun reset() {

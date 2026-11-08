@@ -1,5 +1,6 @@
 package io.github.ryoaonetsuki.mira.voice.pipecat
 
+import android.os.SystemClock
 import android.util.Log
 import java.util.ArrayDeque
 
@@ -44,13 +45,18 @@ interface AudioResampler {
  * Native SpeexDSP-backed AEC engine using JNI.
  */
 internal class NativeSpeexAecEngine(
-    private val nativeHandle: Long,
+    private var nativeHandle: Long,
     val frameSize: Int = 160
 ) : AcousticEchoCancellerEngine {
 
     override fun process(nearEnd: ShortArray, farEnd: ShortArray, out: ShortArray, length: Int) {
+        val handle = nativeHandle
+        if (handle == 0L) {
+            System.arraycopy(nearEnd, 0, out, 0, length)
+            return
+        }
         val res = SpeexAecNative.nativeProcess(
-            handle = nativeHandle,
+            handle = handle,
             nearEnd = nearEnd,
             farEnd = farEnd,
             out = out,
@@ -63,11 +69,18 @@ internal class NativeSpeexAecEngine(
     }
 
     override fun reset() {
-        SpeexAecNative.nativeReset(nativeHandle)
+        val handle = nativeHandle
+        if (handle != 0L) {
+            SpeexAecNative.nativeReset(handle)
+        }
     }
 
     override fun release() {
-        SpeexAecNative.nativeDestroy(nativeHandle)
+        val handle = nativeHandle
+        if (handle != 0L) {
+            nativeHandle = 0L
+            SpeexAecNative.nativeDestroy(handle)
+        }
     }
 }
 
@@ -75,15 +88,16 @@ internal class NativeSpeexAecEngine(
  * Native SpeexDSP-backed resampler using JNI.
  */
 internal class NativeSpeexResampler(
-    private val nativeHandle: Long
+    private var nativeHandle: Long
 ) : AudioResampler {
 
     override fun resample(input: ShortArray, inRate: Int, outRate: Int): ShortArray {
-        if (input.isEmpty()) return ShortArray(0)
+        val handle = nativeHandle
+        if (handle == 0L || input.isEmpty()) return ShortArray(0)
         val outCapacity = ((input.size.toLong() * outRate) / inRate + 32).toInt()
         val out = ShortArray(outCapacity)
         val produced = SpeexAecNative.nativeResample(
-            handle = nativeHandle,
+            handle = handle,
             input = input,
             inLen = input.size,
             output = out,
@@ -94,7 +108,9 @@ internal class NativeSpeexResampler(
 
     override fun reset() {}
 
-    override fun release() {}
+    override fun release() {
+        nativeHandle = 0L
+    }
 }
 
 /**
@@ -142,7 +158,7 @@ class LinearAudioResampler : AudioResampler {
 /**
  * Complete software Acoustic Echo Canceller coordinating far-end playback reference buffering,
  * sample-rate conversion (24 kHz -> 16 kHz), frame chunking (160 samples / 10 ms), clock-drift
- * handling, and adaptive echo subtraction.
+ * handling, delay compensation, and adaptive echo subtraction.
  */
 class SoftwareAcousticEchoCanceller(
     val engine: AcousticEchoCancellerEngine,
@@ -150,7 +166,15 @@ class SoftwareAcousticEchoCanceller(
     val sampleRateHz: Int = 16000,
     val playbackSampleRateHz: Int = 24000,
     val frameSizeSamples: Int = 160,
-    val maxBufferSamples: Int = 8000 // 500ms max far-end drift buffer
+    val maxBufferSamples: Int = 4800, // ~300ms bounded buffer at 16 kHz
+    referenceDelayMs: Int = 0,
+    private val clock: () -> Long = {
+        try {
+            SystemClock.elapsedRealtime()
+        } catch (_: Throwable) {
+            System.nanoTime() / 1_000_000L
+        }
+    }
 ) {
     companion object {
         private const val TAG = "SoftwareAEC"
@@ -163,7 +187,8 @@ class SoftwareAcousticEchoCanceller(
             sampleRateHz: Int = 16000,
             playbackSampleRateHz: Int = 24000,
             frameSizeSamples: Int = 160,
-            filterLengthSamples: Int = 3200
+            filterLengthSamples: Int = 3200,
+            defaultReferenceDelayMs: Int = 120
         ): SoftwareAcousticEchoCanceller {
             if (SpeexAecNative.isAvailable()) {
                 try {
@@ -174,22 +199,23 @@ class SoftwareAcousticEchoCanceller(
                         resampleInRate = playbackSampleRateHz
                     )
                     if (handle != 0L) {
-                        Log.i(TAG, "Initialized native SpeexDSP AEC engine (handle=$handle)")
+                        try { Log.i(TAG, "Initialized native SpeexDSP AEC engine (handle=$handle)") } catch (_: Throwable) {}
                         return SoftwareAcousticEchoCanceller(
                             engine = NativeSpeexAecEngine(handle, frameSizeSamples),
                             resampler = NativeSpeexResampler(handle),
                             sampleRateHz = sampleRateHz,
                             playbackSampleRateHz = playbackSampleRateHz,
-                            frameSizeSamples = frameSizeSamples
+                            frameSizeSamples = frameSizeSamples,
+                            referenceDelayMs = defaultReferenceDelayMs
                         )
                     } else {
-                        Log.w(TAG, "nativeCreate returned 0, falling back to pass-through (no echo cancellation, EchoGate only)")
+                        try { Log.w(TAG, "nativeCreate returned 0, falling back to pass-through (no echo cancellation, EchoGate only)") } catch (_: Throwable) {}
                     }
                 } catch (t: Throwable) {
-                    Log.w(TAG, "Failed to initialize Speex native AEC: ${t.message}", t)
+                    try { Log.w(TAG, "Failed to initialize Speex native AEC: ${t.message}", t) } catch (_: Throwable) {}
                 }
             } else {
-                Log.i(TAG, "Speex native library not available, falling back to pass-through (no echo cancellation, EchoGate only)")
+                try { Log.i(TAG, "Speex native library not available, falling back to pass-through (no echo cancellation, EchoGate only)") } catch (_: Throwable) {}
             }
 
             return SoftwareAcousticEchoCanceller(
@@ -197,20 +223,45 @@ class SoftwareAcousticEchoCanceller(
                 resampler = LinearAudioResampler(),
                 sampleRateHz = sampleRateHz,
                 playbackSampleRateHz = playbackSampleRateHz,
-                frameSizeSamples = frameSizeSamples
+                frameSizeSamples = frameSizeSamples,
+                referenceDelayMs = defaultReferenceDelayMs
             )
         }
     }
 
+    @Volatile
+    var referenceDelayMs: Int = referenceDelayMs.coerceIn(0, 300)
+        set(value) {
+            field = value.coerceIn(0, 300)
+        }
+
+    @Volatile
+    private var released: Boolean = false
+
+    fun isReleased(): Boolean = released
+
+    val engineType: String = when (engine) {
+        is NativeSpeexAecEngine -> "NATIVE_SPEEX"
+        is PassThroughAecEngine -> "PASSTHROUGH_FALLBACK"
+        else -> engine.javaClass.simpleName
+    }
+
+    private data class DelayedChunk(
+        val readyTimeMs: Long,
+        val samples: ShortArray
+    )
+
     private val farEndLock = Any()
-    private val farEndBuffer = ArrayDeque<Short>()
+    private val delayedChunks = ArrayDeque<DelayedChunk>()
+    private val consumableBuffer = ArrayDeque<Short>()
 
     /**
      * Enqueues playback audio chunks from the speaker (far-end reference).
-     * Resamples from [playbackSampleRateHz] to [sampleRateHz] and appends to the reference FIFO.
+     * Resamples from [playbackSampleRateHz] to [sampleRateHz] and schedules into the reference delay line.
+     * Safe no-op after [release].
      */
     fun pushPlaybackAudio(pcm24k: ByteArray) {
-        if (pcm24k.isEmpty()) return
+        if (released || pcm24k.isEmpty()) return
         val numSamples = pcm24k.size / 2
         val shorts24k = ShortArray(numSamples)
         for (i in 0 until numSamples) {
@@ -220,23 +271,32 @@ class SoftwareAcousticEchoCanceller(
         }
 
         val shorts16k = resampler.resample(shorts24k, playbackSampleRateHz, sampleRateHz)
+        if (shorts16k.isEmpty()) return
+
+        val now = clock()
+        val delay = referenceDelayMs
+        val readyAt = now + delay
 
         synchronized(farEndLock) {
-            for (s in shorts16k) {
-                farEndBuffer.addLast(s)
-            }
-            // Discard oldest if far-end playback buffer exceeds max drift capacity
-            while (farEndBuffer.size > maxBufferSamples) {
-                farEndBuffer.removeFirst()
+            if (released) return
+            if (delay <= 0) {
+                for (s in shorts16k) {
+                    consumableBuffer.addLast(s)
+                }
+            } else {
+                delayedChunks.addLast(DelayedChunk(readyAt, shorts16k))
             }
         }
     }
 
     /**
      * Processes near-end microphone PCM audio (16 kHz mono) through the AEC.
-     * Subtracts the far-end echo reference and returns the cleaned audio PCM byte array.
+     * Subtracts the delay-compensated far-end echo reference and returns cleaned audio PCM bytes.
+     * Safe no-op after [release] (returns input unchanged).
      */
     fun processMicrophoneAudio(micPcm16k: ByteArray): ByteArray {
+        if (released || micPcm16k.isEmpty()) return micPcm16k
+
         val numSamples = micPcm16k.size / 2
         if (numSamples == 0) return micPcm16k
 
@@ -248,12 +308,37 @@ class SoftwareAcousticEchoCanceller(
         }
 
         val farEnd = ShortArray(numSamples)
+
         synchronized(farEndLock) {
-            val available = minOf(farEndBuffer.size, numSamples)
-            for (i in 0 until available) {
-                farEnd[i] = farEndBuffer.removeFirst()
+            if (released) return micPcm16k
+
+            val now = clock()
+            // Transfer ready chunks from delayedChunks to consumableBuffer
+            while (delayedChunks.isNotEmpty()) {
+                val head = delayedChunks.peekFirst() ?: break
+                if (head.readyTimeMs <= now) {
+                    val chunk = delayedChunks.removeFirst()
+                    for (s in chunk.samples) {
+                        consumableBuffer.addLast(s)
+                    }
+                } else {
+                    break
+                }
             }
-            // Remaining samples default to 0 (silence)
+
+            // Gradual drift compensation: drop at most one frame (frameSizeSamples) per mic frame when overfull
+            if (consumableBuffer.size > maxBufferSamples) {
+                val dropCount = minOf(consumableBuffer.size - maxBufferSamples, frameSizeSamples)
+                repeat(dropCount) {
+                    consumableBuffer.removeFirst()
+                }
+            }
+
+            val available = minOf(consumableBuffer.size, numSamples)
+            for (i in 0 until available) {
+                farEnd[i] = consumableBuffer.removeFirst()
+            }
+            // Remaining samples in farEnd default to 0 (underflow padding zeros)
         }
 
         val out = ShortArray(numSamples)
@@ -279,31 +364,41 @@ class SoftwareAcousticEchoCanceller(
     }
 
     /**
-     * Resets the adaptive filter and clears the far-end reference queue.
-     * Called on interruption, turn complete, or session start/stop.
+     * Resets the adaptive filter and clears far-end reference queues.
+     * Safe no-op after [release].
      */
     fun reset() {
+        if (released) return
         synchronized(farEndLock) {
-            farEndBuffer.clear()
+            delayedChunks.clear()
+            consumableBuffer.clear()
         }
         try {
             engine.reset()
             resampler.reset()
         } catch (t: Throwable) {
-            Log.w(TAG, "Error resetting AEC: ${t.message}")
+            try { Log.w(TAG, "Error resetting AEC: ${t.message}") } catch (_: Throwable) {}
         }
     }
 
     /**
-     * Releases all native/allocated resources.
+     * Releases all native/allocated resources. Idempotent: repeated calls are safe no-ops.
      */
     fun release() {
-        reset()
+        if (released) return
+        synchronized(this) {
+            if (released) return
+            released = true
+        }
+        synchronized(farEndLock) {
+            delayedChunks.clear()
+            consumableBuffer.clear()
+        }
         try {
             engine.release()
             resampler.release()
         } catch (t: Throwable) {
-            Log.w(TAG, "Error releasing AEC: ${t.message}")
+            try { Log.w(TAG, "Error releasing AEC: ${t.message}") } catch (_: Throwable) {}
         }
     }
 }

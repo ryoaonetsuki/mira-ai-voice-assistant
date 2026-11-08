@@ -12,7 +12,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.fragment.app.FragmentActivity
-import io.github.ryoaonetsuki.mira.automation.MacroSafetyBanner
 import io.github.ryoaonetsuki.mira.data.preferences.UserPreferences
 import io.github.ryoaonetsuki.mira.ui.navigation.MiraNavGraph
 import io.github.ryoaonetsuki.mira.ui.theme.MiraTheme
@@ -47,7 +46,6 @@ class MainActivity : FragmentActivity() {
                                 pendingNavigationIntent.value = null
                             }
                         )
-                        MacroSafetyBanner()
                     }
                 }
             }

@@ -56,6 +56,7 @@ interface SessionClient {
     fun enableMic(enabled: Boolean)
     fun sendUserMessage(content: String) {}
     fun sendFunctionResponse(id: String, name: String, response: Value.Object) {}
+    fun stopAudioPlayback() {}
     val isClosed: Boolean
 }
 
@@ -95,6 +96,10 @@ class DefaultSessionClient(
 
     override fun sendUserMessage(content: String) {
         pipecatClient.sendText(content)
+    }
+
+    override fun stopAudioPlayback() {
+        transport.stopAudioPlayback()
     }
 }
 
@@ -145,14 +150,16 @@ class GeminiSessionManager(
         const val STAGE4_SILENCE_TIMEOUT_MS = 15_000L
         const val MAX_RETRIES = 5
         val BACKOFF_DELAYS_MS = listOf(1_000L, 2_000L, 3_000L, 4_000L, 5_000L)
-        const val MAX_CONCURRENT_SESSIONS = 3
+        const val MAX_CONCURRENT_SESSIONS = 1
 
-        private val liveSessionsCount = AtomicInteger(0)
+        // Single shared slot guard: the single-voice invariant lives here so the
+        // production slot logic and its tests exercise the same code.
+        private val sessionGuard = VoiceSessionGuard(MAX_CONCURRENT_SESSIONS)
 
-        fun getLiveSessionsCount(): Int = liveSessionsCount.get()
+        fun getLiveSessionsCount(): Int = sessionGuard.getActiveSessionCount()
 
         internal fun resetLiveSessionsCount() {
-            liveSessionsCount.set(0)
+            sessionGuard.reset()
         }
 
         fun getBackoffDelayMs(retryAttempt: Int): Long {
@@ -192,18 +199,14 @@ class GeminiSessionManager(
 
     private fun acquireLiveSessionSlot(): Boolean {
         if (isCountedAsLive.get()) return true
-        val current = liveSessionsCount.incrementAndGet()
-        if (current > MAX_CONCURRENT_SESSIONS) {
-            liveSessionsCount.decrementAndGet()
-            return false
-        }
-        isCountedAsLive.set(true)
-        return true
+        val acquired = sessionGuard.acquireSessionSlot()
+        if (acquired) isCountedAsLive.set(true)
+        return acquired
     }
 
     private fun releaseLiveSessionSlot() {
         if (isCountedAsLive.compareAndSet(true, false)) {
-            liveSessionsCount.decrementAndGet()
+            sessionGuard.releaseSessionSlot()
         }
     }
 
@@ -271,6 +274,10 @@ class GeminiSessionManager(
         if (_state.value == SessionManagerState.CONNECTED) {
             currentClient?.sendUserMessage(content)
         }
+    }
+
+    fun stopAudioPlayback() {
+        currentClient?.stopAudioPlayback()
     }
 
     fun sendFunctionResponse(id: String, name: String, response: Value.Object) {

@@ -402,17 +402,17 @@ class AgentDataLayerTest {
     val dummyStep = listOf(TaskStep(action = TaskStep.ACTION_PRESS_HOME))
 
     for (i in 1..105) {
-      service.saveOrUpdate("goal number $i", dummyStep)
+      service.saveOrUpdate("uniqueword$i", dummyStep)
     }
 
     val all = service.all()
     assertEquals(100, all.size)
     // Latest inserted skill must be at index 0
-    assertEquals("goal number 105", all.first().goal)
+    assertEquals("uniqueword105", all.first().goal)
     // Oldest skills beyond 100 must have been dropped
-    assertNull(service.findMatch("goal number 1"))
-    assertNull(service.findMatch("goal number 5"))
-    assertNotNull(service.findMatch("goal number 6"))
+    assertNull(service.findMatch("uniqueword1"))
+    assertNull(service.findMatch("uniqueword5"))
+    assertNotNull(service.findMatch("uniqueword6"))
   }
 
   // =========================================================================

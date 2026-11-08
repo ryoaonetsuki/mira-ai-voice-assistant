@@ -472,8 +472,8 @@ class GeminiSessionManagerTest {
         // Stored handle should be cleared
         assertNull(store.getHandle())
 
-        // Next reconnect attempt should use fresh session (handle = null)
-        advanceTimeBy(1_000L)
+        // Next reconnect attempt should use fresh session (handle = null). Retry #2 backoff is 2000ms.
+        advanceTimeBy(2_000L)
         runCurrent()
         val client3 = fakeFactory.createdClients[2]
         val modelConfigObj = client3.options.modelConfig as Value.Object

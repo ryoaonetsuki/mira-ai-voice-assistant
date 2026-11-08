@@ -908,7 +908,11 @@ class MicService : Service() {
         liveSearchJob = null
         handledTranscripts.clear()
 
-        sessionManager?.stopSession()
+        try {
+            sessionManager?.stopSession()
+        } catch (e: Exception) {
+            Log.w(TAG, "Error stopping session manager on user stop: ${e.message}")
+        }
         sessionManager = null
         activeSessionManager = null
 

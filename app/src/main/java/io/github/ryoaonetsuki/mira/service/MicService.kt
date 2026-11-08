@@ -672,6 +672,17 @@ class MicService : Service() {
             override fun onModelTranscript(text: String) {
                 Log.i(TAG, "MIRA_LIVE_VOICE: Model transcript: $text")
                 val sanitized = io.github.ryoaonetsuki.mira.identity.MiraOutputFilter.sanitize(text)
+                if (sanitized != text) {
+                    Log.w(TAG, "MIRA_LIVE_VOICE: Model leaked forbidden token! Cutting off audio and replacing with canonical identity.")
+                    sessionManager?.stopAudioPlayback()
+                    serviceScope.launch(Dispatchers.IO) {
+                        try {
+                            speakAutomationResult(sanitized)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error speaking sanitized canonical response", e)
+                        }
+                    }
+                }
                 _modelTranscript.value = sanitized
                 recordRecentModelTranscript(sanitized)
             }

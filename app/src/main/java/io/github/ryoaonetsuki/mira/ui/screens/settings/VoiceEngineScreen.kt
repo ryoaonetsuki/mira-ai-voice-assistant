@@ -303,7 +303,7 @@ fun VoiceEngineScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Echo Guard", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
-                            Text("Stops Mira replying to her own voice during loudspeaker playback", fontSize = 12.sp, color = palette.textSecondary)
+                            Text("Prevents Mira from hearing its own voice while speaking; real user interruptions still work", fontSize = 12.sp, color = palette.textSecondary)
                         }
                         MiraSwitch(
                             checked = echoGuard,

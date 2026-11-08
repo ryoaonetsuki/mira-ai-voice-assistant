@@ -1,6 +1,7 @@
 package io.github.ryoaonetsuki.mira.ui.components
 
 import androidx.annotation.DrawableRes
+import androidx.annotation.StringRes
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -20,6 +21,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -34,7 +36,8 @@ data class DrawerItem(
     val route: String,
     @DrawableRes val regularIcon: Int,
     @DrawableRes val filledIcon: Int = regularIcon,
-    val category: String = "Core"
+    val category: String = "Core",
+    @StringRes val titleRes: Int? = null
 )
 
 private val DrawerNavItems = listOf(
@@ -46,6 +49,7 @@ private val DrawerNavItems = listOf(
     DrawerItem("Whiteboard", Screen.Whiteboard.route, R.drawable.ic_fluent_board_24_regular, R.drawable.ic_fluent_board_24_regular, "Creation"),
     DrawerItem("Vibes", Screen.Vibes.route, R.drawable.ic_fluent_sound_wave_circle_24_regular, R.drawable.ic_fluent_sound_wave_circle_24_regular, "Lifestyle"),
     DrawerItem("Extensions", Screen.Extensions.route, R.drawable.ic_fluent_puzzle_piece_24_regular, R.drawable.ic_fluent_puzzle_piece_24_regular, "System"),
+    DrawerItem("Mira Skills", Screen.Skills.route, R.drawable.ic_fluent_flash_24_regular, R.drawable.ic_fluent_flash_24_filled, "System", titleRes = R.string.drawer_mira_skills),
     DrawerItem("Settings", Screen.SettingsHub.route, R.drawable.ic_fluent_settings_24_regular, R.drawable.ic_fluent_settings_24_filled, "System"),
     DrawerItem("About", Screen.About.route, R.drawable.ic_fluent_info_24_regular, R.drawable.ic_fluent_info_24_filled, "System")
 )
@@ -156,6 +160,8 @@ fun AppDrawer(
                     val itemText = if (isSelected) palette.primary else palette.textPrimary
                     val itemIconTint = if (isSelected) palette.primary else palette.textSecondary
 
+                    val itemTitle = if (item.titleRes != null) stringResource(item.titleRes) else item.title
+
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
@@ -171,13 +177,13 @@ fun AppDrawer(
                     ) {
                         Icon(
                             painter = painterResource(id = if (isSelected) item.filledIcon else item.regularIcon),
-                            contentDescription = item.title,
+                            contentDescription = itemTitle,
                             tint = itemIconTint,
                             modifier = Modifier.size(20.dp)
                         )
                         Spacer(modifier = Modifier.width(12.dp))
                         Text(
-                            text = item.title,
+                            text = itemTitle,
                             fontSize = 13.5.sp,
                             fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
                             color = itemText

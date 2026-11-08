@@ -47,7 +47,6 @@ fun VoiceEngineScreen(
 
     val liveModel by userPrefs.liveModelFlow.collectAsState(initial = "models/gemini-3.8-live")
     val selectedVoice by userPrefs.voiceNameFlow.collectAsState(initial = "Aoede")
-    val fastListening by userPrefs.fastListeningFlow.collectAsState(initial = true)
     val echoGuard by userPrefs.echoGuardFlow.collectAsState(initial = true)
 
     val restClient = remember { GeminiRestClient() }
@@ -77,7 +76,6 @@ fun VoiceEngineScreen(
         runCapabilityCheck()
     }
 
-    val voiceRouting by userPrefs.voiceRoutingFlow.collectAsState(initial = "RELAY")
     var showVoicePickerDialog by remember { mutableStateOf(false) }
 
     val ttsClient = remember { GeminiTtsClient(context) }
@@ -299,22 +297,6 @@ fun VoiceEngineScreen(
                 Text("Voice Session Toggles", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.primary)
             }
 
-            // Fast Listening Toggle
-            item {
-                MiraCard(modifier = Modifier.fillMaxWidth()) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Fast Listening", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
-                            Text("Streams speech continuously with low audio latency", fontSize = 12.sp, color = palette.textSecondary)
-                        }
-                        MiraSwitch(
-                            checked = fastListening,
-                            onCheckedChange = { scope.launch { userPrefs.setFastListening(it) } }
-                        )
-                    }
-                }
-            }
-
             // Echo Guard
             item {
                 MiraCard(modifier = Modifier.fillMaxWidth()) {
@@ -326,48 +308,6 @@ fun VoiceEngineScreen(
                         MiraSwitch(
                             checked = echoGuard,
                             onCheckedChange = { scope.launch { userPrefs.setEchoGuard(it) } }
-                        )
-                    }
-                }
-            }
-
-            // Voice Connection Routing (Round 15)
-            item {
-                MiraCard(modifier = Modifier.fillMaxWidth()) {
-                    Text(
-                        text = "Voice Connection Routing",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = palette.textPrimary
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Primary routing uses Cloudflare Live Relay to bypass ISP/carrier blocks. Direct Google API is selectable as fallback.",
-                        fontSize = 12.sp,
-                        color = palette.textSecondary
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        FilterChip(
-                            selected = voiceRouting == "RELAY",
-                            onClick = { scope.launch { userPrefs.setVoiceRouting("RELAY") } },
-                            label = { Text("Cloudflare Relay (Primary)", fontSize = 11.sp) },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = palette.primary,
-                                selectedLabelColor = Color.Black
-                            )
-                        )
-                        FilterChip(
-                            selected = voiceRouting == "DIRECT",
-                            onClick = { scope.launch { userPrefs.setVoiceRouting("DIRECT") } },
-                            label = { Text("Direct Google API", fontSize = 11.sp) },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = palette.primary,
-                                selectedLabelColor = Color.Black
-                            )
                         )
                     }
                 }

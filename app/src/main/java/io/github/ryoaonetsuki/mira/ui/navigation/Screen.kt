@@ -14,6 +14,7 @@ sealed class Screen(val route: String) {
     object Whiteboard : Screen("whiteboard")
     object Vibes : Screen("vibes")
     object Extensions : Screen("extensions")
+    object Skills : Screen("skills")
     object Browser : Screen("browser")
     object Notifications : Screen("notifications")
     object Update : Screen("update")

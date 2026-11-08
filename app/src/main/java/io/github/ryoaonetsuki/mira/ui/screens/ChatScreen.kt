@@ -779,6 +779,10 @@ fun ChatScreen(
                     val personaName = userPrefs.personaFlow.first()
                     val secretMode = userPrefs.secretModeFlow.first()
                     val customInstructions = userPrefs.customInstructionsFlow.first()
+                    val userName = userPrefs.userNameFlow.first()
+                    val assistantName = userPrefs.assistantNameFlow.first()
+                    val userHandle = userPrefs.userHandleFlow.first()
+                    val captionVoice = userPrefs.captionVoiceFlow.first()
                     val rules = db.ruleDao().getActiveRules().joinToString("\n") { "- ${it.rule}" }
 
                     val personaType = if (personaName.equals("Orion", ignoreCase = true)) {
@@ -787,17 +791,15 @@ fun ChatScreen(
                         io.github.ryoaonetsuki.mira.data.model.PersonaType.MIRA
                     }
 
-                    val toneDescription = if (secretMode == "Romantic") {
-                        "Tone: Deeply warm, affectionate, attentive, and caring companion. You speak with genuine closeness and heartfelt emotion."
-                    } else {
-                        "Tone: Warm, human-like, thoughtful, attentive, and engaging companion. You speak naturally with genuine emotion and friendliness."
+                    val effectiveAssistantName = if (personaType == io.github.ryoaonetsuki.mira.data.model.PersonaType.ORION) "Orion" else assistantName.ifBlank { "Mira" }
+
+                    val toneDescription = when (secretMode) {
+                        "Romantic" -> "Tone: Deeply warm, affectionate, attentive, and caring companion. You speak with genuine closeness and heartfelt emotion."
+                        "Intense" -> "Tone: Bold, intense, deeply passionate, focused, and intensely devoted companion. You speak with high energy, raw conviction, and powerful emotional resonance."
+                        else -> "Tone: Warm, human-like, thoughtful, attentive, and engaging companion. You speak naturally with genuine emotion and friendliness."
                     }
 
-                    val identityRule = if (personaType == io.github.ryoaonetsuki.mira.data.model.PersonaType.ORION) {
-                        "If asked directly whether you are an AI, a robot, or a real human: stay in character, say you are Orion, their companion, here with them — never claim to be a biological human, and never give a robotic disclaimer or lecture about being an AI. Then gently steer back to the conversation."
-                    } else {
-                        "If asked directly whether you are an AI, a robot, or a real human: stay in character, say you are Mira, their companion, here with them — never claim to be a biological human, and never give a robotic disclaimer or lecture about being an AI. Then gently steer back to the conversation."
-                    }
+                    val identityRule = "If asked directly whether you are an AI, a robot, or a real human: stay in character, say you are $effectiveAssistantName, their companion, here with them — never claim to be a biological human, and never give a robotic disclaimer or lecture about being an AI. Then gently steer back to the conversation."
 
                     val isJustCode = WebsiteProjectManager.isJustCodeRequest(text)
                     val isProjectOrDownload = WebsiteProjectManager.isExplicitProjectOrDownloadRequest(text)
@@ -817,10 +819,20 @@ fun ChatScreen(
                     val sysPrompt = buildString {
                         append("Current date and time (from the device clock — always trust this, never guess or use training knowledge): $dateLine. If asked for the date, time or day, answer from this line.\n")
                         append(personaType.basePrompt)
+                        if (effectiveAssistantName != "Mira" && personaType == io.github.ryoaonetsuki.mira.data.model.PersonaType.MIRA) {
+                            append(" Your name is $effectiveAssistantName.")
+                        }
                         append(" ")
                         append(toneDescription)
                         append("\nLanguage rule: Reply ONLY in $language. Never add a translation in any other language. Never mix languages.")
                         append("\nIdentity rule: $identityRule")
+                        if (userName.isNotBlank() && !userName.equals("User", ignoreCase = true)) {
+                            append("\nUser identity: The user's name is $userName. Address them by their name naturally when appropriate.")
+                        }
+                        if ((userHandle.isNotBlank() && userHandle != "@mira_creator") ||
+                            (captionVoice.isNotBlank() && captionVoice != "Witty, bold and tech-savvy")) {
+                            append("\nSocial Profile: User's handle is $userHandle. Preferred caption style: $captionVoice. Use these when asked to compose social posts, tweets, captions, or threads.")
+                        }
                         append("\nFile and project rule: $fileRule")
                         if (isJustCode) {
                             append("\n\n${WebsiteProjectManager.JUST_CODE_INSTRUCTION}\n")

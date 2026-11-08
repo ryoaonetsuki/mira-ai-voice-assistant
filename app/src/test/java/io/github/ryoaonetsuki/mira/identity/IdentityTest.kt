@@ -309,4 +309,58 @@ class IdentityTest {
         assertTrue("SYSTEM_PROMPT_OVERRIDE forbids Gemini", IdentityProfile.SYSTEM_PROMPT_OVERRIDE.contains("Gemini"))
         assertTrue("SYSTEM_PROMPT_OVERRIDE instructs short answers", IdentityProfile.SYSTEM_PROMPT_OVERRIDE.contains("short"))
     }
+
+    @Test
+    fun testEmptyOrPunctuationTranscript_ProducesNoCannedResponse() {
+        assertNull("Empty string produces null", MiraIdentityInterceptor.getCannedResponse(""))
+        assertNull("Whitespace produces null", MiraIdentityInterceptor.getCannedResponse("   \n\t  "))
+        assertNull("Punctuation only produces null", MiraIdentityInterceptor.getCannedResponse("...?!, "))
+        assertNull("Special symbols only produces null", MiraIdentityInterceptor.getCannedResponse("---###"))
+    }
+
+    @Test
+    fun testTranscriptMatchingModelEcho_ProducesNoCannedResponse() {
+        val modelText = "আমার নাম মিরা, আমি একটা AI এজেন্ট — আমাকে বানিয়েছেন সালমান বিশ্বাস।"
+
+        // 1. Exact match of model speech
+        assertNull(
+            "Exact match with model speech must be rejected as echo",
+            MiraIdentityInterceptor.getCannedResponse(modelText, lastModelTranscript = modelText)
+        )
+
+        // 2. Substring of model speech (e.g. mic hears end of sentence "আমাকে বানিয়েছেন সালমান বিশ্বাস")
+        val echoFragment = "আমাকে বানিয়েছেন সালমান বিশ্বাস"
+        assertNull(
+            "Substring of model speech must be rejected as echo",
+            MiraIdentityInterceptor.getCannedResponse(echoFragment, lastModelTranscript = modelText)
+        )
+
+        // 3. Model transcript contains user query
+        assertNull(
+            "Model containing query must be rejected as echo",
+            MiraIdentityInterceptor.getCannedResponse("আমার নাম মিরা", lastModelTranscript = modelText)
+        )
+
+        // 4. Genuine question from user when model said something else
+        val genuineQuery = "who are you"
+        assertNotNull(
+            "Genuine user query not matching model speech must produce response",
+            MiraIdentityInterceptor.getCannedResponse(genuineQuery, lastModelTranscript = "Dhaka is sunny today.")
+        )
+    }
+
+    @Test
+    fun testNoExplicitIdentityQuestion_ProducesNoCannedResponse() {
+        val nonIdentityQueries = listOf(
+            "hello",
+            "how is the weather today?",
+            "আজকের খবর কি?",
+            "গান শোনাও",
+            "tell me a joke",
+            "alarm set koro"
+        )
+        for (q in nonIdentityQueries) {
+            assertNull("Non-identity query '$q' must return null", MiraIdentityInterceptor.getCannedResponse(q))
+        }
+    }
 }

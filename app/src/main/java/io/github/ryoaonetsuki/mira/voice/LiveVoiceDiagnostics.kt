@@ -41,7 +41,10 @@ data class VoiceDiagnosticsData(
     val lastResumptionHandleEvent: String? = null,
     val lastGoAwayTimestamp: Long? = null,
     val lastStage4TimeoutTimestamp: Long? = null,
-    val sessionManagerState: String = "IDLE"
+    val sessionManagerState: String = "IDLE",
+    // Acoustic Echo Cancellation Diagnostics (ROUND 20)
+    val aecAvailable: Boolean = false,
+    val aecEnabled: Boolean = false
 )
 
 object LiveVoiceDiagnostics {
@@ -153,6 +156,23 @@ object LiveVoiceDiagnostics {
 
     fun updateSessionManagerState(state: String) {
         _data.value = _data.value.copy(sessionManagerState = state)
+    }
+
+    // Acoustic Echo Cancellation Diagnostics (ROUND 20)
+    fun updateAecAvailable(available: Boolean) {
+        _data.value = _data.value.copy(aecAvailable = available)
+    }
+
+    fun updateAecEnabled(enabled: Boolean) {
+        _data.value = _data.value.copy(aecEnabled = enabled)
+    }
+
+    fun updateAecState(available: Boolean, enabled: Boolean) {
+        _data.value = _data.value.copy(aecAvailable = available, aecEnabled = enabled)
+    }
+
+    fun updateAec(available: Boolean, enabled: Boolean) {
+        _data.value = _data.value.copy(aecAvailable = available, aecEnabled = enabled)
     }
 
     fun reset() {

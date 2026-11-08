@@ -163,7 +163,6 @@ class GeminiSessionManagerTest {
             voiceName = "Aoede",
             language = "bn-BD",
             systemPrompt = "You are Mira.",
-            useRelay = true,
             resumptionStore = store,
             listener = listener,
             externalScope = testScope,

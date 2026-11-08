@@ -42,45 +42,75 @@ interface AudioResampler {
 }
 
 /**
+ * Thread-safe holder for the native Speex context handle, synchronizing execution
+ * across audio processing threads (AudioIn, AudioOut) and teardown.
+ */
+internal class NativeSpeexContextWrapper(
+    @Volatile private var _handle: Long
+) {
+    val lock = Any()
+
+    val handle: Long
+        get() = _handle
+
+    fun release() {
+        synchronized(lock) {
+            val h = _handle
+            if (h != 0L) {
+                _handle = 0L
+                SpeexAecNative.nativeDestroy(h)
+            }
+        }
+    }
+}
+
+/**
  * Native SpeexDSP-backed AEC engine using JNI.
  */
 internal class NativeSpeexAecEngine(
-    private var nativeHandle: Long,
+    val contextWrapper: NativeSpeexContextWrapper,
     val frameSize: Int = 160
 ) : AcousticEchoCancellerEngine {
 
+    constructor(nativeHandle: Long, frameSize: Int = 160) : this(
+        NativeSpeexContextWrapper(nativeHandle),
+        frameSize
+    )
+
+    val nativeHandle: Long get() = contextWrapper.handle
+
     override fun process(nearEnd: ShortArray, farEnd: ShortArray, out: ShortArray, length: Int) {
-        val handle = nativeHandle
-        if (handle == 0L) {
-            System.arraycopy(nearEnd, 0, out, 0, length)
-            return
-        }
-        val res = SpeexAecNative.nativeProcess(
-            handle = handle,
-            nearEnd = nearEnd,
-            farEnd = farEnd,
-            out = out,
-            length = length
-        )
-        if (res != 0) {
-            // Bypass cleanly on error without dropping audio
-            System.arraycopy(nearEnd, 0, out, 0, length)
+        synchronized(contextWrapper.lock) {
+            val handle = contextWrapper.handle
+            if (handle == 0L) {
+                System.arraycopy(nearEnd, 0, out, 0, length)
+                return
+            }
+            val res = SpeexAecNative.nativeProcess(
+                handle = handle,
+                nearEnd = nearEnd,
+                farEnd = farEnd,
+                out = out,
+                length = length
+            )
+            if (res != 0) {
+                // Bypass cleanly on error without dropping audio
+                System.arraycopy(nearEnd, 0, out, 0, length)
+            }
         }
     }
 
     override fun reset() {
-        val handle = nativeHandle
-        if (handle != 0L) {
-            SpeexAecNative.nativeReset(handle)
+        synchronized(contextWrapper.lock) {
+            val handle = contextWrapper.handle
+            if (handle != 0L) {
+                SpeexAecNative.nativeReset(handle)
+            }
         }
     }
 
     override fun release() {
-        val handle = nativeHandle
-        if (handle != 0L) {
-            nativeHandle = 0L
-            SpeexAecNative.nativeDestroy(handle)
-        }
+        contextWrapper.release()
     }
 }
 
@@ -88,28 +118,34 @@ internal class NativeSpeexAecEngine(
  * Native SpeexDSP-backed resampler using JNI.
  */
 internal class NativeSpeexResampler(
-    private var nativeHandle: Long
+    val contextWrapper: NativeSpeexContextWrapper
 ) : AudioResampler {
 
+    constructor(nativeHandle: Long) : this(NativeSpeexContextWrapper(nativeHandle))
+
+    val nativeHandle: Long get() = contextWrapper.handle
+
     override fun resample(input: ShortArray, inRate: Int, outRate: Int): ShortArray {
-        val handle = nativeHandle
-        if (handle == 0L || input.isEmpty()) return ShortArray(0)
-        val outCapacity = ((input.size.toLong() * outRate) / inRate + 32).toInt()
-        val out = ShortArray(outCapacity)
-        val produced = SpeexAecNative.nativeResample(
-            handle = handle,
-            input = input,
-            inLen = input.size,
-            output = out,
-            outCapacity = outCapacity
-        )
-        return if (produced > 0) out.copyOf(produced) else ShortArray(0)
+        synchronized(contextWrapper.lock) {
+            val handle = contextWrapper.handle
+            if (handle == 0L || input.isEmpty()) return ShortArray(0)
+            val outCapacity = ((input.size.toLong() * outRate) / inRate + 32).toInt()
+            val out = ShortArray(outCapacity)
+            val produced = SpeexAecNative.nativeResample(
+                handle = handle,
+                input = input,
+                inLen = input.size,
+                output = out,
+                outCapacity = outCapacity
+            )
+            return if (produced > 0) out.copyOf(produced) else ShortArray(0)
+        }
     }
 
     override fun reset() {}
 
     override fun release() {
-        nativeHandle = 0L
+        // NativeSpeexContextWrapper lifecycle is single-owner managed via NativeSpeexAecEngine
     }
 }
 
@@ -200,9 +236,10 @@ class SoftwareAcousticEchoCanceller(
                     )
                     if (handle != 0L) {
                         try { Log.i(TAG, "Initialized native SpeexDSP AEC engine (handle=$handle)") } catch (_: Throwable) {}
+                        val wrapper = NativeSpeexContextWrapper(handle)
                         return SoftwareAcousticEchoCanceller(
-                            engine = NativeSpeexAecEngine(handle, frameSizeSamples),
-                            resampler = NativeSpeexResampler(handle),
+                            engine = NativeSpeexAecEngine(wrapper, frameSizeSamples),
+                            resampler = NativeSpeexResampler(wrapper),
                             sampleRateHz = sampleRateHz,
                             playbackSampleRateHz = playbackSampleRateHz,
                             frameSizeSamples = frameSizeSamples,

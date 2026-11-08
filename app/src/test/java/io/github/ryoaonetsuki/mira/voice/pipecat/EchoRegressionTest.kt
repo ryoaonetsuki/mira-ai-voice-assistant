@@ -204,11 +204,14 @@ class EchoRegressionTest {
     }
 
     /**
-     * Scenario (d): Turn Complete.
-     * Mira finishes her entire response and Gemini sends turnComplete.
+     * Scenario (d): Turn Complete with AudioTrack drain window.
+     * Mira finishes her response and Gemini sends turnComplete.
      *
-     * Expected: Speaking state is cleared and bot level is reset to 0.
-     * All subsequent user input passes through unconditionally.
+     * Expected:
+     * - During the active AudioTrack drain window (t = 1050ms, within chunk duration + 250ms margin),
+     *   leaked acoustic echo is dropped while loud barge-in is passed.
+     * - After the drain window and reverberation decay have elapsed (t = 2000ms),
+     *   subsequent user input (even quiet speech) passes through unconditionally.
      */
     @Test
     fun testOwnerSymptom_TurnCompleteAllowsImmediateUserTurn() {
@@ -216,18 +219,27 @@ class EchoRegressionTest {
 
         val botAudioOut = createPcmFrame(0.30f)
         pipeline.onMiraAudioOutChunk(botAudioOut, timestampMs = 1000L)
-        assertTrue(pipeline.router.isBotTalking())
+        assertTrue(pipeline.router.isBotTalking(1000L))
 
         // Server signals turnComplete
         pipeline.onServerTurnComplete()
-        assertFalse("Bot talking must be false", pipeline.router.isBotTalking())
-        assertEquals(0.0f, pipeline.router.getRawBotLevel(), 0.0001f)
 
-        // Quiet user turn (mic RMS = 0.02f)
+        // 1. During drain window (1050ms): audio is still playing out of speaker.
+        // Leaked echo at 0.20f must be dropped so Mira does not respond to her own words
+        val echoDuringDrain = createPcmFrame(0.20f)
+        val forwardedEcho = pipeline.onMicCaptureFrame(echoDuringDrain, timestampMs = 1050L)
+        assertFalse("Echo during AudioTrack drain after turnComplete MUST be dropped", forwardedEcho)
+
+        // 2. Loud user barge-in during drain (0.85f) must still be forwarded
+        val bargeInDuringDrain = createPcmFrame(0.85f)
+        val forwardedBargeIn = pipeline.onMicCaptureFrame(bargeInDuringDrain, timestampMs = 1050L)
+        assertTrue("Loud user barge-in during drain window must still be forwarded", forwardedBargeIn)
+
+        // 3. After drain window and decay have completed (2000ms):
+        // Quiet user turn (mic RMS = 0.02f) passes unconditionally
         val quietUser = createPcmFrame(0.02f)
-        val forwarded = pipeline.onMicCaptureFrame(quietUser, timestampMs = 1050L)
-        assertTrue("User turn after turnComplete must forward unconditionally", forwarded)
-        assertEquals(1, pipeline.forwardedFrames.size)
+        val forwardedQuiet = pipeline.onMicCaptureFrame(quietUser, timestampMs = 2000L)
+        assertTrue("User turn after drain window has elapsed must forward unconditionally", forwardedQuiet)
     }
 
     /**

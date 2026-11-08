@@ -92,6 +92,7 @@ import io.github.ryoaonetsuki.mira.network.GroundingSource
 import io.github.ryoaonetsuki.mira.network.MiraChatSearchHeuristic
 import io.github.ryoaonetsuki.mira.network.currentDateTimeLine
 import io.github.ryoaonetsuki.mira.network.normalizeApiKey
+import io.github.ryoaonetsuki.mira.voice.LanguageUtils
 import io.github.ryoaonetsuki.mira.notifications.TaskCompletionNotifier
 import io.github.ryoaonetsuki.mira.projects.ProcessedChatResult
 import io.github.ryoaonetsuki.mira.projects.WebsiteProjectManager
@@ -284,6 +285,8 @@ fun ChatScreen(
         val clean = text.replace(Regex("```[\\s\\S]*?```"), "")
             .replace(Regex("[#*_`\\[\\]()]"), "")
             .trim()
+        val bcp47 = LanguageUtils.mapLanguageToBcp47(language)
+        tts?.language = Locale.forLanguageTag(bcp47)
         tts?.speak(clean, TextToSpeech.QUEUE_FLUSH, null, "mira_chat_tts")
     }
 
@@ -479,12 +482,7 @@ fun ChatScreen(
                     }
                 }
             })
-            val locale = when {
-                currentLanguage.contains("Bangla", ignoreCase = true) ||
-                        currentLanguage.contains("Bengali", ignoreCase = true) -> "bn-BD"
-                currentLanguage.contains("English", ignoreCase = true) -> "en-US"
-                else -> java.util.Locale.getDefault().toLanguageTag()
-            }
+            val locale = LanguageUtils.mapLanguageToBcp47(currentLanguage)
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE, locale)
@@ -815,7 +813,7 @@ fun ChatScreen(
                         "\nSpeed rule: Keep your answer short, concise, and fast — provide quick, helpful answers without over-explaining unless detail is requested."
                     }
 
-                    val dateLine = currentDateTimeLine()
+                    val dateLine = currentDateTimeLine(language)
                     val sysPrompt = buildString {
                         append("Current date and time (from the device clock — always trust this, never guess or use training knowledge): $dateLine. If asked for the date, time or day, answer from this line.\n")
                         append(personaType.basePrompt)

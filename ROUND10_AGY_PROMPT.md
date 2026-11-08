@@ -1,0 +1,32 @@
+You are implementing Mira AI ROUND 10 in this repo (~/workspace/mira-final, package io.github.ryoaonetsuki.mira, Kotlin + Jetpack Compose, Material icons only). Read ROUND10_SPEC.md in this repo and implement it EXACTLY — nothing else. Do not touch any file unrelated to the three fixes. Do not re-diagnose the keys; the root cause is already verified in the spec.
+
+Summary of what to do (full detail is in ROUND10_SPEC.md — follow that file as the authority):
+
+ROOT CAUSE (do first): In voice/ServerVoiceSession.kt, initVadAndRecorder() calls audioRecorder.startRecording() but never enables live forwarding, so AudioRecorder never delivers mic chunks to onAudioChunk (isLiveForwarding defaults false). Add audioRecorder.enableLiveForwarding(true) right after startRecording() succeeds. Verify AudioRecorder.stopRecording() already resets the flag (it does) — do not duplicate. Do NOT use flushPreRoll() here (that belongs to the Live path only). Do NOT change model names or audio formats (16kHz mono 3200-byte chunks; AudioPlayer 24kHz mono).
+
+FIX 1 — VOICE NO-REPLY HARDENING (MicService.kt + ServerVoiceSession.kt only):
+- Show which voice path is active (Server / Live / SpeechRecognizer) and the real stage/error in plain words via the existing short-Toast mechanism (MicService.errorMessage -> HomeScreen Toast on LiveState.ERROR, and MicService Toasts). NEVER add a red error banner on Home, NEVER add a permanent diagnostics card/text on Home.
+- Add a small watchdog Job in MicService for the server path: if the session is LISTENING but zero audio chunks were sent (_audioChunksSent stays 0 — the onAudioChunkSent callback already increments it), OR no partial/transcript arrives within a few seconds after speech is detected (VAD speech start / amplitude clearly above silence), surface a plain-words reason via the existing Toast/error channel instead of sitting on Listening forever. Reset per turn; must NOT fire while audio is actually flowing or while a reply is playing. Keep it simple and robust — a small coroutine/job in MicService, cancelled on stop.
+- Never silently fall back to Live: keep the existing onRequestLiveFallback Toast ("Server voice unavailable — switching to Live voice"), and any Live failure after that must also surface visibly (Toast + LiveState.ERROR) instead of landing in Live's known server silence with no message. If server voice errors, say so plainly first.
+
+FIX 2 — HOME UI (touch ONLY ui/components/AnimatedOrb.kt and ui/screens/HomeScreen.kt):
+- In AnimatedOrb.kt delete ONLY the "AI ASSISTANT" label Text and the big state Text (stateLabel: "LISTENING…"/"SPEAKING…"/etc., ~lines 274–299) plus their spacers. The orb itself (the drawn sphere/Canvas) stays untouched.
+- In HomeScreen.kt change the pre-session idle line from "Tap the mic to talk" to "Tap the voice button to start". Keep the three cards (Weather / Date / Mood). The small status line under the orb stays as the ONLY status line. Do NOT touch anything else on Home. No full UI polish pass.
+
+FIX 3 — SETUP KEYS (ui/screens/SetupScreen.kt, data/preferences/SecurePreferences.kt, ui/screens/settings/VoiceEngineScreen.kt):
+- Setup step 1 must have THREE fields: (1) Gemini API key — REQUIRED, (2) Groq API key — REQUIRED (already exists; keep its "Test Groq Key" button and gsk_ plausibility check), (3) Deepgram API key — OPTIONAL (may be left blank; addable later from Settings).
+- Gate step-1 "Test & Save" / continue flow on BOTH required keys: Gemini validation as today (one quick check, ~12s cap, transient 503/429 = save + enter with amber notice; only real 400/401/403 hard-blocks) AND Groq validation (same fail-open rule already used by validateGroqKey — transient = save + enter, only real invalid blocks). If either required key is missing/invalid, stay on step 1 with a plain-words message naming which key. IMPORTANT: the current "Test & Save" proceeds to step 2 on Gemini success even when the Groq field is blank — fix that. Also fix the bottom "I already have a saved key →" bypass so it cannot skip the Groq gate when no Groq key is saved. Do NOT weaken the Gemini 503 fail-open rule.
+- Deepgram: add SecurePreferences accessors exactly like the Groq ones (getDeepgramApiKey / setDeepgramApiKey / clearDeepgramApiKey, key "deepgram_api_key", encrypted on-device, never logged). Setup field is a plain optional password-style field with a "Get Free Key" link to https://console.deepgram.com/signup and a short "(optional)" label — NO validation call for it in Setup; if filled, save it encrypted; if blank, save nothing and proceed. Also add an optional Deepgram card in Settings → Voice Engine (VoiceEngineScreen.kt, next to the existing Server Voice (Groq) card) showing saved/not-saved state with save/clear.
+- The Deepgram key is NOT used by the voice path in this build. Do NOT wire it into ServerVoiceSession, ServerVoiceClient, the Worker, or any STT/TTS call.
+
+HARD RULES:
+- NEVER call relay.getmaya.online, api.getmaya.cloud, or any Maya/Hunter host. grep must show zero "getmaya" matches afterwards.
+- Keep everything from rounds 1–9 intact (fast Setup validation, chat toggles, file upload, date injection from device clock, Supabase backend licence OFF, Bangla default + one-language-only, chat logo avatars, File Management permission REQUIRED in setup, no wake word, Material icons, Live + relays kept as secondary paths, keys never logged anywhere).
+- Do NOT change the Cloudflare Worker (no Worker change is expected for this round).
+- Do NOT push, do NOT build a release, do NOT deploy anything. Only edit files in this repo.
+
+VERIFY BEFORE YOU FINISH (run these yourself and report the results):
+1. grep -ri "getmaya" app/src cloudflare-relay — must be zero matches.
+2. Re-read the changed hunks and confirm: ServerVoiceSession.kt enables forwarding on start; AnimatedOrb.kt has no "AI ASSISTANT" and no big state Text; HomeScreen.kt idle text is "Tap the voice button to start" with one status line only; SetupScreen.kt + SecurePreferences.kt + VoiceEngineScreen.kt have three fields, Deepgram optional + stored encrypted + Settings card, gate on both required keys.
+3. Run ./gradlew :app:compileDebugKotlin if the toolchain is present; if it is not available, say so plainly and do NOT claim a compile pass.
+4. End your reply with a per-fix summary (ROOT CAUSE, FIX 1, FIX 2, FIX 3): every file changed + what changed in it, one line each. Then list what still needs Salman's phone test. Do NOT claim voice works.

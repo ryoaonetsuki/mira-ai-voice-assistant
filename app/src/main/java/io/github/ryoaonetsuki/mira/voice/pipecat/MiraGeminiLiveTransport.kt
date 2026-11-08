@@ -138,6 +138,13 @@ class MiraGeminiLiveTransport(
         if (isAudioModeInCommunication.compareAndSet(false, true)) {
             try {
                 audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+                Log.i(TAG, "Audio mode set to MODE_IN_COMMUNICATION")
+                LiveVoiceDiagnostics.updateAudioMode("MODE_IN_COMMUNICATION")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error setting audio mode to MODE_IN_COMMUNICATION", e)
+            }
+
+            try {
                 val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
                     .setAudioAttributes(
                         AudioAttributes.Builder()
@@ -152,16 +159,23 @@ class MiraGeminiLiveTransport(
                 audioFocusRequest = focusRequest
 
                 val focusResult = audioManager.requestAudioFocus(focusRequest)
-                val focusStatus = if (focusResult == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
-                    "granted"
-                } else {
-                    Log.w(TAG, "Audio focus denied (result: $focusResult)")
-                    "denied"
+                val focusStatus = when (focusResult) {
+                    AudioManager.AUDIOFOCUS_REQUEST_GRANTED -> "granted"
+                    AudioManager.AUDIOFOCUS_REQUEST_FAILED -> {
+                        audioFocusRequest = null
+                        Log.w(TAG, "Audio focus request failed (result: $focusResult)")
+                        "failed"
+                    }
+                    else -> {
+                        audioFocusRequest = null
+                        Log.w(TAG, "Audio focus denied (result: $focusResult)")
+                        "denied"
+                    }
                 }
-                Log.i(TAG, "Audio mode set to MODE_IN_COMMUNICATION, focus requested/$focusStatus")
-                LiveVoiceDiagnostics.updateAudioMode("MODE_IN_COMMUNICATION")
+                Log.i(TAG, "Audio focus requested/$focusStatus")
             } catch (e: Exception) {
-                Log.e(TAG, "Error acquiring communication mode / audio focus", e)
+                audioFocusRequest = null
+                Log.e(TAG, "Error requesting audio focus", e)
             }
         }
     }

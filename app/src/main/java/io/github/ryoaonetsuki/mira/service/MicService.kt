@@ -16,7 +16,6 @@ import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.IconCompat
 import io.github.ryoaonetsuki.mira.MainActivity
 import io.github.ryoaonetsuki.mira.R
-import io.github.ryoaonetsuki.mira.automation.MacroRunner
 import io.github.ryoaonetsuki.mira.data.local.MiraDatabase
 import io.github.ryoaonetsuki.mira.data.local.entities.NotificationEntity
 import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
@@ -694,22 +693,17 @@ class MicService : Service() {
         val stopWords = setOf("stop", "thamo", "থামো")
         val isStop = stopTokens.any { it in stopWords }
 
-        // Emergency macro / agent voice stop
-        if (isStop && (MacroRunner.isRunning.value || automationBridge.isRunning)) {
-            if (MacroRunner.isRunning.value) {
-                MacroRunner.cancel("Stopped by voice: $text")
-            }
-            if (automationBridge.isRunning) {
-                automationBridge.cancel()
-            }
+        // Emergency agent voice stop
+        if (isStop && automationBridge.isRunning) {
+            automationBridge.cancel()
             serviceScope.launch(Dispatchers.IO) {
                 try {
                     val db = MiraDatabase.getInstance(applicationContext)
                     db.notificationDao().insertNotification(
                         NotificationEntity(
-                            title = "Macro Stopped",
+                            title = "Automation Stopped",
                             message = "Screen automation stopped via voice command: $text",
-                            type = "macro"
+                            type = "automation"
                         )
                     )
                 } catch (e: Exception) {

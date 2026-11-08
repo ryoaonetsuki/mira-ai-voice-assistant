@@ -159,6 +159,6 @@ class SingleVoiceSessionTest {
             lastModelTranscript = "এখানে আজকের আবহাওয়া সম্পর্কে তথ্য দেওয়া হয়েছে।"
         )
         assertNotNull("Genuine identity question must return canned response", genuineResponse)
-        assertEquals("আমার নাম মিরা, আমি একটা AI এজেন্ট।", genuineResponse)
+        assertEquals(io.github.ryoaonetsuki.mira.identity.IdentityProfile.IDENTITY_BANGLA, genuineResponse)
     }
 }

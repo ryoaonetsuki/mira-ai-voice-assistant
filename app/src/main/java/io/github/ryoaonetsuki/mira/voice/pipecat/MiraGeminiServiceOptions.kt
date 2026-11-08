@@ -30,8 +30,7 @@ import ai.pipecat.client.types.Value
 /**
  * Service options for Mira's Gemini Live WebSocket transport (ROUND 19).
  *
- * Supports configurable endpoint routing between Direct Google Gemini Live API
- * (with x-goog-api-key) and Cloudflare Live Relay (with x-mira-gemini-key).
+ * Direct Google Gemini Live API transport (with x-goog-api-key).
  */
 data class MiraGeminiServiceOptions(
     val apiKey: String,
@@ -44,10 +43,7 @@ data class MiraGeminiServiceOptions(
     companion object {
         const val DEFAULT_ENDPOINT_URL =
             "https://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
-        const val RELAY_ENDPOINT_URL =
-            "wss://mira-gemini-live-relay.salman-dev.workers.dev/live"
         const val DEFAULT_AUTH_HEADER_NAME = "x-goog-api-key"
-        const val RELAY_AUTH_HEADER_NAME = "x-mira-gemini-key"
 
         /**
          * Builds the modelConfig Value.Object for Gemini Live setup frame
@@ -137,31 +133,6 @@ data class MiraGeminiServiceOptions(
             apiKey = apiKey,
             endpointUrl = DEFAULT_ENDPOINT_URL,
             authHeaderName = DEFAULT_AUTH_HEADER_NAME,
-            headers = headers,
-            modelConfig = buildPipecatModelConfig(
-                model = model,
-                voiceName = voiceName,
-                languageCode = languageCode,
-                systemInstructionText = systemInstructionText,
-                resumptionHandle = resumptionHandle
-            ),
-            initialUserMessage = initialUserMessage
-        )
-
-        fun forRelay(
-            apiKey: String,
-            relayUrl: String = RELAY_ENDPOINT_URL,
-            model: String = "models/gemini-3.8-live",
-            voiceName: String = "Aoede",
-            languageCode: String = "bn-BD",
-            systemInstructionText: String = "",
-            resumptionHandle: String? = null,
-            initialUserMessage: String? = null,
-            headers: Map<String, String> = emptyMap()
-        ) = MiraGeminiServiceOptions(
-            apiKey = apiKey,
-            endpointUrl = relayUrl,
-            authHeaderName = RELAY_AUTH_HEADER_NAME,
             headers = headers,
             modelConfig = buildPipecatModelConfig(
                 model = model,

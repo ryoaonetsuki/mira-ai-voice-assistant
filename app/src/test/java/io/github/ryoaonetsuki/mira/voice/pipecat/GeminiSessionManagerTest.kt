@@ -645,4 +645,36 @@ class GeminiSessionManagerTest {
         assertEquals(1, listener.errors.size)
         assertEquals("Live voice: Setup timed out after 15s — tap to retry", listener.errors[0])
     }
+
+    @Test
+    fun test13_EchoGuardPlumbingThroughOptions() = runTest {
+        // Default constructor has echoGuardEnabled = true
+        val defaultManager = createManager(this)
+        defaultManager.startSession()
+        runCurrent()
+        val defaultClient = fakeFactory.createdClients.last()
+        assertTrue("Default manager must configure echoGuardEnabled = true in service options", defaultClient.options.echoGuardEnabled)
+        defaultManager.stopSession()
+        runCurrent()
+
+        // Explicitly disabled echoGuard
+        val disabledManager = GeminiSessionManager(
+            context = context,
+            apiKey = "test_api_key_12345",
+            voiceName = "Aoede",
+            language = "bn-BD",
+            systemPrompt = "You are Mira.",
+            resumptionStore = store,
+            listener = listener,
+            externalScope = this,
+            clientSessionFactory = fakeFactory,
+            echoGuardEnabled = false
+        )
+        disabledManager.startSession()
+        runCurrent()
+        val disabledClient = fakeFactory.createdClients.last()
+        assertFalse("Explicit echoGuardEnabled = false must plumb through to service options", disabledClient.options.echoGuardEnabled)
+        disabledManager.stopSession()
+        runCurrent()
+    }
 }

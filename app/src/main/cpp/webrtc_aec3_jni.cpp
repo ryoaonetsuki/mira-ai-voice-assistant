@@ -72,6 +72,8 @@ struct NativeAec3Context {
     webrtc::StreamConfig stream_config;
     int sample_rate;
     int frame_size;
+    std::vector<int16_t> zero_frame;
+    std::vector<int16_t> render_out;
 };
 
 extern "C" {
@@ -96,6 +98,8 @@ Java_io_github_ryoaonetsuki_mira_voice_pipecat_WebRtcAec3Native_nativeCreate(
     ctx->sample_rate = sampleRate;
     ctx->frame_size = frameSize;
     ctx->stream_config = webrtc::StreamConfig(sampleRate, 1);
+    ctx->zero_frame.assign(frameSize > 0 ? frameSize : 160, 0);
+    ctx->render_out.assign(frameSize > 0 ? frameSize : 160, 0);
 
     ctx->apm = webrtc::AudioProcessingBuilder().Create();
     if (!ctx->apm) {
@@ -144,6 +148,8 @@ Java_io_github_ryoaonetsuki_mira_voice_pipecat_WebRtcAec3Native_nativeDestroy(
 
     ctx->magic = 0; // Invalidate magic before releasing members
     ctx->apm = nullptr; // Releases scoped_refptr
+    ctx->zero_frame.clear();
+    ctx->render_out.clear();
     delete ctx;
     LOGI("WebRTC AEC3 destroyed");
 }
@@ -175,17 +181,29 @@ Java_io_github_ryoaonetsuki_mira_voice_pipecat_WebRtcAec3Native_nativeProcess(
     }
 
     int frame_size = ctx->frame_size;
+    if (frame_size <= 0) {
+        env->ReleaseShortArrayElements(jNearEnd, nearEnd, JNI_ABORT);
+        if (farEnd) env->ReleaseShortArrayElements(jFarEnd, farEnd, JNI_ABORT);
+        env->ReleaseShortArrayElements(jOut, out, JNI_ABORT);
+        return -1;
+    }
     int frames = length / frame_size;
+    if (frames <= 0) {
+        env->ReleaseShortArrayElements(jNearEnd, nearEnd, JNI_ABORT);
+        if (farEnd) env->ReleaseShortArrayElements(jFarEnd, farEnd, JNI_ABORT);
+        env->ReleaseShortArrayElements(jOut, out, 0);
+        return 0;
+    }
 
-    std::vector<int16_t> zero_frame(frame_size, 0);
-    std::vector<int16_t> dummy_render_out(frame_size, 0);
+    const int16_t *zero_ptr = ctx->zero_frame.data();
+    int16_t *render_out_ptr = ctx->render_out.data();
 
     for (int i = 0; i < frames; ++i) {
         int offset = i * frame_size;
-        const int16_t *far_ptr = farEnd ? reinterpret_cast<const int16_t *>(farEnd + offset) : zero_frame.data();
+        const int16_t *far_ptr = farEnd ? reinterpret_cast<const int16_t *>(farEnd + offset) : zero_ptr;
 
         // 1. Feed far-end reference (render stream)
-        ctx->apm->ProcessReverseStream(far_ptr, ctx->stream_config, ctx->stream_config, dummy_render_out.data());
+        ctx->apm->ProcessReverseStream(far_ptr, ctx->stream_config, ctx->stream_config, render_out_ptr);
 
         // 2. Report stream delay (0 since reference is already delay-compensated by Kotlin FIFO)
         ctx->apm->set_stream_delay_ms(0);

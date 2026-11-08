@@ -614,7 +614,7 @@ class MicService : Service() {
 
             override fun onModelTranscript(text: String) {
                 Log.i(TAG, "MIRA_LIVE_VOICE: Model transcript: $text")
-                _modelTranscript.value = text
+                _modelTranscript.value = io.github.ryoaonetsuki.mira.identity.MiraOutputFilter.sanitize(text)
             }
 
             override fun onReconnecting(attempt: Int, maxAttempts: Int) {
@@ -708,6 +708,33 @@ class MicService : Service() {
                     )
                 } catch (e: Exception) {
                     Log.w(TAG, "MIRA_LIVE_VOICE: Could not record notification: ${e.message}")
+                }
+            }
+            return
+        }
+
+        // Layer 1 — MiraIdentityInterceptor wiring: BEFORE sending transcribed text to Gemini
+        val cannedIdentityResponse = io.github.ryoaonetsuki.mira.identity.MiraIdentityInterceptor.getCannedResponse(cleanText)
+        if (cannedIdentityResponse != null) {
+            // Suppress the Live model's spoken reply for THAT turn only
+            sessionManager?.sendUserMessage("[Identity question detected: \"$cleanText\". Do not reply or speak. Keep silent.]")
+            _modelTranscript.value = cannedIdentityResponse
+
+            serviceScope.launch(Dispatchers.IO) {
+                val wasMuted = _isMuted.value
+                if (!wasMuted) {
+                    _isMuted.value = true
+                    sessionManager?.enableMic(false)
+                }
+                try {
+                    speakAutomationResult(cannedIdentityResponse)
+                } catch (e: Exception) {
+                    Log.e(TAG, "MIRA_LIVE_VOICE: Error speaking canned identity response: ${e.message}", e)
+                } finally {
+                    if (!wasMuted) {
+                        _isMuted.value = false
+                        sessionManager?.enableMic(true)
+                    }
                 }
             }
             return

@@ -170,7 +170,7 @@ fun AdvancedSettingsScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Accessibility Service (Macros)",
+                                text = "Accessibility Service (Screen Control)",
                                 fontSize = 14.5.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 color = palette.textPrimary
@@ -178,7 +178,7 @@ fun AdvancedSettingsScreen(
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
                                 text = if (isAccessibilityEnabled) "Active • Screen automation enabled"
-                                else "Disabled • Required for WhatsApp & YouTube screen automation",
+                                else "Disabled • Required for autonomous screen tasks & skills",
                                 fontSize = 12.sp,
                                 color = if (isAccessibilityEnabled) Color(0xFF10B981) else palette.textSecondary
                             )

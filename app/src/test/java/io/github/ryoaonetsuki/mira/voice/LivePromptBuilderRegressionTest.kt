@@ -97,4 +97,53 @@ class LivePromptBuilderRegressionTest {
         val defaultDate = currentDateTimeLine()
         assertTrue("Default dateLine must contain 'Bengali date:'", defaultDate.contains("Bengali date:"))
     }
+
+    @Test
+    fun testUserNameInjected_WhenConfigured_AndOmittedWhenDefaultOrBlank() {
+        val promptWithName = LivePromptBuilder.buildLiveSystemPrompt(
+            userName = "Salman"
+        )
+        assertTrue("Prompt must contain configured user name", promptWithName.contains("The user's name is Salman."))
+
+        val promptWithDefaultUser = LivePromptBuilder.buildLiveSystemPrompt(
+            userName = "User"
+        )
+        assertFalse("Prompt must not inject placeholder 'User'", promptWithDefaultUser.contains("The user's name is User"))
+
+        val promptBlank = LivePromptBuilder.buildLiveSystemPrompt(
+            userName = ""
+        )
+        assertFalse("Prompt with blank name must not inject user identity line", promptBlank.contains("User identity:"))
+    }
+
+    @Test
+    fun testAssistantNameInjected_WhenCustom_AndFollowsPersona() {
+        val promptCustomName = LivePromptBuilder.buildLiveSystemPrompt(
+            assistantName = "Maya"
+        )
+        assertTrue("Prompt must set custom name in base prompt", promptCustomName.contains("Your name is Maya."))
+        assertTrue("Identity rule must state custom assistant name", promptCustomName.contains("say you are Maya"))
+
+        val promptOrion = LivePromptBuilder.buildLiveSystemPrompt(
+            personaType = PersonaType.ORION,
+            assistantName = "Maya"
+        )
+        assertTrue("Orion identity rule must say Orion even if assistant name is custom", promptOrion.contains("say you are Orion"))
+        assertFalse("Orion must not have Mira custom name", promptOrion.contains("Your name is Maya"))
+
+        val promptDefault = LivePromptBuilder.buildLiveSystemPrompt()
+        assertTrue("Default identity rule must state Mira", promptDefault.contains("say you are Mira"))
+    }
+
+    @Test
+    fun testSecretModeTones_FriendlyRomanticIntense() {
+        val promptFriendly = LivePromptBuilder.buildLiveSystemPrompt(secretMode = "Friendly")
+        assertTrue("Friendly prompt must contain thoughtful friend tone", promptFriendly.contains("Warm, human-like, thoughtful"))
+
+        val promptRomantic = LivePromptBuilder.buildLiveSystemPrompt(secretMode = "Romantic")
+        assertTrue("Romantic prompt must contain affectionate romantic tone", promptRomantic.contains("Deeply warm, affectionate, attentive"))
+
+        val promptIntense = LivePromptBuilder.buildLiveSystemPrompt(secretMode = "Intense")
+        assertTrue("Intense prompt must contain bold intense tone", promptIntense.contains("Bold, intense, deeply passionate"))
+    }
 }

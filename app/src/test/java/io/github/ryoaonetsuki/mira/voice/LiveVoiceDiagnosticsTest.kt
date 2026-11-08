@@ -142,6 +142,20 @@ class LiveVoiceDiagnosticsTest {
     }
 
     @Test
+    fun testAecEngineDiagnosticsStateAndReset() {
+        assertEquals("UNKNOWN", LiveVoiceDiagnostics.data.value.aecEngine)
+
+        LiveVoiceDiagnostics.updateAecEngine("NATIVE_SPEEX")
+        assertEquals("NATIVE_SPEEX", LiveVoiceDiagnostics.data.value.aecEngine)
+
+        LiveVoiceDiagnostics.updateAecEngine("PASSTHROUGH_FALLBACK")
+        assertEquals("PASSTHROUGH_FALLBACK", LiveVoiceDiagnostics.data.value.aecEngine)
+
+        LiveVoiceDiagnostics.reset()
+        assertEquals("UNKNOWN", LiveVoiceDiagnostics.data.value.aecEngine)
+    }
+
+    @Test
     fun testAudioModeDiagnosticsStateAndReset() {
         assertEquals("MODE_NORMAL", LiveVoiceDiagnostics.data.value.audioMode)
 

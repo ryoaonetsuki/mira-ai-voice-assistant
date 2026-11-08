@@ -230,6 +230,10 @@ class IdentityTest {
         assertTrue("Roman Bengali phone answer must affirm yes in Bangla", romanPhone.contains("পারি") || romanPhone.contains("হ্যাঁ"))
         assertTrue("Roman Bengali phone answer must mention voice mode", romanPhone.contains("ভয়েস মোড"))
 
+        val romanChalatePhone = MiraIdentityInterceptor.getCannedResponse("phone chalate paro")!!
+        assertTrue("Roman Bengali phone chalate answer must affirm yes in Bangla", romanChalatePhone.contains("পারি") || romanChalatePhone.contains("হ্যাঁ"))
+        assertTrue("Roman Bengali phone chalate answer must mention voice mode", romanChalatePhone.contains("ভয়েস মোড"))
+
         val englishPhone = MiraIdentityInterceptor.getCannedResponse("can you control my phone")!!
         assertTrue("English phone answer must affirm yes", englishPhone.contains("Yes", ignoreCase = true))
         assertTrue("English phone answer must mention voice mode", englishPhone.contains("voice mode", ignoreCase = true))

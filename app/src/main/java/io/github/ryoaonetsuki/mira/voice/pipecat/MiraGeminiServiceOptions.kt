@@ -38,7 +38,8 @@ data class MiraGeminiServiceOptions(
     val authHeaderName: String = DEFAULT_AUTH_HEADER_NAME,
     val headers: Map<String, String> = emptyMap(),
     val modelConfig: Value,
-    val initialUserMessage: String? = null
+    val initialUserMessage: String? = null,
+    val echoGuardEnabled: Boolean = true
 ) {
     companion object {
         const val DEFAULT_ENDPOINT_URL =
@@ -128,7 +129,8 @@ data class MiraGeminiServiceOptions(
             systemInstructionText: String = "",
             resumptionHandle: String? = null,
             initialUserMessage: String? = null,
-            headers: Map<String, String> = emptyMap()
+            headers: Map<String, String> = emptyMap(),
+            echoGuardEnabled: Boolean = true
         ) = MiraGeminiServiceOptions(
             apiKey = apiKey,
             endpointUrl = DEFAULT_ENDPOINT_URL,
@@ -141,7 +143,8 @@ data class MiraGeminiServiceOptions(
                 systemInstructionText = systemInstructionText,
                 resumptionHandle = resumptionHandle
             ),
-            initialUserMessage = initialUserMessage
+            initialUserMessage = initialUserMessage,
+            echoGuardEnabled = echoGuardEnabled
         )
     }
 }

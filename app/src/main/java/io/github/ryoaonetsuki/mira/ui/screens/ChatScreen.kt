@@ -774,6 +774,25 @@ fun ChatScreen(
                         }
                     }
 
+                    // Layer 1 — MiraIdentityInterceptor: Canned identity check before sending
+                    if (currentStaged == null) {
+                        val cannedIdentityReply = io.github.ryoaonetsuki.mira.identity.MiraIdentityInterceptor.getCannedResponse(text)
+                        if (cannedIdentityReply != null) {
+                            safeInsertMessage(
+                                context,
+                                db,
+                                ChatMessageEntity(
+                                    conversationId = currentConversationId,
+                                    role = "model",
+                                    content = cannedIdentityReply
+                                )
+                            )
+                            updateConversationTitleAndMemory(db, currentConversationId, text, cannedIdentityReply)
+                            isSending = false
+                            return@launch
+                        }
+                    }
+
                     val webSearchOn = userPrefs.webSearchEnabledFlow.first()
                     val deepThinkingOn = userPrefs.deepThinkingEnabledFlow.first()
                     val personaName = userPrefs.personaFlow.first()
@@ -817,6 +836,8 @@ fun ChatScreen(
 
                     val dateLine = currentDateTimeLine(language)
                     val sysPrompt = buildString {
+                        append(io.github.ryoaonetsuki.mira.identity.IdentityProfile.SYSTEM_PROMPT_OVERRIDE)
+                        append("\n")
                         append("Current date and time (from the device clock — always trust this, never guess or use training knowledge): $dateLine. If asked for the date, time or day, answer from this line.\n")
                         append(personaType.basePrompt)
                         if (effectiveAssistantName != "Mira" && personaType == io.github.ryoaonetsuki.mira.data.model.PersonaType.MIRA) {
@@ -970,7 +991,8 @@ fun ChatScreen(
                     }
 
                     if (accumulated.isNotEmpty()) {
-                        val fullReply = accumulated.toString()
+                        val rawReply = accumulated.toString()
+                        val fullReply = io.github.ryoaonetsuki.mira.identity.MiraOutputFilter.sanitize(rawReply)
                         val processed = withContext(Dispatchers.IO) {
                             if (isProjectOrDownload || WebsiteProjectManager.hasFileOrProjectContent(fullReply)) {
                                 WebsiteProjectManager.processAndSaveGeneratedContent(context, fullReply, language, isJustCode = isJustCode)
@@ -1021,11 +1043,12 @@ fun ChatScreen(
                         }
                         if (fallbackResponse.isSuccess) {
                             val grounded = fallbackResponse.getOrThrow()
+                            val sanitizedReply = io.github.ryoaonetsuki.mira.identity.MiraOutputFilter.sanitize(grounded.text)
                             val processed = withContext(Dispatchers.IO) {
-                                if (isProjectOrDownload || WebsiteProjectManager.hasFileOrProjectContent(grounded.text)) {
-                                    WebsiteProjectManager.processAndSaveGeneratedContent(context, grounded.text, language, isJustCode = isJustCode)
+                                if (isProjectOrDownload || WebsiteProjectManager.hasFileOrProjectContent(sanitizedReply)) {
+                                    WebsiteProjectManager.processAndSaveGeneratedContent(context, sanitizedReply, language, isJustCode = isJustCode)
                                 } else {
-                                    ProcessedChatResult(displayText = grounded.text, isWebsite = false, isCode = false)
+                                    ProcessedChatResult(displayText = sanitizedReply, isWebsite = false, isCode = false)
                                 }
                             }
                             withContext(Dispatchers.IO) {

@@ -3,11 +3,13 @@ package io.github.ryoaonetsuki.mira.service
 import android.app.Notification
 import android.content.Context
 import androidx.core.app.NotificationCompat
+import io.github.ryoaonetsuki.mira.R
 import io.github.ryoaonetsuki.mira.voice.pipecat.SessionManagerState
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 
@@ -196,5 +198,142 @@ class CallNotificationStopPathRegressionTest {
         assertTrue(
             exception.message!!.contains("CallStyle notifications must be for a foreground service")
         )
+    }
+
+    @Test
+    fun testBuildCallNotification_usesNewSmallIcon_andConfiguresCallStyleWithEndAndMute() {
+        val serviceController = Robolectric.buildService(MicService::class.java).create()
+        val service = serviceController.get()
+        try {
+            val notification = service.buildCallNotification()
+
+            // 1. Assert uses the NEW small-icon resource
+            assertEquals(
+                "Call notification must use R.drawable.ic_notification_mira small icon",
+                R.drawable.ic_notification_mira,
+                notification.icon
+            )
+
+            // 2. Assert it does NOT use the old full-colour logo or launcher icons
+            assertNotEquals(
+                "Call notification must NOT use the old full-color logo_chosen",
+                R.drawable.logo_chosen,
+                notification.icon
+            )
+            assertNotEquals(
+                "Call notification must NOT use ic_launcher_foreground",
+                R.drawable.ic_launcher_foreground,
+                notification.icon
+            )
+
+            // 3. Assert FLAG_ONLY_ALERT_ONCE is set
+            assertTrue(
+                "Notification must have FLAG_ONLY_ALERT_ONCE set",
+                (notification.flags and Notification.FLAG_ONLY_ALERT_ONCE) != 0
+            )
+
+            // 4. Assert Ongoing event
+            assertTrue(
+                "Notification must be marked ongoing",
+                (notification.flags and Notification.FLAG_ONGOING_EVENT) != 0
+            )
+
+            // 5. Assert CallStyle template
+            assertEquals(
+                NotificationCompat.CallStyle::class.java.name,
+                notification.extras.getString(NotificationCompat.EXTRA_TEMPLATE)
+            )
+
+            // 6. Assert Mute action is present
+            val muteAction = notification.actions?.find { it.title == "Mute" || it.title == "Unmute" }
+            assertNotNull("Mute action must be present in notification actions", muteAction)
+
+            // 7. Assert End / Hang up action is configured in CallStyle extras or actions
+            val hasEndIntent = notification.extras.containsKey("android.declineIntent") ||
+                notification.extras.containsKey(NotificationCompat.EXTRA_DECLINE_INTENT) ||
+                notification.actions?.any { it.actionIntent != null } == true
+            assertTrue("End/Hangup action must be configured in CallStyle", hasEndIntent)
+        } finally {
+            serviceController.destroy()
+        }
+    }
+
+    @Test
+    fun testCallNotification_onlyAlertsOnce_andRepeatedUpdatesDoNotReAlert() {
+        // 1. Old builder without setOnlyAlertOnce(true) DOES NOT carry FLAG_ONLY_ALERT_ONCE
+        val oldBuilderNotification = NotificationCompat.Builder(context, "mira_call_channel")
+            .setContentTitle("Old Call")
+            .setContentText("Listening • Mira Live call active")
+            .setSmallIcon(R.drawable.logo_chosen)
+            .build()
+        assertFalse(
+            "Old notification without onlyAlertOnce must NOT carry FLAG_ONLY_ALERT_ONCE",
+            (oldBuilderNotification.flags and Notification.FLAG_ONLY_ALERT_ONCE) != 0
+        )
+
+        // 2. Service-built call notification DOES carry FLAG_ONLY_ALERT_ONCE
+        val serviceController = Robolectric.buildService(MicService::class.java).create()
+        val service = serviceController.get()
+        try {
+            val callNotification = service.buildCallNotification()
+            assertTrue(
+                "Service-built call notification must carry FLAG_ONLY_ALERT_ONCE",
+                (callNotification.flags and Notification.FLAG_ONLY_ALERT_ONCE) != 0
+            )
+
+            // 3. Track alerting vs silent foreground posts
+            var alertingPostsCount = 0
+            var silentUpdatesCount = 0
+
+            val trackingController = CallNotificationController(
+                startForegroundAction = { _, notif ->
+                    if ((notif.flags and Notification.FLAG_ONLY_ALERT_ONCE) == 0) {
+                        // Without FLAG_ONLY_ALERT_ONCE, every post alerts heads-up
+                        alertingPostsCount++
+                    } else {
+                        // With FLAG_ONLY_ALERT_ONCE, only the first post alerts heads-up; later posts update silently
+                        if (alertingPostsCount == 0) {
+                            alertingPostsCount++
+                        } else {
+                            silentUpdatesCount++
+                        }
+                    }
+                },
+                stopForegroundAction = {},
+                cancelNotificationAction = {}
+            )
+
+            // Initial call start: alerts once
+            trackingController.startForegroundWithNotification(callNotification)
+            assertEquals("Initial post must alert once", 1, alertingPostsCount)
+            assertEquals(0, silentUpdatesCount)
+
+            // Repeated updates on state change (e.g. LISTENING -> SPEAKING -> LISTENING)
+            trackingController.postCallNotificationIfForeground { service.buildCallNotification() }
+            trackingController.postCallNotificationIfForeground { service.buildCallNotification() }
+            trackingController.postCallNotificationIfForeground { service.buildCallNotification() }
+
+            // Assert: NO additional alerting posts produced; all 3 updates were silent
+            assertEquals("Repeated updates must NOT trigger new alerting posts", 1, alertingPostsCount)
+            assertEquals("Repeated updates must be processed silently", 3, silentUpdatesCount)
+
+            // Contrast with old notification: if old notification was used, every update alerts
+            var oldAlertingPosts = 0
+            val oldTrackingController = CallNotificationController(
+                startForegroundAction = { _, notif ->
+                    if ((notif.flags and Notification.FLAG_ONLY_ALERT_ONCE) == 0) {
+                        oldAlertingPosts++
+                    }
+                },
+                stopForegroundAction = {},
+                cancelNotificationAction = {}
+            )
+            oldTrackingController.startForegroundWithNotification(oldBuilderNotification)
+            oldTrackingController.postCallNotificationIfForeground { oldBuilderNotification }
+            oldTrackingController.postCallNotificationIfForeground { oldBuilderNotification }
+            assertEquals("Old builder produces alerting post on every update (re-alert bug)", 3, oldAlertingPosts)
+        } finally {
+            serviceController.destroy()
+        }
     }
 }

@@ -504,6 +504,10 @@ class MiraGeminiLiveTransport(
         }
     }
 
+    fun stopAudioPlayback() {
+        client?.stopAudioPlayback()
+    }
+
     override fun state(): TransportState = state
 
     override fun setState(state: TransportState) {

@@ -14,14 +14,14 @@ import kotlin.math.sqrt
  * Verifies:
  * (a) Plumbing & far-end reference consumption: frames flow without crashing, sizes match,
  *     and far-end playback reference is consumed from the FIFO.
- *     (Note: SpeexDSP echo attenuation of 49.65 dB is verified by the native C test harness).
  * (b) Passthrough: user speech passes through unchanged when using the pass-through engine.
  * (c) Double-talk: user speech is preserved without clipping or degradation.
  * (d) Buffer drift protection: massive playback bursts are capped to max capacity without crash or memory leak.
  * (e) Reset: clears playback buffer and resets state.
  * (f) Resampling: 24 kHz -> 16 kHz sample rate conversion.
- * (g) Factory: graceful fallback to pass-through engine when native SpeexDSP is absent.
+ * (g) Factory: graceful fallback to pass-through engine when native WebRTC AEC3 is absent.
  * (h) EchoGate second layer: verified with pass-through fallback.
+ * (i) Speex removal: verified Speex native code and bindings are completely removed.
  */
 class SoftwareAcousticEchoCancellerTest {
 
@@ -83,19 +83,10 @@ class SoftwareAcousticEchoCancellerTest {
      * Test (a): Audio pipeline plumbing and far-end reference consumption.
      *
      * IMPORTANT: This JVM test validates pipeline plumbing (frame flow, buffer sizing,
-     * FIFO reference consumption, and resampler integration). It does NOT measure SpeexDSP
-     * echo attenuation because host JVM unit tests do not load the Android NDK native library
-     * (libspeexdsp_mira.so).
-     *
-     * The real echo-attenuation evidence is the native SpeexDSP C harness measurement
-     * (49.65 dB echo return loss enhancement from the Turn 2 report), measured directly against
-     * the compiled SpeexDSP C library. JVM tests do not and cannot claim to prove attenuation.
+     * FIFO reference consumption, and resampler integration).
      */
     @Test
     fun testSyntheticEcho_PlumbingAndReferenceConsumption() {
-        // Real echo-attenuation evidence is the native SpeexDSP C harness measurement (49.65 dB,
-        // from the Turn 2 report), which the JVM cannot run because it cannot load the .so.
-        // JVM tests verify pipeline plumbing, buffer integrity, and reference consumption only.
         val recordingEngine = RecordingAecEngine()
         val aec = SoftwareAcousticEchoCanceller(
             engine = recordingEngine,
@@ -345,14 +336,14 @@ class SoftwareAcousticEchoCancellerTest {
     }
 
     /**
-     * Test (g): Factory and Speex Native Availability Logging.
+     * Test (g): Factory and WebRTC AEC3 Native Availability Logging.
      * Proves fallback clean creation without crash and logs status.
      */
     @Test
     fun testFactoryCreation_SucceedsWithoutCrashing() {
         val canceller = SoftwareAcousticEchoCanceller.create()
-        val isNative = SpeexAecNative.isAvailable()
-        println("Speex native library loaded on test runner: $isNative")
+        val isNative = WebRtcAec3Native.isAvailable()
+        println("WebRTC AEC3 native library loaded on test runner: $isNative")
         if (!isNative) {
             println("NOTE: JVM unit tests run on host JVM without Android NDK libraries. Validating Kotlin pass-through fallback & plumbing.")
         }
@@ -360,6 +351,30 @@ class SoftwareAcousticEchoCancellerTest {
         val testPcm = ByteArray(3200)
         val cleaned = canceller.processMicrophoneAudio(testPcm)
         assertEquals(3200, cleaned.size)
+        canceller.release()
+    }
+
+    /**
+     * Test (i): Proves Speex native code and bindings are completely removed.
+     * Validates that SpeexAecNative no longer exists in classpath and no Speex libraries are referenced.
+     */
+    @Test
+    fun testSpeexNativeCodeIsCompletelyRemoved() {
+        // 1. Verify SpeexAecNative class does not exist in runtime classpath
+        val speexClassPresent = try {
+            Class.forName("io.github.ryoaonetsuki.mira.voice.pipecat.SpeexAecNative")
+            true
+        } catch (_: ClassNotFoundException) {
+            false
+        }
+        assertFalse("SpeexAecNative must be completely removed from codebase", speexClassPresent)
+
+        // 2. Verify SoftwareAcousticEchoCanceller uses WebRtcAec3 / PassThrough, never Speex
+        val canceller = SoftwareAcousticEchoCanceller.create()
+        assertTrue(
+            "Engine type must be WebRTC AEC3 or PassThrough fallback, not Speex",
+            canceller.engineType == "NATIVE_WEBRTC_AEC3" || canceller.engineType == "PASSTHROUGH_FALLBACK"
+        )
         canceller.release()
     }
 

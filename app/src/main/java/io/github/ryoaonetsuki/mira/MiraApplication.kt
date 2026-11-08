@@ -29,6 +29,16 @@ class MiraApplication : Application() {
 
     private fun createNotificationChannels() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val callChannel = NotificationChannel(
+                "mira_call_channel",
+                "Mira Voice Calls",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Ongoing Mira AI voice call controls"
+                enableVibration(true)
+                enableLights(true)
+            }
+
             val micChannel = NotificationChannel(
                 "mira_mic_channel",
                 "Mira Live Voice",
@@ -46,6 +56,7 @@ class MiraApplication : Application() {
             }
 
             val manager = getSystemService(NotificationManager::class.java)
+            manager.createNotificationChannel(callChannel)
             manager.createNotificationChannel(micChannel)
             manager.createNotificationChannel(alertChannel)
         }

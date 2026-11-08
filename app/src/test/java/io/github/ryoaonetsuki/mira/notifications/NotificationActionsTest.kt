@@ -36,6 +36,16 @@ class NotificationActionsTest {
     }
 
     @Test
+    fun testTaskCompletionNotifier_BuildChatOpenIntent() {
+        val context: Context = RuntimeEnvironment.getApplication()
+        val intent = TaskCompletionNotifier.buildChatOpenIntent(context)
+
+        assertEquals(Intent.ACTION_VIEW, intent.action)
+        assertEquals("mira://chat", intent.data.toString())
+        assertTrue(intent.flags and Intent.FLAG_ACTIVITY_NEW_TASK != 0)
+    }
+
+    @Test
     fun testMicService_ActionConstants_And_Intents() {
         assertEquals("io.github.ryoaonetsuki.mira.action.START_VOICE", MicService.ACTION_START)
         assertEquals("io.github.ryoaonetsuki.mira.action.STOP_VOICE", MicService.ACTION_STOP)

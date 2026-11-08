@@ -223,27 +223,21 @@ class GeminiSessionManagerTest {
         client.sessionListener.onSessionResumptionUpdate("handle_ignored_2", resumable = false)
         assertEquals("handle_saved_1", store.getHandle())
 
-        // (c) Gated: during active model generation/speaking, handle is NOT saved
+        // (c) resumable = true saves handle even when bot is speaking (prevents dropping turn-complete checkpoints)
         client.sessionListener.onBotStartedSpeaking()
-        client.sessionListener.onSessionResumptionUpdate("handle_ignored_during_speaking", resumable = true)
-        assertEquals("handle_saved_1", store.getHandle())
+        client.sessionListener.onSessionResumptionUpdate("handle_saved_during_speaking", resumable = true)
+        assertEquals("handle_saved_during_speaking", store.getHandle())
         client.sessionListener.onBotStoppedSpeaking()
 
-        // (d) Gated: during active function call, handle is NOT saved
-        client.sessionListener.onFunctionCall(
-            id = "call_1",
-            name = "query_info",
-            args = Value.Array(listOf(Value.Str("arg"))),
-            rawArgs = mapOf("param" to "arg")
-        )
-        client.sessionListener.onSessionResumptionUpdate("handle_ignored_during_tool", resumable = true)
-        assertEquals("handle_saved_1", store.getHandle())
+        // (d) Empty handle is ignored
+        client.sessionListener.onSessionResumptionUpdate("", resumable = true)
+        assertEquals("handle_saved_during_speaking", store.getHandle())
 
         // (e) Outside CONNECTED state, handle is ignored
         manager.stopSession()
         runCurrent()
         client.sessionListener.onSessionResumptionUpdate("handle_ignored_stopped", resumable = true)
-        assertEquals("handle_saved_1", store.getHandle())
+        assertEquals("handle_saved_during_speaking", store.getHandle())
     }
 
     @Test
@@ -670,5 +664,182 @@ class GeminiSessionManagerTest {
         assertFalse("Explicit echoGuardEnabled = false must plumb through to service options", disabledClient.options.echoGuardEnabled)
         disabledManager.stopSession()
         runCurrent()
+    }
+
+    @Test
+    fun test14_GoAwayWithoutHandle_ExplicitlyWarnsInDiagnosticsAndReconnectsFresh() = runTest {
+        val manager = createManager(this)
+        manager.startSession()
+        runCurrent()
+        val client1 = fakeFactory.createdClients[0]
+        client1.sessionListener.onWebSocketOpen()
+        client1.sessionListener.onSetupComplete()
+        runCurrent()
+        assertEquals(SessionManagerState.CONNECTED, manager.state.value)
+
+        // Store has NO handle
+        store.clearHandle()
+        assertNull(store.getHandle())
+
+        // Server sends GoAway
+        client1.sessionListener.onGoAway("60s")
+        runCurrent()
+
+        // Transitions GOAWAY_RECEIVED -> RECONNECTING -> CONNECTING
+        assertTrue(listener.stateTransitions.contains(SessionManagerState.GOAWAY_RECEIVED))
+        assertTrue(listener.stateTransitions.contains(SessionManagerState.RECONNECTING))
+        assertEquals(SessionManagerState.CONNECTING, manager.state.value)
+
+        // Second client connects fresh (no handle)
+        assertEquals(2, fakeFactory.createdClients.size)
+        val client2 = fakeFactory.createdClients[1]
+        val modelConfigObj = client2.options.modelConfig as Value.Object
+        val sessionResumption = modelConfigObj.value["sessionResumption"] as Value.Object
+        assertNull("Reconnected client must NOT have handle when store was empty", sessionResumption.value["handle"])
+    }
+
+    @Test
+    fun test15_UnexpectedDisconnectInConnectedState_ResumesWithStoredHandle() = runTest {
+        val manager = createManager(this)
+        manager.startSession()
+        runCurrent()
+        val client1 = fakeFactory.createdClients[0]
+        client1.sessionListener.onWebSocketOpen()
+        client1.sessionListener.onSetupComplete()
+        runCurrent()
+        assertEquals(SessionManagerState.CONNECTED, manager.state.value)
+
+        // Save valid handle from turn
+        client1.sessionListener.onSessionResumptionUpdate("handle_preserve_on_drop", resumable = true)
+        assertEquals("handle_preserve_on_drop", store.getHandle())
+
+        // Connection drops unexpectedly (server drop / network glitch)
+        client1.sessionListener.onSessionEnded("connection dropped by peer", null)
+        runCurrent()
+
+        // Delay for backoff #1 (1000ms)
+        advanceTimeBy(1000L)
+        runCurrent()
+
+        // Must reconnect using the stored resumption handle
+        assertEquals(2, fakeFactory.createdClients.size)
+        val client2 = fakeFactory.createdClients[1]
+        val modelConfigObj = client2.options.modelConfig as Value.Object
+        val sessionResumption = modelConfigObj.value["sessionResumption"] as Value.Object
+        val handleValue = (sessionResumption.value["handle"] as Value.Str).value
+        assertEquals("handle_preserve_on_drop", handleValue)
+    }
+
+    @Test
+    fun test16_HandshakeFailureInConfiguring_ClearsRejectedHandleAndFallsBackToFresh() = runTest {
+        val manager = createManager(this)
+        manager.startSession()
+        runCurrent()
+        val client1 = fakeFactory.createdClients[0]
+        client1.sessionListener.onWebSocketOpen()
+        runCurrent()
+        assertEquals(SessionManagerState.CONFIGURING, manager.state.value)
+
+        // Pre-existing handle was in store
+        store.saveHandle("bad_handle_rejected_by_server")
+
+        // Handshake fails while in CONFIGURING state
+        client1.sessionListener.onSessionEnded("setup handshake rejected: invalid handle", null)
+        runCurrent()
+
+        // Handle MUST be cleared from store so next retry falls back to fresh session
+        assertNull("Corrupt handle must be cleared after CONFIGURING handshake failure", store.getHandle())
+
+        // Advance retry backoff
+        advanceTimeBy(1000L)
+        runCurrent()
+
+        // Next retry client is created with fresh session (no handle)
+        assertEquals(2, fakeFactory.createdClients.size)
+        val client2 = fakeFactory.createdClients[1]
+        val modelConfigObj = client2.options.modelConfig as Value.Object
+        val sessionResumption = modelConfigObj.value["sessionResumption"] as Value.Object
+        assertNull("Retry client must not have handle after rejection", sessionResumption.value["handle"])
+    }
+
+    @Test
+    fun test17_StopTwice_IsIdempotentAndSafe() = runTest {
+        val manager = createManager(this)
+        manager.startSession()
+        runCurrent()
+
+        // First stop
+        manager.stopSession()
+        runCurrent()
+        assertEquals(SessionManagerState.STOPPED, manager.state.value)
+        assertEquals(0, GeminiSessionManager.getLiveSessionsCount())
+
+        // Second stop must be safe no-op
+        manager.stopSession()
+        runCurrent()
+        assertEquals(SessionManagerState.STOPPED, manager.state.value)
+        assertEquals(0, GeminiSessionManager.getLiveSessionsCount())
+    }
+
+    @Test
+    fun test18_StopDuringConnecting_DoesNotStartOrCrash() = runTest {
+        val manager = createManager(this)
+        manager.startSession()
+        runCurrent()
+        assertEquals(SessionManagerState.CONNECTING, manager.state.value)
+
+        // User stops while still connecting
+        manager.stopSession()
+        runCurrent()
+        assertEquals(SessionManagerState.STOPPED, manager.state.value)
+        assertEquals(0, GeminiSessionManager.getLiveSessionsCount())
+
+        // Stale late events from old socket must be ignored
+        val client = fakeFactory.createdClients[0]
+        client.sessionListener.onWebSocketOpen()
+        client.sessionListener.onSetupComplete()
+        runCurrent()
+        assertEquals("State must remain STOPPED after late socket events", SessionManagerState.STOPPED, manager.state.value)
+    }
+
+    @Test
+    fun test19_StopAfterWebsocketFailed_DoesNotCrash() = runTest {
+        val manager = createManager(this)
+        manager.startSession()
+        runCurrent()
+        val client = fakeFactory.createdClients[0]
+
+        // Socket fails
+        client.sessionListener.onSessionEnded("socket failure", java.io.IOException("connection reset"))
+        runCurrent()
+        assertEquals(SessionManagerState.RECONNECTING, manager.state.value)
+
+        // User turns voice off during reconnecting
+        manager.stopSession()
+        runCurrent()
+        assertEquals(SessionManagerState.STOPPED, manager.state.value)
+        assertEquals(0, GeminiSessionManager.getLiveSessionsCount())
+
+        // Advance time to verify reconnect job was cancelled
+        advanceTimeBy(5000L)
+        runCurrent()
+        assertEquals("No new client should be created after stop", 1, fakeFactory.createdClients.size)
+        assertEquals(SessionManagerState.STOPPED, manager.state.value)
+    }
+
+    @Test
+    fun test20_StopRacingStartSession_DoesNotReviveStoppedManager() = runTest {
+        val manager = createManager(this)
+        manager.startSession()
+        runCurrent()
+        manager.stopSession()
+        runCurrent()
+        assertEquals(SessionManagerState.STOPPED, manager.state.value)
+
+        // Attempting to call startSession on an explicitly stopped manager must be ignored
+        manager.startSession()
+        runCurrent()
+        assertEquals("Manager must not be revived after stopSession()", SessionManagerState.STOPPED, manager.state.value)
+        assertEquals(0, GeminiSessionManager.getLiveSessionsCount())
     }
 }

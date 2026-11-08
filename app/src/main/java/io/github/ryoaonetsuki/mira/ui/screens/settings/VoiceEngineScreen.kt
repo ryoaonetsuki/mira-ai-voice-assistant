@@ -1,7 +1,9 @@
 package io.github.ryoaonetsuki.mira.ui.screens.settings
 
 import androidx.compose.ui.res.painterResource
+import io.github.ryoaonetsuki.mira.BuildConfig
 import io.github.ryoaonetsuki.mira.R
+import io.github.ryoaonetsuki.mira.service.MicService
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -233,6 +235,16 @@ fun VoiceEngineScreen(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(if (isCheckingCapability) "Checking with Google..." else "Check Key Capability")
+                    }
+                    if (BuildConfig.DEBUG) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = { MicService.simulateGoAwayForTesting() },
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Simulate GoAway (Auto-Reconnect)")
+                        }
                     }
                 }
             }

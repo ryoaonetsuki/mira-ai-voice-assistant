@@ -188,6 +188,9 @@ fun MiraNavGraph(
                         nullable = true
                         defaultValue = null
                     }
+                ),
+                deepLinks = listOf(
+                    navDeepLink { uriPattern = "mira://chat" }
                 )
             ) { backStackEntry ->
                 ChatScreen(

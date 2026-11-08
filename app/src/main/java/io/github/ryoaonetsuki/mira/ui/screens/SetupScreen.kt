@@ -589,8 +589,8 @@ fun SetupScreen(
                 // Optional: Accessibility
                 item {
                     PermissionRow(
-                        title = "Accessibility Service (Macros)",
-                        subtitle = "Allows Mira to operate the screen for WhatsApp and YouTube macros",
+                        title = "Accessibility Service (Screen Control)",
+                        subtitle = "Allows Mira to operate the screen for autonomous tasks and skills",
                         iconRes = R.drawable.ic_fluent_person_24_regular,
                         isGranted = isAccessibilityEnabled,
                         onClick = {

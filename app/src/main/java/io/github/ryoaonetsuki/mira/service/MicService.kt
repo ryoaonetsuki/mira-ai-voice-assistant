@@ -504,7 +504,7 @@ class MicService : Service() {
             }
         }
 
-        if (generation != sessionGenerationToken.get() || !isActive) {
+        if (generation != sessionGenerationToken.get() || currentCoroutineContext()[Job]?.isActive == false) {
             Log.w(TAG, "MIRA_LIVE_VOICE: Session start cancelled before startSession() (gen=$generation, current=${sessionGenerationToken.get()})")
             try {
                 manager.stopSession()

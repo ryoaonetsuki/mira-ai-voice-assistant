@@ -421,26 +421,20 @@ class GeminiSessionManagerTest {
         runCurrent()
         assertEquals(2, fakeFactory.createdClients.size)
 
-        // Test concurrent session limit of 3 instances
+        // Test concurrent session limit of 1 instance (single-voice invariant, Round 24 Turn 5)
         GeminiSessionManager.resetLiveSessionsCount()
         val m1 = createManager(this)
         val m2 = createManager(this)
-        val m3 = createManager(this)
-        val m4 = createManager(this)
 
         m1.startSession()
         runCurrent()
+        assertEquals(1, GeminiSessionManager.getLiveSessionsCount())
+
+        // 2nd concurrent session must be refused
         m2.startSession()
         runCurrent()
-        m3.startSession()
-        runCurrent()
-        assertEquals(3, GeminiSessionManager.getLiveSessionsCount())
-
-        // 4th concurrent session must be refused
-        m4.startSession()
-        runCurrent()
-        assertEquals(SessionManagerState.ERROR, m4.state.value)
-        assertEquals(3, GeminiSessionManager.getLiveSessionsCount())
+        assertEquals(SessionManagerState.ERROR, m2.state.value)
+        assertEquals(1, GeminiSessionManager.getLiveSessionsCount())
     }
 
     @Test

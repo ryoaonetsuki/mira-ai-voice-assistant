@@ -42,10 +42,10 @@ interface AudioResampler {
 }
 
 /**
- * Thread-safe holder for the native Speex context handle, synchronizing execution
+ * Thread-safe holder for the native WebRTC AEC3 context handle, synchronizing execution
  * across audio processing threads (AudioIn, AudioOut) and teardown.
  */
-internal class NativeSpeexContextWrapper(
+internal class NativeWebRtcContextWrapper(
     @Volatile private var _handle: Long
 ) {
     val lock = Any()
@@ -58,22 +58,22 @@ internal class NativeSpeexContextWrapper(
             val h = _handle
             if (h != 0L) {
                 _handle = 0L
-                SpeexAecNative.nativeDestroy(h)
+                WebRtcAec3Native.nativeDestroy(h)
             }
         }
     }
 }
 
 /**
- * Native SpeexDSP-backed AEC engine using JNI.
+ * Native WebRTC AEC3-backed AEC engine using JNI.
  */
-internal class NativeSpeexAecEngine(
-    val contextWrapper: NativeSpeexContextWrapper,
+internal class NativeWebRtcAec3Engine(
+    val contextWrapper: NativeWebRtcContextWrapper,
     val frameSize: Int = 160
 ) : AcousticEchoCancellerEngine {
 
     constructor(nativeHandle: Long, frameSize: Int = 160) : this(
-        NativeSpeexContextWrapper(nativeHandle),
+        NativeWebRtcContextWrapper(nativeHandle),
         frameSize
     )
 
@@ -86,7 +86,7 @@ internal class NativeSpeexAecEngine(
                 System.arraycopy(nearEnd, 0, out, 0, length)
                 return
             }
-            val res = SpeexAecNative.nativeProcess(
+            val res = WebRtcAec3Native.nativeProcess(
                 handle = handle,
                 nearEnd = nearEnd,
                 farEnd = farEnd,
@@ -104,7 +104,7 @@ internal class NativeSpeexAecEngine(
         synchronized(contextWrapper.lock) {
             val handle = contextWrapper.handle
             if (handle != 0L) {
-                SpeexAecNative.nativeReset(handle)
+                WebRtcAec3Native.nativeReset(handle)
             }
         }
     }
@@ -115,42 +115,7 @@ internal class NativeSpeexAecEngine(
 }
 
 /**
- * Native SpeexDSP-backed resampler using JNI.
- */
-internal class NativeSpeexResampler(
-    val contextWrapper: NativeSpeexContextWrapper
-) : AudioResampler {
-
-    constructor(nativeHandle: Long) : this(NativeSpeexContextWrapper(nativeHandle))
-
-    val nativeHandle: Long get() = contextWrapper.handle
-
-    override fun resample(input: ShortArray, inRate: Int, outRate: Int): ShortArray {
-        synchronized(contextWrapper.lock) {
-            val handle = contextWrapper.handle
-            if (handle == 0L || input.isEmpty()) return ShortArray(0)
-            val outCapacity = ((input.size.toLong() * outRate) / inRate + 32).toInt()
-            val out = ShortArray(outCapacity)
-            val produced = SpeexAecNative.nativeResample(
-                handle = handle,
-                input = input,
-                inLen = input.size,
-                output = out,
-                outCapacity = outCapacity
-            )
-            return if (produced > 0) out.copyOf(produced) else ShortArray(0)
-        }
-    }
-
-    override fun reset() {}
-
-    override fun release() {
-        // NativeSpeexContextWrapper lifecycle is single-owner managed via NativeSpeexAecEngine
-    }
-}
-
-/**
- * Pass-through AEC engine used when the native SpeexDSP library is unavailable.
+ * Pass-through AEC engine used when the native WebRTC AEC3 library is unavailable.
  *
  * Copies near-end microphone samples directly to output unchanged without cancellation.
  * The downstream EchoGate remains the defense-in-depth protection in this fallback mode.
@@ -216,7 +181,7 @@ class SoftwareAcousticEchoCanceller(
         private const val TAG = "SoftwareAEC"
 
         /**
-         * Creates an operational [SoftwareAcousticEchoCanceller] using SpeexDSP native code
+         * Creates an operational [SoftwareAcousticEchoCanceller] using WebRTC AEC3 native code
          * when available, or falling back gracefully to pass-through without throwing.
          */
         fun create(
@@ -226,20 +191,18 @@ class SoftwareAcousticEchoCanceller(
             filterLengthSamples: Int = 3200,
             defaultReferenceDelayMs: Int = 120
         ): SoftwareAcousticEchoCanceller {
-            if (SpeexAecNative.isAvailable()) {
+            if (WebRtcAec3Native.isAvailable()) {
                 try {
-                    val handle = SpeexAecNative.nativeCreate(
+                    val handle = WebRtcAec3Native.nativeCreate(
                         sampleRate = sampleRateHz,
-                        frameSize = frameSizeSamples,
-                        filterLength = filterLengthSamples,
-                        resampleInRate = playbackSampleRateHz
+                        frameSize = frameSizeSamples
                     )
                     if (handle != 0L) {
-                        try { Log.i(TAG, "Initialized native SpeexDSP AEC engine (handle=$handle)") } catch (_: Throwable) {}
-                        val wrapper = NativeSpeexContextWrapper(handle)
+                        try { Log.i(TAG, "Initialized native WebRTC AEC3 engine (handle=$handle)") } catch (_: Throwable) {}
+                        val wrapper = NativeWebRtcContextWrapper(handle)
                         return SoftwareAcousticEchoCanceller(
-                            engine = NativeSpeexAecEngine(wrapper, frameSizeSamples),
-                            resampler = NativeSpeexResampler(wrapper),
+                            engine = NativeWebRtcAec3Engine(wrapper, frameSizeSamples),
+                            resampler = LinearAudioResampler(),
                             sampleRateHz = sampleRateHz,
                             playbackSampleRateHz = playbackSampleRateHz,
                             frameSizeSamples = frameSizeSamples,
@@ -249,10 +212,10 @@ class SoftwareAcousticEchoCanceller(
                         try { Log.w(TAG, "nativeCreate returned 0, falling back to pass-through (no echo cancellation, EchoGate only)") } catch (_: Throwable) {}
                     }
                 } catch (t: Throwable) {
-                    try { Log.w(TAG, "Failed to initialize Speex native AEC: ${t.message}", t) } catch (_: Throwable) {}
+                    try { Log.w(TAG, "Failed to initialize WebRTC AEC3 native: ${t.message}", t) } catch (_: Throwable) {}
                 }
             } else {
-                try { Log.i(TAG, "Speex native library not available, falling back to pass-through (no echo cancellation, EchoGate only)") } catch (_: Throwable) {}
+                try { Log.i(TAG, "WebRTC AEC3 native library not available, falling back to pass-through (no echo cancellation, EchoGate only)") } catch (_: Throwable) {}
             }
 
             return SoftwareAcousticEchoCanceller(
@@ -278,7 +241,7 @@ class SoftwareAcousticEchoCanceller(
     fun isReleased(): Boolean = released
 
     val engineType: String = when (engine) {
-        is NativeSpeexAecEngine -> "NATIVE_SPEEX"
+        is NativeWebRtcAec3Engine -> "NATIVE_WEBRTC_AEC3"
         is PassThroughAecEngine -> "PASSTHROUGH_FALLBACK"
         else -> engine.javaClass.simpleName
     }

@@ -258,7 +258,7 @@ class MicService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Mira AI Voice Call")
             .setContentText(statusText)
-            .setSmallIcon(R.drawable.logo_chosen)
+            .setSmallIcon(R.drawable.ic_notification_mira)
             .setContentIntent(openAppPendingIntent)
             .setStyle(callStyle)
             .addAction(muteIcon, muteActionTitle, mutePendingIntent)
@@ -266,6 +266,7 @@ class MicService : Service() {
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setOnlyAlertOnce(true)
             .build()
     }
 

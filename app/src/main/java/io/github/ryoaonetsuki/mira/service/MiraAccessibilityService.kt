@@ -17,6 +17,7 @@ import android.text.TextUtils
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import io.github.ryoaonetsuki.mira.automation.agent.TaskStep
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -44,6 +45,11 @@ class MiraAccessibilityService : AccessibilityService() {
         synchronized(macroEvents) {
             return ArrayList(macroEvents)
         }
+    }
+
+    fun stopMacroRecordingSteps(): List<TaskStep> {
+        val events = stopMacroRecording()
+        return convertEventsToSteps(events)
     }
 
     fun getMacroRecordingStatus(): Boolean = isRecordingMacro
@@ -466,6 +472,69 @@ class MiraAccessibilityService : AccessibilityService() {
 
         /** True while the service is bound and connected by the system. */
         val isConnected: Boolean get() = instance != null
+
+        val isRecording: Boolean
+            get() = instance?.isRecordingMacro == true
+
+        fun startRecording(): Boolean {
+            val s = instance ?: return false
+            s.startMacroRecording()
+            return true
+        }
+
+        fun stopRecordingSteps(): List<TaskStep> {
+            val s = instance ?: return emptyList()
+            return s.stopMacroRecordingSteps()
+        }
+
+        fun convertEventsToSteps(events: List<Map<String, Any>>): List<TaskStep> {
+            val steps = mutableListOf<TaskStep>()
+            for (event in events) {
+                when (event["type"] as? String) {
+                    "click" -> {
+                        val label = (event["label"] as? String)?.trim() ?: ""
+                        if (label.isNotEmpty()) {
+                            steps.add(
+                                TaskStep(
+                                    action = TaskStep.ACTION_CLICK_TEXT,
+                                    params = mapOf("text" to label)
+                                )
+                            )
+                        } else {
+                            val x = (event["x"] as? Number)?.toInt() ?: 0
+                            val y = (event["y"] as? Number)?.toInt() ?: 0
+                            steps.add(
+                                TaskStep(
+                                    action = TaskStep.ACTION_CLICK_AT,
+                                    params = mapOf("x" to x, "y" to y)
+                                )
+                            )
+                        }
+                    }
+                    "type" -> {
+                        val text = (event["text"] as? String) ?: ""
+                        if (text.isNotEmpty()) {
+                            steps.add(
+                                TaskStep(
+                                    action = TaskStep.ACTION_TYPE_TEXT,
+                                    params = mapOf("text" to text)
+                                )
+                            )
+                        }
+                    }
+                    "scroll" -> {
+                        val direction = (event["direction"] as? String) ?: "down"
+                        steps.add(
+                            TaskStep(
+                                action = TaskStep.ACTION_SCROLL,
+                                params = mapOf("direction" to direction)
+                            )
+                        )
+                    }
+                }
+            }
+            return steps
+        }
 
         /**
          * Checks whether Mira's AccessibilityService is enabled in Android Settings.

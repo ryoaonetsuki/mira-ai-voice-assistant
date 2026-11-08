@@ -394,7 +394,8 @@ class MicService : Service() {
                 systemPrompt = fullSystemPrompt,
                 resumptionStore = resumptionStore,
                 listener = createSessionListener(),
-                externalScope = serviceScope
+                externalScope = serviceScope,
+                echoGuardEnabled = echoGuard
             )
             sessionManager = manager
             activeSessionManager = manager

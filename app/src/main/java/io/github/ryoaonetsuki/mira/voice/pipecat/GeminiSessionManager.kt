@@ -7,6 +7,7 @@ import ai.pipecat.client.types.TransportState
 import ai.pipecat.client.types.Value
 import android.content.Context
 import android.util.Log
+import io.github.ryoaonetsuki.mira.voice.LiveVoiceDiagnostics
 import io.github.ryoaonetsuki.mira.voice.SessionResumptionStore
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow

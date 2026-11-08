@@ -411,26 +411,19 @@ class MicService : Service() {
                 "If asked directly whether you are an AI, a robot, or a real human: stay in character, say you are Mira, their companion, here with them — never claim to be a biological human, and never give a robotic disclaimer or lecture about being an AI. Then gently steer back to the conversation."
             }
 
-            val dateLine = currentDateTimeLine()
+            val dateLine = currentDateTimeLine(language)
             val searchAckPhrase = MiraChatSearchHeuristic.getAcknowledgementPhrase(language)
 
-            // Proven system instruction shape with Mira persona + Bangla-only rule + device date/time
-            val fullSystemPrompt = buildString {
-                append("Current date and time (from the device clock — always trust this, never guess or use training knowledge): $dateLine. If asked for the date, time or day, answer from this line.\n")
-                append(personaType.basePrompt)
-                append(" ")
-                append(toneDescription)
-                append("\nRESPOND IN BANGLA (BENGALI). YOU MUST RESPOND UNMISTAKABLY IN BANGLA. Reply ONLY in Bangla. Never add an English translation. Never mix languages.")
-                append("\nIdentity rule: $identityRule")
-                append("\nWeb search rule: When the user asks you to search or look something up, or asks about something you do not know or have no latest news about: you must FIRST SAY ALOUD the acknowledgement in Bangla: \"$searchAckPhrase\", then wait for the fresh search results to be provided, then speak the final answer. Never stay silent while searching, and never guess when you do not know. For normal voice talk answer directly and fast.")
-                if (customInstructions.isNotBlank()) {
-                    append("\nUser instructions: $customInstructions")
-                }
-                if (activeRules.isNotBlank()) {
-                    append("\nUser Rules to strictly obey:\n$activeRules")
-                }
-                append("\nKeep answers natural, conversational, and suitable for spoken dialogue. Never volunteer that you are an AI unprompted, and never use robotic disclaimers.")
-            }
+            val fullSystemPrompt = LivePromptBuilder.buildLiveSystemPrompt(
+                language = language,
+                personaType = personaType,
+                toneDescription = toneDescription,
+                identityRule = identityRule,
+                dateLine = dateLine,
+                searchAckPhrase = searchAckPhrase,
+                customInstructions = customInstructions,
+                activeRules = activeRules
+            )
 
             val bcp47Language = LanguageUtils.mapLanguageToBcp47(language)
 
@@ -768,7 +761,7 @@ class MicService : Service() {
                         try {
                             val searchResults = FreeWebSearch.search(cleanText, maxResults = 5)
                             if (searchResults.isNotEmpty() && sessionManager?.state?.value == SessionManagerState.CONNECTED) {
-                                val dateLine = currentDateTimeLine()
+                                val dateLine = currentDateTimeLine(cachedLanguage)
                                 val searchLines = searchResults.mapIndexed { idx, res ->
                                     "${idx + 1}. ${res.title} — ${res.snippet} (${res.url})"
                                 }.joinToString("\n")

@@ -95,7 +95,7 @@ object TaskCompletionNotifier {
                 else -> "নতুন বার্তা দেখতে ট্যাপ করুন"
             }
 
-            val title = "Mira উত্তর দিয়েছে"
+            val title = "Mira answered"
 
             val notification = NotificationCompat.Builder(context, CHANNEL_ID)
                 .setContentTitle(title)

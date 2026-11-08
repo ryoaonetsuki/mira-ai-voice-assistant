@@ -193,6 +193,10 @@ class MiraGeminiClient private constructor(
                 val inputSampleRate = 16000
                 val audioInCallback = AtomicReference<((ByteArray) -> Unit)?>(null)
                 val echoRouter = EchoFrameRouter(echoGuardEnabled = config.echoGuardEnabled)
+                val aec = SoftwareAcousticEchoCanceller.create(
+                    sampleRateHz = inputSampleRate,
+                    playbackSampleRateHz = 24000
+                )
                 var isUserTalking = false
 
                 val audioIn = AudioIn(
@@ -208,6 +212,9 @@ class MiraGeminiClient private constructor(
                     onAudioLevelUpdate = { level ->
                         echoRouter.onBotAudioLevel(level)
                         listener.onBotAudioLevel(level)
+                    },
+                    onAudioPlayback = { pcm ->
+                        aec.pushPlaybackAudio(pcm)
                     }
                 )
 
@@ -405,6 +412,7 @@ class MiraGeminiClient private constructor(
                     audioOut.interrupt()
                     audioOut.stop()
                     echoRouter.onTurnComplete()
+                    aec.reset()
                 }
 
                 while (true) {
@@ -431,17 +439,20 @@ class MiraGeminiClient private constructor(
 
                         ClientThreadEvent.Stop -> {
                             stopAudio()
+                            aec.release()
                             ws.close(1000, "user requested close")
                         }
 
                         ClientThreadEvent.WebsocketClosed -> {
                             stopAudio()
+                            aec.release()
                             listenerRef.take()?.onSessionEnded("websocket closed", null)
                             return@thread
                         }
 
                         is ClientThreadEvent.WebsocketFailed -> {
                             stopAudio()
+                            aec.release()
                             listenerRef.take()?.onSessionEnded("websocket failed", event.t)
                             return@thread
                         }
@@ -463,12 +474,13 @@ class MiraGeminiClient private constructor(
                             val lastDropLogTimeMs = AtomicLong(0L)
 
                             audioInCallback.set { buf ->
-                                val micRms = calculateAudioLevel(buf)
+                                val cleanedBuf = aec.processMicrophoneAudio(buf)
+                                val micRms = calculateAudioLevel(cleanedBuf)
                                 val effectiveBotLevel = echoRouter.getEffectiveBotLevel()
                                 val botTalking = echoRouter.isBotTalking()
 
                                 if (EchoGate.shouldForward(micRms, effectiveBotLevel, botTalking, config.echoGuardEnabled)) {
-                                    postEvent(ClientThreadEvent.SendAudioData(buf))
+                                    postEvent(ClientThreadEvent.SendAudioData(cleanedBuf))
                                 } else {
                                     val dropped = droppedFrameCount.incrementAndGet()
                                     val now = System.currentTimeMillis()
@@ -543,6 +555,7 @@ class MiraGeminiClient private constructor(
                             if (event.interrupted) {
                                 Log.i(TAG, "User interrupted model output")
                                 echoRouter.onInterrupted()
+                                aec.reset()
                                 isUserTalking = true
                                 listenerRef.get()?.onUserTalking(true)
                                 listenerRef.get()?.onBotTalking(false)
@@ -551,6 +564,7 @@ class MiraGeminiClient private constructor(
 
                             if (event.turnComplete) {
                                 Log.d(TAG, "Model turn complete")
+                                aec.reset()
                                 if (echoRouter.isBotTalking()) {
                                     echoRouter.onTurnComplete()
                                     listenerRef.get()?.onBotTalking(false)

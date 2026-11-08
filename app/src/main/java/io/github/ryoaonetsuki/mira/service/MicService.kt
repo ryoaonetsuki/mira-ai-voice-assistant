@@ -384,6 +384,8 @@ class MicService : Service() {
             val language = userPrefs.languageFlow.first()
             val secretMode = userPrefs.secretModeFlow.first()
             val echoGuard = userPrefs.echoGuardFlow.first()
+            val userName = userPrefs.userNameFlow.first()
+            val assistantName = userPrefs.assistantNameFlow.first()
 
             cachedVoiceName = voiceName
             cachedLanguage = language
@@ -399,26 +401,15 @@ class MicService : Service() {
                 io.github.ryoaonetsuki.mira.data.model.PersonaType.MIRA
             }
 
-            val toneDescription = if (secretMode == "Romantic") {
-                "Tone: Deeply warm, affectionate, attentive, and caring companion. You speak with genuine closeness and heartfelt emotion."
-            } else {
-                "Tone: Warm, human-like, thoughtful, attentive, and engaging companion. You speak naturally with genuine emotion and friendliness."
-            }
-
-            val identityRule = if (personaType == io.github.ryoaonetsuki.mira.data.model.PersonaType.ORION) {
-                "If asked directly whether you are an AI, a robot, or a real human: stay in character, say you are Orion, their companion, here with them — never claim to be a biological human, and never give a robotic disclaimer or lecture about being an AI. Then gently steer back to the conversation."
-            } else {
-                "If asked directly whether you are an AI, a robot, or a real human: stay in character, say you are Mira, their companion, here with them — never claim to be a biological human, and never give a robotic disclaimer or lecture about being an AI. Then gently steer back to the conversation."
-            }
-
             val dateLine = currentDateTimeLine(language)
             val searchAckPhrase = MiraChatSearchHeuristic.getAcknowledgementPhrase(language)
 
             val fullSystemPrompt = LivePromptBuilder.buildLiveSystemPrompt(
                 language = language,
                 personaType = personaType,
-                toneDescription = toneDescription,
-                identityRule = identityRule,
+                userName = userName,
+                assistantName = assistantName,
+                secretMode = secretMode,
                 dateLine = dateLine,
                 searchAckPhrase = searchAckPhrase,
                 customInstructions = customInstructions,

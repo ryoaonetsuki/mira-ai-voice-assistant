@@ -183,13 +183,13 @@ class SoftwareAcousticEchoCanceller(
                             frameSizeSamples = frameSizeSamples
                         )
                     } else {
-                        Log.w(TAG, "nativeCreate returned 0, falling back to software AEC engine")
+                        Log.w(TAG, "nativeCreate returned 0, falling back to pass-through (no echo cancellation, EchoGate only)")
                     }
                 } catch (t: Throwable) {
                     Log.w(TAG, "Failed to initialize Speex native AEC: ${t.message}", t)
                 }
             } else {
-                Log.i(TAG, "Speex native library not available, using JVM software AEC engine")
+                Log.i(TAG, "Speex native library not available, falling back to pass-through (no echo cancellation, EchoGate only)")
             }
 
             return SoftwareAcousticEchoCanceller(

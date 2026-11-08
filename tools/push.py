@@ -27,7 +27,19 @@ BASE = "https://api.github.com"
 CREDENTIAL = "custom.github-pat"
 
 EXCLUDE_DIRS = {".git", "build", ".gradle", ".idea", "__pycache__", ".dart_tool", ".gemini", ".specify"}
-EXCLUDE_FILES = {"local.properties", "logo-alt-blue.png"}
+EXCLUDE_FILES = {"local.properties", "logo-alt-blue.png",
+    # 2026-11-08 repo-cleanup guard (owner order): these 21 obsolete round
+    # planning .md files were deleted from GitHub (archived at
+    # ~/workspace/mira-archive/) and must NEVER be re-created by a sync,
+    # even if they reappear in the local tree. Planning docs belong in
+    # ~/workspace/mira-aider/, never the repo root.
+    "PLAN.md", "ROUND4_SPEC.md", "ROUND5_SPEC.md", "ROUND6_SPEC.md",
+    "ROUND7_SPEC.md", "ROUND8_PLAN.md", "ROUND8_SPEC.md",
+    "ROUND9_BUILD_NOTES.md", "ROUND9_SPEC.md", "ROUND10_AGY_PROMPT.md",
+    "ROUND10_SPEC.md", "ROUND11_AGY_PROMPT.md", "ROUND11_SPEC.md",
+    "ROUND12_SPEC.md", "ROUND13_SPEC.md", "ROUND14_AGY_PROMPT.md",
+    "ROUND14_SPEC.md", "ROUND15_AGY_PROMPT.md", "ROUND15_SPEC.md",
+    "ROUND16_CODEX_PROMPT.md", "ROUND19_PLAN.md"}
 EXCLUDE_SUFFIX = (".apk", ".pyc")
 
 only = None

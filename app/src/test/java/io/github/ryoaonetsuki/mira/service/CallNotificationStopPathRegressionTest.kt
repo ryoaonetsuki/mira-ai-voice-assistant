@@ -199,4 +199,31 @@ class CallNotificationStopPathRegressionTest {
             exception.message!!.contains("CallStyle notifications must be for a foreground service")
         )
     }
+
+    @Test
+    fun testStopFromNotificationAction_DismissesAndDoesNotPost() {
+        // Active foreground call
+        controller.startForegroundWithNotification(testNotification)
+        assertTrue(controller.isForeground)
+        assertEquals(1, startForegroundCount)
+
+        // Notification End button clicked -> ACTION_STOP runs:
+        // 1. dismissNotification()
+        controller.dismissNotification()
+        assertFalse(controller.isForeground)
+        assertEquals(1, stopForegroundCount)
+        assertEquals(1, cancelNotificationCount)
+
+        // 2. Trailing session STOPPED event from manager teardown
+        val handled = controller.handleSessionState(SessionManagerState.STOPPED) {
+            fail("Must not build notification when stopped from notification action")
+            testNotification
+        }
+        assertFalse(handled)
+
+        // 3. Trailing update attempt must be a no-op
+        val updated = controller.postCallNotificationIfForeground { testNotification }
+        assertFalse(updated)
+        assertEquals("startForeground must NOT be called after notification action stop", 1, startForegroundCount)
+    }
 }

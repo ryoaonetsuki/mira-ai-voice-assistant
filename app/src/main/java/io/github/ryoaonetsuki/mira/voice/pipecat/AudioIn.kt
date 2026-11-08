@@ -41,25 +41,6 @@ import kotlin.math.sqrt
 private const val TAG = "AudioIn"
 private const val BUFFER_MS = 100
 
-/**
- * Calculates normalized RMS audio level [0.0f, 1.0f] from 16-bit PCM mono data.
- */
-internal fun calculateAudioLevel(pcmData: ByteArray): Float {
-    var sumSquares = 0.0
-    val numSamples = pcmData.size / 2
-    if (numSamples == 0) return 0f
-
-    for (i in 0 until numSamples) {
-        val low = pcmData[i * 2].toInt() and 0xFF
-        val high = pcmData[i * 2 + 1].toInt() and 0xFF
-        val sample = ((high shl 8) or low).toShort()
-        val sampleValue = sample.toDouble()
-        sumSquares += sampleValue * sampleValue
-    }
-
-    val rms = sqrt(sumSquares / numSamples)
-    return (rms / 32768.0).toFloat().coerceIn(0.0f, 1.0f)
-}
 
 internal class AudioIn @RequiresPermission(android.Manifest.permission.RECORD_AUDIO) constructor(
     sampleRateHz: Int,

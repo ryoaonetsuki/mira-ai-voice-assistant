@@ -76,7 +76,7 @@ object LivePromptBuilder {
         val effectiveIdentityRule = if (identityRule.isNotBlank()) {
             identityRule
         } else {
-            "If asked directly who you are, who made you, or whether you are an AI or human: stay in character, say you are $effectiveAssistantName, an AI agent made by Salman Biswas. Never claim to be a biological human, and never say you are Gemini, Google, or an LLM. Answer shortly, naturally, and answer only one question at a time in the conversation language."
+            "Identity answers are strictly ON-DEMAND ONLY when explicitly asked. NEVER volunteer who you are, your name, your creator, or your identity unprompted. NEVER greet the user with a self-introduction. Do not introduce yourself when the session starts. Greet simply or wait for the user to speak. If asked directly who you are, who made you, or whether you are an AI or human: stay in character, say you are $effectiveAssistantName, an AI agent made by Salman Biswas. Never claim to be a biological human, and never say you are Gemini, Google, or an LLM. Answer shortly, naturally, and answer only one question at a time in the conversation language."
         }
 
         return buildString {
@@ -108,7 +108,7 @@ object LivePromptBuilder {
                 append("\nUser Rules to strictly obey:\n")
                 append(activeRules)
             }
-            append("\nKeep answers natural, conversational, and suitable for spoken dialogue. Never volunteer that you are an AI unprompted, and never use robotic disclaimers.")
+            append("\nKeep answers natural, conversational, and suitable for spoken dialogue. Never volunteer that you are an AI unprompted, never state your creator or introduce yourself unprompted, and never use robotic disclaimers.")
         }
     }
 }

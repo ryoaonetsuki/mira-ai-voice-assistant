@@ -3,6 +3,9 @@ package io.github.ryoaonetsuki.mira.automation.agent
 
 import android.content.Context
 import android.util.Log
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -40,6 +43,14 @@ class SkillMemoryService(
 ) {
   private val lock = Any()
   private var cache: MutableList<Skill>? = null
+  private val _skillsFlow = MutableStateFlow<List<Skill>>(emptyList())
+  val skillsFlow: StateFlow<List<Skill>> = _skillsFlow.asStateFlow()
+
+  init {
+    synchronized(lock) {
+      load()
+    }
+  }
 
   private fun load(): MutableList<Skill> {
     cache?.let { return it }
@@ -52,6 +63,7 @@ class SkillMemoryService(
     if (raw.isNullOrBlank()) {
       val emptyList = mutableListOf<Skill>()
       cache = emptyList
+      _skillsFlow.value = emptyList
       return emptyList
     }
     return try {
@@ -64,11 +76,13 @@ class SkillMemoryService(
         }
       }
       cache = list
+      _skillsFlow.value = list.toList()
       list
     } catch (e: Throwable) {
       logWarning("Corrupt skill memory JSON, resetting to empty: ${e.message}")
       val emptyList = mutableListOf<Skill>()
       cache = emptyList
+      _skillsFlow.value = emptyList
       emptyList
     }
   }
@@ -81,6 +95,7 @@ class SkillMemoryService(
         array.put(skill.toJson())
       }
       store.saveRaw(array.toString())
+      _skillsFlow.value = skills.toList()
     } catch (e: Throwable) {
       logWarning("Failed to persist skill memory: ${e.message}")
     }
@@ -89,6 +104,8 @@ class SkillMemoryService(
   fun all(): List<Skill> = synchronized(lock) {
     return load().toList()
   }
+
+  fun getAllSkills(): List<Skill> = all()
 
   /**
    * Finds a stored skill matching [goal]: exact normalized match first,
@@ -166,12 +183,39 @@ class SkillMemoryService(
     persist()
   }
 
-  fun delete(skillId: String): Unit = synchronized(lock) {
+  fun renameSkill(skillId: String, newGoal: String): Boolean = synchronized(lock) {
+    val trimmed = newGoal.trim()
+    if (trimmed.isEmpty()) return false
+    val skills = load()
+    val index = skills.indexOfFirst { it.id == skillId }
+    if (index < 0) return false
+
+    val existing = skills[index]
+    val updated = Skill(
+      id = existing.id,
+      goal = trimmed,
+      steps = existing.steps,
+      successCount = existing.successCount,
+      lastUsedAt = existing.lastUsedAt,
+      createdAt = existing.createdAt,
+      normalizedGoal = Skill.normalize(trimmed)
+    )
+    skills[index] = updated
+    persist()
+    return true
+  }
+
+  fun deleteSkill(skillId: String): Boolean = synchronized(lock) {
     val skills = load()
     val removed = skills.removeAll { it.id == skillId }
     if (removed) {
       persist()
     }
+    return removed
+  }
+
+  fun delete(skillId: String): Unit {
+    deleteSkill(skillId)
   }
 
   fun clear(): Unit = synchronized(lock) {

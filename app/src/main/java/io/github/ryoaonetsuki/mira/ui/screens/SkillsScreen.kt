@@ -100,16 +100,24 @@ fun SkillsScreen(
             ).show()
             return
         }
+        if (skill.steps.isEmpty()) {
+            statusMessage = context.getString(R.string.skill_execution_failed) + ": Macro has no recorded steps. Please re-record."
+            return
+        }
         runningGoal = skill.goal
         statusMessage = null
         scope.launch(Dispatchers.IO) {
             try {
                 val bridge = MiraAutomationBridge.getInstance(context)
-                val result = bridge.executeGoal(skill.goal)
+                val result = bridge.executeSkill(skill)
                 withContext(Dispatchers.Main) {
                     statusMessage = when (result.status) {
                         TaskStatus.SUCCESS ->
-                            context.getString(R.string.skill_execution_success) + ": " + result.message
+                            if (result.stepsUsed > 0) {
+                                context.getString(R.string.skill_execution_success) + ": " + result.message
+                            } else {
+                                context.getString(R.string.skill_execution_failed) + ": No steps were executed"
+                            }
                         TaskStatus.CANCELLED ->
                             context.getString(R.string.skill_execution_cancelled)
                         TaskStatus.FAILED ->
@@ -328,9 +336,17 @@ fun SkillsScreen(
                                 if (isRecording) {
                                     val steps = MiraAccessibilityService.stopRecordingSteps()
                                     isRecording = false
-                                    recordedStepsToSave = steps
-                                    macroNameInput = ""
-                                    showSaveMacroDialog = true
+                                    if (steps.isEmpty()) {
+                                        Toast.makeText(
+                                            context,
+                                            "No actions recorded. Interact with an app while recording, then save.",
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                    } else {
+                                        recordedStepsToSave = steps
+                                        macroNameInput = ""
+                                        showSaveMacroDialog = true
+                                    }
                                 } else {
                                     if (!isAccessibilityEnabled) {
                                         Toast.makeText(
@@ -786,7 +802,7 @@ fun SkillsScreen(
                 Button(
                     onClick = {
                         val name = macroNameInput.trim()
-                        if (name.isNotBlank()) {
+                        if (name.isNotBlank() && recordedStepsToSave.isNotEmpty()) {
                             skillMemoryService.saveOrUpdate(name, recordedStepsToSave)
                         }
                         showSaveMacroDialog = false

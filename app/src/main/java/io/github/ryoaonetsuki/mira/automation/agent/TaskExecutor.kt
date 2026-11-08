@@ -174,6 +174,13 @@ class TaskExecutor(
             // 2. Skill-memory fast path (Jarvis behaviour)
             val matchedSkill = skills.findMatch(goal)
             if (matchedSkill != null) {
+                if (matchedSkill.steps.isEmpty()) {
+                    return TaskResult(
+                        status = TaskStatus.FAILED,
+                        message = "Skill '${matchedSkill.goal}' has no recorded steps. Please re-record the macro.",
+                        stepsUsed = 0
+                    )
+                }
                 onProgress?.invoke(0, "Found memorized skill (${matchedSkill.steps.size} steps). Replaying…")
                 val replaySuccess = replaySkill(matchedSkill)
                 if (_cancelRequested) {
@@ -187,8 +194,13 @@ class TaskExecutor(
                         stepsUsed = matchedSkill.steps.size
                     )
                 }
-                // Stale skill failed — delete it and fall through to AI loop
+                // Stale skill failed — mark failure truthfully
                 skills.markReplayOutcome(matchedSkill.id, false)
+                return TaskResult(
+                    status = TaskStatus.FAILED,
+                    message = "Skill replay failed during execution. Please re-record the macro.",
+                    stepsUsed = 0
+                )
             }
 
             // 3. AI loop
@@ -199,7 +211,62 @@ class TaskExecutor(
         }
     }
 
-    private suspend fun replaySkill(skill: Skill): Boolean {
+    suspend fun replaySkillDirect(skill: Skill): TaskResult {
+        if (_isRunning) {
+            return TaskResult(TaskStatus.FAILED, "Another task is already running", 0)
+        }
+        _isRunning = true
+        _cancelRequested = false
+        recovery.reset()
+
+        try {
+            if (!automation.isServiceEnabled()) {
+                return TaskResult(
+                    status = TaskStatus.FAILED,
+                    message = "Accessibility service is off — enable Mira Screen Control in Settings > Accessibility",
+                    stepsUsed = 0
+                )
+            }
+
+            if (skill.steps.isEmpty()) {
+                return TaskResult(
+                    status = TaskStatus.FAILED,
+                    message = "Skill '${skill.goal}' has no recorded steps. Please re-record the macro.",
+                    stepsUsed = 0
+                )
+            }
+
+            onProgress?.invoke(0, "Replaying macro '${skill.goal}' (${skill.steps.size} steps)…")
+            val ok = replaySkill(skill)
+            if (_cancelRequested) {
+                return TaskResult(TaskStatus.CANCELLED, "Task cancelled by user", skill.steps.size)
+            }
+            return if (ok) {
+                skills.markReplayOutcome(skill.id, true)
+                TaskResult(
+                    status = TaskStatus.SUCCESS,
+                    message = "Task completed via memorized skill",
+                    stepsUsed = skill.steps.size
+                )
+            } else {
+                skills.markReplayOutcome(skill.id, false)
+                TaskResult(
+                    status = TaskStatus.FAILED,
+                    message = "Skill replay failed during execution. Please re-record the macro.",
+                    stepsUsed = 0
+                )
+            }
+        } finally {
+            _isRunning = false
+            _cancelRequested = false
+        }
+    }
+
+    suspend fun replaySkill(skill: Skill): Boolean {
+        if (skill.steps.isEmpty()) {
+            logWarn("Cannot replay skill '${skill.goal}': no steps recorded")
+            return false
+        }
         var stepCount = 0
         for (step in skill.steps) {
             if (_cancelRequested) return false
@@ -225,7 +292,7 @@ class TaskExecutor(
             }
             delay(stepDelayMs)
         }
-        return true
+        return stepCount > 0
     }
 
     private suspend fun runAiLoop(goal: String): TaskResult {

@@ -11,7 +11,9 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.app.Person
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.drawable.IconCompat
 import io.github.ryoaonetsuki.mira.MainActivity
 import io.github.ryoaonetsuki.mira.R
 import io.github.ryoaonetsuki.mira.automation.MacroRunner
@@ -212,16 +214,23 @@ class MicService : Service() {
             else -> "Live voice call active"
         }
 
+        val miraPerson = Person.Builder()
+            .setName("Mira")
+            .setIcon(IconCompat.createWithResource(this, R.drawable.logo_chosen))
+            .build()
+
+        val callStyle = NotificationCompat.CallStyle.forOngoingCall(miraPerson, stopPendingIntent)
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Mira AI Voice Call")
             .setContentText(statusText)
             .setSmallIcon(R.drawable.logo_chosen)
             .setContentIntent(openAppPendingIntent)
+            .setStyle(callStyle)
             .addAction(muteIcon, muteActionTitle, mutePendingIntent)
-            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "End", stopPendingIntent)
             .setOngoing(true)
             .setCategory(NotificationCompat.CATEGORY_CALL)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .build()
     }
@@ -756,15 +765,25 @@ class MicService : Service() {
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
+            val callChannel = NotificationChannel(
                 CHANNEL_ID,
+                "Mira Voice Calls",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Ongoing Mira AI voice call controls"
+                enableVibration(true)
+                enableLights(true)
+            }
+            val micChannel = NotificationChannel(
+                MIC_CHANNEL_ID,
                 "Mira Live Voice",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
                 description = "Keeps Mira AI voice assistant active in the background"
             }
             val manager = getSystemService(NotificationManager::class.java)
-            manager?.createNotificationChannel(channel)
+            manager?.createNotificationChannel(callChannel)
+            manager?.createNotificationChannel(micChannel)
         }
     }
 
@@ -777,7 +796,8 @@ class MicService : Service() {
 
     companion object {
         private const val TAG = "MIRA_LIVE_VOICE"
-        private const val CHANNEL_ID = "mira_mic_channel"
+        private const val CHANNEL_ID = "mira_call_channel"
+        private const val MIC_CHANNEL_ID = "mira_mic_channel"
         private const val NOTIFICATION_ID = 1001
 
         const val ACTION_START = "io.github.ryoaonetsuki.mira.action.START_VOICE"

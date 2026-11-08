@@ -4,6 +4,8 @@ import ai.pipecat.client.PipecatEventCallbacks
 import ai.pipecat.client.types.APIRequest
 import ai.pipecat.client.types.Value
 import android.content.Context
+import android.media.AudioManager
+import io.github.ryoaonetsuki.mira.voice.LiveVoiceDiagnostics
 import io.github.ryoaonetsuki.mira.voice.SessionResumptionStore
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -210,5 +212,35 @@ class VoiceIntegrationRegressionTest {
         assertEquals("bn-BD", (defaultSpeechConfig.value["languageCode"] as Value.Str).value)
         assertFalse((defaultModelConfig.value["sessionResumption"] as Value.Object).value.containsKey("handle"))
         assertTrue("Deserialized options must default echoGuardEnabled to true", defaultOptions.echoGuardEnabled)
+    }
+
+    @Test
+    fun testAudioModeAndFocusTransitionsInTransport() {
+        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val transport = MiraGeminiLiveTransport(context)
+
+        // Baseline state before session
+        assertEquals(AudioManager.MODE_NORMAL, audioManager.mode)
+        assertEquals("MODE_NORMAL", LiveVoiceDiagnostics.data.value.audioMode)
+
+        // Acquire communication mode (start of Live voice session)
+        transport.acquireCommunicationMode()
+        assertEquals(AudioManager.MODE_IN_COMMUNICATION, audioManager.mode)
+        assertEquals("MODE_IN_COMMUNICATION", LiveVoiceDiagnostics.data.value.audioMode)
+
+        // Idempotency: repeated acquire calls do not corrupt state or crash
+        transport.acquireCommunicationMode()
+        assertEquals(AudioManager.MODE_IN_COMMUNICATION, audioManager.mode)
+        assertEquals("MODE_IN_COMMUNICATION", LiveVoiceDiagnostics.data.value.audioMode)
+
+        // Restore normal mode (exit of Live voice session)
+        transport.restoreNormalAudioMode()
+        assertEquals(AudioManager.MODE_NORMAL, audioManager.mode)
+        assertEquals("MODE_NORMAL", LiveVoiceDiagnostics.data.value.audioMode)
+
+        // Idempotency: repeated exit calls (e.g. disconnect followed by release) are safe no-ops
+        transport.restoreNormalAudioMode()
+        assertEquals(AudioManager.MODE_NORMAL, audioManager.mode)
+        assertEquals("MODE_NORMAL", LiveVoiceDiagnostics.data.value.audioMode)
     }
 }

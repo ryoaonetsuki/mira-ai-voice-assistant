@@ -62,6 +62,7 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="mira" android:host="project" />
                 <data android:scheme="mira" android:host="file" />
+                <data android:scheme="mira" android:host="chat" />
             </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />

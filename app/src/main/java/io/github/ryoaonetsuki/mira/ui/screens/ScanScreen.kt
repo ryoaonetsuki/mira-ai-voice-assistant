@@ -309,7 +309,7 @@ fun ScanScreen(
             val result = restClient.generateChatResponse(
                 apiKey = apiKey,
                 history = listOf(chatMessage),
-                systemPrompt = "",
+                systemPrompt = io.github.ryoaonetsuki.mira.identity.IdentityProfile.SYSTEM_PROMPT_OVERRIDE,
                 model = "gemini-3.8-flash",
                 useServerProxy = useServer,
                 enableGrounding = false,
@@ -320,7 +320,8 @@ fun ScanScreen(
             withContext(Dispatchers.Main) {
                 isVisionAnalyzing = false
                 if (result.isSuccess) {
-                    val text = result.getOrNull()?.text?.trim().orEmpty()
+                    val rawText = result.getOrNull()?.text?.trim().orEmpty()
+                    val text = io.github.ryoaonetsuki.mira.identity.MiraOutputFilter.sanitize(rawText)
                     visionResultText = text
                     speakAnswer(text)
                 } else {

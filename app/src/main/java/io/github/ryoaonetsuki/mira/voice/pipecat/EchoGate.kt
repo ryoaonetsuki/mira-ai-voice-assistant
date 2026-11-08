@@ -159,8 +159,16 @@ class EchoFrameRouter(
     ) {
         latestBotAudioLevel.set(level)
         latestBotAudioLevelTimestamp.set(timestampMs)
-        val activeUntil = timestampMs + chunkDurationMs + DRAIN_MARGIN_MS
-        audioActiveUntil.set(activeUntil)
+
+        // Accumulate sequential chunk playback so audioActiveUntil covers queued audio duration
+        val currentUntil = audioActiveUntil.get()
+        val chunkStart = if (timestampMs > currentUntil - DRAIN_MARGIN_MS) {
+            timestampMs
+        } else {
+            currentUntil - DRAIN_MARGIN_MS
+        }
+        val newUntil = chunkStart + chunkDurationMs + DRAIN_MARGIN_MS
+        audioActiveUntil.set(newUntil)
     }
 
     fun onInterrupted() {
@@ -171,13 +179,15 @@ class EchoFrameRouter(
     }
 
     fun onTurnComplete() {
+        // Server finished streaming tokens for this turn.
+        // Mark streaming talking flag false, but preserve audioActiveUntil and latestBotAudioLevel
+        // so the drain window protects the tail of AudioTrack speaker playback.
         isBotTalking.set(false)
-        latestBotAudioLevel.set(0f)
-        latestBotAudioLevelTimestamp.set(0L)
-        audioActiveUntil.set(0L)
     }
 
-    fun isBotTalking(): Boolean = isBotTalking.get()
+    fun isBotTalking(nowMs: Long = System.currentTimeMillis()): Boolean {
+        return isBotTalking.get() || (nowMs < audioActiveUntil.get())
+    }
 
     fun getRawBotLevel(): Float = latestBotAudioLevel.get()
 
@@ -203,7 +213,7 @@ class EchoFrameRouter(
         return EchoGate.shouldForward(
             micRms = micRms,
             botLevel = effectiveBot,
-            isBotTalking = isBotTalking.get(),
+            isBotTalking = isBotTalking(nowMs),
             echoGuardEnabled = echoGuardEnabled
         )
     }

@@ -26,12 +26,16 @@
 package io.github.ryoaonetsuki.mira.voice.pipecat
 
 import ai.pipecat.client.types.Value
-import ai.pipecat.client.types.ValueSerializer
 import android.annotation.SuppressLint
 import android.util.Base64
 import android.util.Log
 import androidx.annotation.RequiresPermission
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -47,6 +51,40 @@ import kotlin.concurrent.thread
 private const val TAG = "MiraGeminiClient"
 
 private val JSON = Json { ignoreUnknownKeys = true }
+
+/**
+ * Recursively converts a Pipecat [Value] to a kotlinx.serialization [JsonElement].
+ *
+ * Replacement for internal [ai.pipecat.client.types.ValueSerializer] in pipecat-client 1.2.0.
+ */
+fun Value.toJsonElement(): JsonElement = when (this) {
+    is Value.Object -> JsonObject(value.mapValues { it.value.toJsonElement() })
+    is Value.Array -> JsonArray(value.map { it.toJsonElement() })
+    is Value.Str -> JsonPrimitive(value)
+    is Value.Number -> {
+        val d = value.toDouble()
+        if (!d.isNaN() && !d.isInfinite() && d % 1.0 == 0.0 && d >= Long.MIN_VALUE.toDouble() && d <= Long.MAX_VALUE.toDouble()) {
+            JsonPrimitive(value.toLong())
+        } else {
+            JsonPrimitive(value)
+        }
+    }
+    is Value.Bool -> JsonPrimitive(value)
+    is Value.Null -> JsonNull
+    else -> JsonNull
+}
+
+/**
+ * Serializes a Pipecat [Value] to an identical JSON string representation.
+ */
+fun Value.toJsonString(): String =
+    JSON.encodeToString(JsonElement.serializer(), this.toJsonElement())
+
+/**
+ * Serializes a Pipecat [Value] using the provided [Json] instance.
+ */
+fun Value.toJsonString(json: Json): String =
+    json.encodeToString(JsonElement.serializer(), this.toJsonElement())
 
 private fun <E> AtomicReference<E?>.take(): E? = getAndSet(null)
 
@@ -313,7 +351,7 @@ class MiraGeminiClient private constructor(
 
                     override fun onOpen(webSocket: WebSocket, response: Response) {
                         Log.i(TAG, "Websocket onOpen, sending setup frame")
-                        val modelConfigJson = JSON.encodeToString(ValueSerializer, config.modelConfig)
+                        val modelConfigJson = config.modelConfig.toJsonString()
                         val setupPayload = JSONObject().apply {
                             put("setup", JSONObject(modelConfigJson))
                         }.toString()
@@ -342,7 +380,7 @@ class MiraGeminiClient private constructor(
                 }
 
                 fun doSendFunctionResponse(id: String, name: String, response: Value.Object) {
-                    val respJsonStr = JSON.encodeToString(ValueSerializer, response)
+                    val respJsonStr = response.toJsonString()
                     val toolResponseJson = JSONObject().apply {
                         put("toolResponse", JSONObject().apply {
                             put("functionResponses", JSONArray().apply {

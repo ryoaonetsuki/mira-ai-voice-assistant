@@ -70,6 +70,9 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import coil.compose.AsyncImage
 import io.github.ryoaonetsuki.mira.MiraAppScope
 import io.github.ryoaonetsuki.mira.R
@@ -89,6 +92,7 @@ import io.github.ryoaonetsuki.mira.network.GroundingSource
 import io.github.ryoaonetsuki.mira.network.MiraChatSearchHeuristic
 import io.github.ryoaonetsuki.mira.network.currentDateTimeLine
 import io.github.ryoaonetsuki.mira.network.normalizeApiKey
+import io.github.ryoaonetsuki.mira.notifications.TaskCompletionNotifier
 import io.github.ryoaonetsuki.mira.projects.ProcessedChatResult
 import io.github.ryoaonetsuki.mira.projects.WebsiteProjectManager
 import io.github.ryoaonetsuki.mira.server.LocalProjectServer
@@ -110,6 +114,7 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 
 data class StagedAttachment(
     val file: File,
@@ -124,6 +129,16 @@ data class ViewingCode(
     val folderPath: String,
     val content: String
 )
+
+object ChatVisibilityTracker {
+    private val visible = AtomicBoolean(false)
+
+    var isVisible: Boolean
+        get() = visible.get()
+        set(value) {
+            visible.set(value)
+        }
+}
 
 const val CHAT_INPUT_MAX_LINES: Int = 5
 val CHAT_INPUT_MAX_HEIGHT = 120.dp
@@ -245,6 +260,23 @@ fun ChatScreen(
         onDispose {
             ttsInstance?.stop()
             ttsInstance?.shutdown()
+        }
+    }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                ChatVisibilityTracker.isVisible = true
+            } else if (event == Lifecycle.Event.ON_PAUSE || event == Lifecycle.Event.ON_STOP) {
+                ChatVisibilityTracker.isVisible = false
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        ChatVisibilityTracker.isVisible = lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            ChatVisibilityTracker.isVisible = false
         }
     }
 
@@ -620,6 +652,8 @@ fun ChatScreen(
             isBuildingFileNow = false
 
             activeGenerationJob = MiraAppScope.scope.launch {
+                var replySaved = false
+                var completedReplyText: String? = null
                 try {
                     withContext(Dispatchers.IO) {
                         db.chatDao().ensureConversationExists(currentConversationId)
@@ -954,6 +988,8 @@ fun ChatScreen(
                             )
                             updateConversationTitleAndMemory(db, currentConversationId, text, processed.displayText)
                         }
+                        replySaved = true
+                        completedReplyText = processed.displayText
 
                         if (text.contains("preview", ignoreCase = true)) {
                             val firstCode = WebsiteProjectManager.extractFirstCodeBlock(fullReply)
@@ -995,6 +1031,8 @@ fun ChatScreen(
                                 )
                                 updateConversationTitleAndMemory(db, currentConversationId, text, processed.displayText)
                             }
+                            replySaved = true
+                            completedReplyText = processed.displayText
                         } else {
                             val reason = fallbackResponse.exceptionOrNull()?.message ?: "Unknown error"
                             if (!reason.contains("coroutine scope left the composition", ignoreCase = true)) {
@@ -1032,6 +1070,12 @@ fun ChatScreen(
                         }
                     }
                 } finally {
+                    if (replySaved && !ChatVisibilityTracker.isVisible) {
+                        TaskCompletionNotifier.notifyChatReply(
+                            context = context.applicationContext,
+                            replyText = completedReplyText.orEmpty()
+                        )
+                    }
                     isThinking = false
                     streamingThinkingText = null
                     streamingMessageText = null

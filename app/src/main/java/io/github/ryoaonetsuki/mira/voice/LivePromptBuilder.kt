@@ -1,6 +1,7 @@
 package io.github.ryoaonetsuki.mira.voice
 
 import io.github.ryoaonetsuki.mira.data.model.PersonaType
+import io.github.ryoaonetsuki.mira.identity.IdentityProfile
 import java.util.Locale
 
 /**
@@ -79,6 +80,8 @@ object LivePromptBuilder {
         }
 
         return buildString {
+            append(IdentityProfile.SYSTEM_PROMPT_OVERRIDE)
+            append("\n")
             if (dateLine.isNotBlank()) {
                 append("Current date and time (from the device clock — always trust this, never guess or use training knowledge): $dateLine. If asked for the date, time or day, answer from this line.\n")
             }

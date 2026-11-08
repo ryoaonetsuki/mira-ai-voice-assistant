@@ -45,10 +45,12 @@ import okio.ByteString
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
+import io.github.ryoaonetsuki.mira.voice.LiveVoiceDiagnostics
 
 private const val TAG = "MiraGeminiClient"
 
@@ -197,6 +199,8 @@ class MiraGeminiClient private constructor(
                     sampleRateHz = inputSampleRate,
                     playbackSampleRateHz = 24000
                 )
+                LiveVoiceDiagnostics.updateAecEngine(aec.engineType)
+                Log.i(TAG, "Live Voice AEC: engine=${aec.engineType}")
                 var isUserTalking = false
 
                 val audioIn = AudioIn(
@@ -210,11 +214,16 @@ class MiraGeminiClient private constructor(
                 val audioOut = AudioOut(
                     sampleRateHz = 24000,
                     onAudioLevelUpdate = { level ->
-                        echoRouter.onBotAudioLevel(level)
                         listener.onBotAudioLevel(level)
                     },
                     onAudioPlayback = { pcm ->
+                        val durationMs = if (pcm.isNotEmpty()) (pcm.size / 2) * 1000L / 24000L else 100L
+                        val level = calculateAudioLevel(pcm)
+                        echoRouter.onBotAudioLevel(level, System.currentTimeMillis(), durationMs)
                         aec.pushPlaybackAudio(pcm)
+                    },
+                    onLatencyMeasured = { latency ->
+                        aec.referenceDelayMs = latency
                     }
                 )
 
@@ -407,12 +416,15 @@ class MiraGeminiClient private constructor(
                     ws.send(toolResponseJson)
                 }
 
+                val isAudioStopped = AtomicBoolean(false)
+
                 fun stopAudio() {
+                    if (!isAudioStopped.compareAndSet(false, true)) return
                     audioIn.stop()
                     audioOut.interrupt()
                     audioOut.stop()
                     echoRouter.onTurnComplete()
-                    aec.reset()
+                    aec.release()
                 }
 
                 while (true) {
@@ -439,20 +451,17 @@ class MiraGeminiClient private constructor(
 
                         ClientThreadEvent.Stop -> {
                             stopAudio()
-                            aec.release()
                             ws.close(1000, "user requested close")
                         }
 
                         ClientThreadEvent.WebsocketClosed -> {
                             stopAudio()
-                            aec.release()
                             listenerRef.take()?.onSessionEnded("websocket closed", null)
                             return@thread
                         }
 
                         is ClientThreadEvent.WebsocketFailed -> {
                             stopAudio()
-                            aec.release()
                             listenerRef.take()?.onSessionEnded("websocket failed", event.t)
                             return@thread
                         }
@@ -555,7 +564,6 @@ class MiraGeminiClient private constructor(
                             if (event.interrupted) {
                                 Log.i(TAG, "User interrupted model output")
                                 echoRouter.onInterrupted()
-                                aec.reset()
                                 isUserTalking = true
                                 listenerRef.get()?.onUserTalking(true)
                                 listenerRef.get()?.onBotTalking(false)
@@ -564,7 +572,6 @@ class MiraGeminiClient private constructor(
 
                             if (event.turnComplete) {
                                 Log.d(TAG, "Model turn complete")
-                                aec.reset()
                                 if (echoRouter.isBotTalking()) {
                                     echoRouter.onTurnComplete()
                                     listenerRef.get()?.onBotTalking(false)

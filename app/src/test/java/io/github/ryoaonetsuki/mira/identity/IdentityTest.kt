@@ -32,6 +32,7 @@ class IdentityTest {
 
     private val requiredRomanBengaliKeywords = listOf(
         "tumi ke",
+        "tumi k",
         "ke baniyeche",
         "tomar nam",
         "phone control korte paro",
@@ -179,13 +180,14 @@ class IdentityTest {
         // Chat mode (default / forVoice = false)
         val chatBangla = MiraIdentityInterceptor.getCannedResponse("ke baniyeche", forVoice = false)!!
         assertTrue("Bangla chat developer answer must contain Salman Biswas", chatBangla.contains("সালমান বিশ্বাস"))
-        assertTrue("Bangla chat developer answer must have markdown GitHub link", chatBangla.contains("[GitHub](https://github.com/ryoaonetsuki)"))
-        assertFalse("Bangla chat developer answer must NOT have bare https://", chatBangla.contains("https://github.com/ryoaonetsuki") && !chatBangla.contains("[GitHub](https://github.com/ryoaonetsuki)"))
+        assertFalse("Bangla chat developer answer must NOT have any URL", chatBangla.contains("http"))
+        assertFalse("Bangla chat developer answer must NOT have markdown link", chatBangla.contains("[") || chatBangla.contains("]"))
         assertFalse("Bangla chat developer answer must NOT have portfolio", chatBangla.contains("pages.dev"))
 
         val chatEnglish = MiraIdentityInterceptor.getCannedResponse("who made you", forVoice = false)!!
         assertTrue("English chat developer answer must contain Salman Biswas", chatEnglish.contains("Salman Biswas"))
-        assertTrue("English chat developer answer must have markdown GitHub link", chatEnglish.contains("[GitHub](https://github.com/ryoaonetsuki)"))
+        assertFalse("English chat developer answer must NOT have any URL", chatEnglish.contains("http"))
+        assertFalse("English chat developer answer must NOT have markdown link", chatEnglish.contains("[") || chatEnglish.contains("]"))
         assertFalse("English chat developer answer must NOT have portfolio", chatEnglish.contains("pages.dev"))
 
         // Voice mode (forVoice = true)
@@ -356,7 +358,7 @@ class IdentityTest {
     @Test
     fun testNoExplicitIdentityQuestion_ProducesNoCannedResponse() {
         val nonIdentityQueries = listOf(
-            "hello",
+            "how is the traffic?",
             "how is the weather today?",
             "আজকের খবর কি?",
             "গান শোনাও",
@@ -366,5 +368,217 @@ class IdentityTest {
         for (q in nonIdentityQueries) {
             assertNull("Non-identity query '$q' must return null", MiraIdentityInterceptor.getCannedResponse(q))
         }
+    }
+
+    @Test
+    fun testExactAnswers_IdentityAndDeveloper() {
+        val exactIdentityBangla = "আমি মিরা, একটা এআই অ্যাসিস্ট্যান্ট। তোমাকে হেল্প করার জন্য আমি এখানে আছি।"
+        val exactIdentityEnglish = "I'm Mira, an AI assistant. I'm here to help you."
+        val exactDevBangla = "আমাকে বানিয়েছে সালমান বিশ্বাস নামে এক ডেভেলপার।"
+        val exactDevEnglish = "I was made by Salman Biswas, a developer."
+
+        // 1. Identity exact answers
+        assertEquals(exactIdentityBangla, MiraIdentityInterceptor.getCannedResponse("তুমি কে"))
+        assertEquals(exactIdentityEnglish, MiraIdentityInterceptor.getCannedResponse("who are you"))
+        assertEquals(exactIdentityBangla, MiraIdentityInterceptor.getCannedResponse("তুমি কে", forVoice = true))
+        assertEquals(exactIdentityEnglish, MiraIdentityInterceptor.getCannedResponse("who are you", forVoice = true))
+
+        // 2. Developer exact answers
+        assertEquals(exactDevBangla, MiraIdentityInterceptor.getCannedResponse("তোমাকে বানিয়েছে কে"))
+        assertEquals(exactDevEnglish, MiraIdentityInterceptor.getCannedResponse("who made you"))
+        assertEquals(exactDevBangla, MiraIdentityInterceptor.getCannedResponse("তোমাকে বানিয়েছে কে", forVoice = true))
+        assertEquals(exactDevEnglish, MiraIdentityInterceptor.getCannedResponse("who made you", forVoice = true))
+    }
+
+    @Test
+    fun testIdentityVariants_AllRequiredVariantsReturnIdentityAnswer() {
+        val expectedBangla = "আমি মিরা, একটা এআই অ্যাসিস্ট্যান্ট। তোমাকে হেল্প করার জন্য আমি এখানে আছি।"
+        val expectedEnglish = "I'm Mira, an AI assistant. I'm here to help you."
+
+        val banglaVariants = listOf(
+            "tumi ke",
+            "tumi k",
+            "tumi k?",
+            "tumi k .",
+            "Tumi k",
+            "Tumi K",
+            "TUMI KE",
+            "tumi  ke",
+            "tumi ashole ke",
+            "tumi asole ke",
+            "tumi ki",
+            "tomar nam ki",
+            "tumi ke bolo",
+            "তুমি কে",
+            "তুমি আসলে কে",
+            "তোমার নাম কি",
+            "তোমার নাম কী",
+            "তুমি কে বলো"
+        )
+
+        for (variant in banglaVariants) {
+            val res = MiraIdentityInterceptor.getCannedResponse(variant)
+            assertEquals("Expected exact Bangla identity answer for variant '$variant'", expectedBangla, res)
+        }
+
+        val englishVariants = listOf(
+            "who are you",
+            "who r u",
+            "who are u",
+            "Who R U",
+            "WHO ARE YOU"
+        )
+
+        for (variant in englishVariants) {
+            val res = MiraIdentityInterceptor.getCannedResponse(variant)
+            assertEquals("Expected exact English identity answer for variant '$variant'", expectedEnglish, res)
+        }
+    }
+
+    @Test
+    fun testLinkIntent_ChatReturnsOnlyMarkdownAnchor_VoiceReturnsSpokenLine() {
+        val expectedChatLink = "[GitHub](https://github.com/ryoaonetsuki)"
+        val expectedVoiceBangla = "আমার গিটহাব লিংকটা চ্যাটে দেখতে পাবে।"
+        val expectedVoiceEnglish = "You can find my GitHub link in the chat."
+
+        val banglaScriptVariants = listOf(
+            "তার লিংক দাও",
+            "লিংক দাও",
+            "গিটহাব লিংক",
+            "তার গিটহাব লিংক দাও",
+            "লিংকটা দাও"
+        )
+
+        val romanVariants = listOf(
+            "tar link dao",
+            "link dao",
+            "link dau",
+            "link ta dao",
+            "link diba",
+            "link ta diba",
+            "github link",
+            "github er link",
+            "tar github link",
+            "tomar github",
+            "github link dao",
+            "tomar developer er link dao"
+        )
+
+        for (variant in banglaScriptVariants + romanVariants) {
+            val chatRes = MiraIdentityInterceptor.getCannedResponse(variant, forVoice = false)
+            assertEquals("Chat link intent for '$variant' must ONLY be the clickable anchor", expectedChatLink, chatRes)
+
+            val voiceRes = MiraIdentityInterceptor.getCannedResponse(variant, forVoice = true)
+            assertNotNull("Voice link response must not be null for '$variant'", voiceRes)
+            assertFalse("Voice link response for '$variant' must not contain 'http'", voiceRes!!.contains("http"))
+            assertFalse("Voice link response for '$variant' must not contain '['", voiceRes.contains("["))
+            assertFalse("Voice link response for '$variant' must not contain ']'", voiceRes.contains("]"))
+            assertFalse("Voice link response for '$variant' must not contain 'github.com'", voiceRes.contains("github.com"))
+        }
+
+        // Voice exact strings
+        assertEquals(expectedVoiceBangla, MiraIdentityInterceptor.getCannedResponse("tar link dao", forVoice = true))
+        assertEquals(expectedVoiceBangla, MiraIdentityInterceptor.getCannedResponse("তার লিংক দাও", forVoice = true))
+        assertEquals(expectedVoiceEnglish, MiraIdentityInterceptor.getCannedResponse("github link", userLanguage = "en", forVoice = true))
+    }
+
+    @Test
+    fun testDeveloperAnswer_ContainsNoUrlAtAll() {
+        val devQueries = listOf(
+            "who made you",
+            "who created you",
+            "who built you",
+            "ke baniyeche",
+            "তোমাকে বানিয়েছে কে"
+        )
+
+        for (q in devQueries) {
+            val chat = MiraIdentityInterceptor.getCannedResponse(q, forVoice = false)
+            assertNotNull("Developer chat response should not be null for '$q'", chat)
+            assertFalse("Developer chat response for '$q' must NOT contain 'http'", chat!!.contains("http"))
+            assertFalse("Developer chat response for '$q' must NOT contain '['", chat.contains("["))
+            assertFalse("Developer chat response for '$q' must NOT contain 'github.com'", chat.contains("github.com"))
+
+            val voice = MiraIdentityInterceptor.getCannedResponse(q, forVoice = true)
+            assertNotNull("Developer voice response should not be null for '$q'", voice)
+            assertFalse("Developer voice response for '$q' must NOT contain 'http'", voice!!.contains("http"))
+            assertFalse("Developer voice response for '$q' must NOT contain '['", voice.contains("["))
+            assertFalse("Developer voice response for '$q' must NOT contain 'github.com'", voice.contains("github.com"))
+        }
+    }
+
+    @Test
+    fun testGreetingIntent_ShortGreetingVariantsAndNegativeCases() {
+        val banglaGreeting = "হাই! কেমন আছো বলো?"
+        val englishGreeting = "Hi! How are you?"
+
+        val banglaGreetingQueries = listOf(
+            "hi",
+            "hello",
+            "hey",
+            "হাই",
+            "হ্যালো",
+            "hi mira",
+            "hello mira",
+            "হাই মিরা"
+        )
+
+        for (q in banglaGreetingQueries) {
+            val res = MiraIdentityInterceptor.getCannedResponse(q)
+            assertEquals("Greeting query '$q' must return Bangla greeting", banglaGreeting, res)
+        }
+
+        val englishGreetingQueries = listOf(
+            "hi",
+            "hello",
+            "hey",
+            "hi mira",
+            "hello mira"
+        )
+
+        for (q in englishGreetingQueries) {
+            val res = MiraIdentityInterceptor.getCannedResponse(q, userLanguage = "en")
+            assertEquals("Greeting query '$q' in English must return English greeting", englishGreeting, res)
+        }
+
+        // Negative greeting cases: messages longer than 2 words or containing extra text must return null
+        val nonGreetings = listOf(
+            "hi, what is the weather today",
+            "hi what is the weather",
+            "hello, how are you",
+            "hey can you open youtube"
+        )
+        for (q in nonGreetings) {
+            assertNull("Query '$q' must NOT match greeting intent", MiraIdentityInterceptor.getCannedResponse(q))
+        }
+    }
+
+    @Test
+    fun testNegativeCases_DoNotMatchIdentity() {
+        val negativeCases = listOf(
+            "tumi ki koro",
+            "tumi kemon acho",
+            "tumi kothay",
+            "tumi ki paro",
+            "tumi kheyecho"
+        )
+
+        for (q in negativeCases) {
+            val res = MiraIdentityInterceptor.getCannedResponse(q)
+            assertNull("Negative query '$q' must return null, but got: $res", res)
+        }
+    }
+
+    @Test
+    fun testSpeed_GetCannedResponseUnder50ms() {
+        // Warm up JIT
+        repeat(50) {
+            MiraIdentityInterceptor.getCannedResponse("tumi k")
+        }
+        val start = System.nanoTime()
+        val response = MiraIdentityInterceptor.getCannedResponse("tumi k")
+        val elapsedMs = (System.nanoTime() - start) / 1_000_000.0
+        // Assert speed < 50ms
+        assertTrue("getCannedResponse for 'tumi k' must execute in < 50ms, took ${elapsedMs}ms", elapsedMs < 50.0)
     }
 }

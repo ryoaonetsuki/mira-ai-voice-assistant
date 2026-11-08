@@ -154,4 +154,72 @@ class AecLifecycleTest {
         engine.reset()
         engine.release()
     }
+
+    @Test
+    fun testNativeSpeexContextWrapper_SharedLockSynchronizesReleaseAndProcess() {
+        val wrapper = NativeSpeexContextWrapper(0L)
+        val engine = NativeSpeexAecEngine(wrapper, 160)
+        val resampler = NativeSpeexResampler(wrapper)
+
+        assertEquals(0L, engine.nativeHandle)
+        assertEquals(0L, resampler.nativeHandle)
+
+        // process and resample with zero handle are safe no-ops
+        val near = ShortArray(160) { 1 }
+        val out = ShortArray(160)
+        engine.process(near, ShortArray(160), out, 160)
+        assertEquals(1.toShort(), out[0])
+
+        val resampled = resampler.resample(ShortArray(160), 24000, 16000)
+        assertEquals(0, resampled.size)
+
+        // release is idempotent
+        engine.release()
+        resampler.release()
+        wrapper.release()
+        assertEquals(0L, wrapper.handle)
+    }
+
+    @Test
+    fun testConcurrentProcessAndRelease_DoesNotCrash() {
+        val wrapper = NativeSpeexContextWrapper(0L)
+        val engine = NativeSpeexAecEngine(wrapper, 160)
+        val resampler = NativeSpeexResampler(wrapper)
+
+        var error: Throwable? = null
+        val threads = mutableListOf<Thread>()
+
+        // 3 reader threads
+        repeat(3) {
+            threads.add(Thread {
+                try {
+                    val near = ShortArray(160) { 5 }
+                    val out = ShortArray(160)
+                    repeat(500) {
+                        engine.process(near, ShortArray(160), out, 160)
+                        resampler.resample(near, 24000, 16000)
+                    }
+                } catch (t: Throwable) {
+                    error = t
+                }
+            })
+        }
+
+        // 1 releaser thread
+        threads.add(Thread {
+            try {
+                Thread.sleep(5)
+                wrapper.release()
+                engine.release()
+            } catch (t: Throwable) {
+                error = t
+            }
+        })
+
+        threads.forEach { it.start() }
+        threads.forEach { it.join(2000) }
+
+        org.junit.Assert.assertNull("No exception should occur during concurrent process and release", error)
+        assertEquals(0L, wrapper.handle)
+    }
 }

@@ -1,6 +1,6 @@
 package io.github.ryoaonetsuki.mira.network
 
-import io.github.ryoaonetsuki.mira.voice.GeminiLiveClient
+import io.github.ryoaonetsuki.mira.voice.LanguageUtils
 import java.util.Locale
 
 object SearchAcknowledgement {
@@ -31,7 +31,7 @@ object SearchAcknowledgement {
         val bcp47 = if (languageOrBcp47.contains("-")) {
             languageOrBcp47
         } else {
-            GeminiLiveClient.mapLanguageToBcp47(languageOrBcp47)
+            LanguageUtils.mapLanguageToBcp47(languageOrBcp47)
         }
         val prefix = bcp47.substringBefore('-').lowercase(Locale.ROOT)
         return PHRASES[prefix] ?: DEFAULT_PHRASE

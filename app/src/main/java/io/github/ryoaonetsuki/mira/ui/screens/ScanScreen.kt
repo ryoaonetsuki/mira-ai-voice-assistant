@@ -1404,6 +1404,7 @@ fun ScanScreen(
         }
     }
 }
+}
 
 @Composable
 private fun CameraXView(

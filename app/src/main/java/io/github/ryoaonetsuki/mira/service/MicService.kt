@@ -79,6 +79,34 @@ class MicService : Service() {
 
     private lateinit var resumptionStore: SessionResumptionStore
 
+    private val notificationController by lazy {
+        CallNotificationController(
+            startForegroundAction = { id, notification ->
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    startForeground(
+                        id,
+                        notification,
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                    )
+                } else {
+                    startForeground(id, notification)
+                }
+            },
+            stopForegroundAction = {
+                try {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                } catch (_: Exception) {}
+            },
+            cancelNotificationAction = { id ->
+                val manager = getSystemService(NotificationManager::class.java)
+                manager?.cancel(id)
+            }
+        )
+    }
+
+    val isForeground: Boolean
+        get() = notificationController.isForeground
+
     /**
      * Guarantees terminal ERROR state and complete resource cleanup on every failure path.
      * Stops session manager, resets mic amplitude to 0, cancels watchdogs, and allows Home to return to idle.
@@ -130,8 +158,8 @@ class MicService : Service() {
         serviceScope.launch {
             _liveState.collect { state ->
                 if (state != LiveState.IDLE && state != LiveState.ERROR) {
-                    updateNotification()
-                } else {
+                    postCallNotificationIfForeground()
+                } else if (isForeground) {
                     dismissNotification()
                 }
             }
@@ -140,7 +168,7 @@ class MicService : Service() {
         serviceScope.launch {
             _isReconnecting.collect {
                 if (_liveState.value != LiveState.IDLE && _liveState.value != LiveState.ERROR) {
-                    updateNotification()
+                    postCallNotificationIfForeground()
                 }
             }
         }
@@ -170,16 +198,22 @@ class MicService : Service() {
         _isMuted.value = next
         Log.i(TAG, "MIRA_LIVE_VOICE: Mic mute toggled to $next")
         sessionManager?.enableMic(!next)
-        updateNotification()
+        postCallNotificationIfForeground()
     }
 
     fun dismissNotification() {
-        try {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-        } catch (_: Exception) {}
-        val manager = getSystemService(NotificationManager::class.java)
-        manager?.cancel(NOTIFICATION_ID)
+        notificationController.dismissNotification(NOTIFICATION_ID)
         _isMuted.value = false
+    }
+
+    fun postCallNotificationIfForeground() {
+        notificationController.postCallNotificationIfForeground(NOTIFICATION_ID) {
+            buildCallNotification()
+        }
+    }
+
+    fun updateNotification() {
+        postCallNotificationIfForeground()
     }
 
     fun buildCallNotification(): Notification {
@@ -235,22 +269,8 @@ class MicService : Service() {
             .build()
     }
 
-    fun updateNotification() {
-        val manager = getSystemService(NotificationManager::class.java)
-        manager?.notify(NOTIFICATION_ID, buildCallNotification())
-    }
-
     private fun startForegroundWithNotification() {
-        val notification = buildCallNotification()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-            )
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
-        }
+        notificationController.startForegroundWithNotification(buildCallNotification(), NOTIFICATION_ID)
     }
 
     private fun startLiveVoiceSession() {
@@ -285,6 +305,7 @@ class MicService : Service() {
             _lastVoiceDiagnostic.value = permErr
             LiveVoiceDiagnostics.updateLastError(permErr)
             LiveVoiceDiagnostics.updateStage("ERROR")
+            dismissNotification()
             return
         }
 
@@ -316,6 +337,7 @@ class MicService : Service() {
                 _lastVoiceDiagnostic.value = noKeyErr
                 LiveVoiceDiagnostics.updateLastError(noKeyErr)
                 LiveVoiceDiagnostics.updateStage("ERROR")
+                dismissNotification()
             }
         }
     }
@@ -507,6 +529,7 @@ class MicService : Service() {
                         _voiceStage.value = VoiceStage.ERROR
                         _micAmplitude.value = 0f
                         dismissNotification()
+                        return
                     }
                     SessionManagerState.STOPPED -> {
                         connectingWatchdogJob?.cancel()
@@ -518,9 +541,10 @@ class MicService : Service() {
                             _liveState.value = LiveState.IDLE
                             _voiceStage.value = VoiceStage.IDLE
                         }
+                        return
                     }
                 }
-                updateNotification()
+                postCallNotificationIfForeground()
             }
 
             override fun onAudioLevel(level: Float) {
@@ -540,7 +564,7 @@ class MicService : Service() {
                     _liveState.value = LiveState.LISTENING
                     _voiceStage.value = VoiceStage.LISTENING
                 }
-                updateNotification()
+                postCallNotificationIfForeground()
             }
 
             override fun onUserSpeakingChanged(isSpeaking: Boolean) {
@@ -574,7 +598,7 @@ class MicService : Service() {
                 _voiceStage.value = VoiceStage.CONNECTING
                 LiveVoiceDiagnostics.recordReconnectAttempt(attempt)
                 LiveVoiceDiagnostics.updateStage("RECONNECTING")
-                updateNotification()
+                postCallNotificationIfForeground()
             }
 
             override fun onError(message: String) {

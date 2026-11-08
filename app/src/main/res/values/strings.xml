@@ -39,4 +39,25 @@
     <string name="skill_execution_cancelled">Skill execution stopped</string>
     <string name="skill_execution_failed">Skill execution failed</string>
     <string name="enable_accessibility_toast">Please enable Screen Control first to record or run skills</string>
+
+    <!-- Vision See + Answer -->
+    <string name="vision_title">Mira Vision</string>
+    <string name="vision_title_bn">মীরা ভিশন</string>
+    <string name="vision_ask_mira">Ask Mira about this</string>
+    <string name="vision_ask_mira_bn">দেখে বলো</string>
+    <string name="vision_looking">Looking…</string>
+    <string name="vision_looking_bn">দেখছি…</string>
+    <string name="vision_question_hint">Ask something about this (optional)…</string>
+    <string name="vision_question_hint_bn">এই সম্পর্কে কিছু জিজ্ঞাসা করুন (ঐচ্ছিক)…</string>
+    <string name="vision_error_title">Could not analyze</string>
+    <string name="vision_error_default">Mira could not see this clearly. Please try again.</string>
+    <string name="vision_retake">Retake</string>
+    <string name="vision_close">Close</string>
+    <string name="vision_copy">Copy</string>
+    <string name="vision_copied">Copied to clipboard</string>
+    <string name="vision_speaking">Speaking…</string>
+    <string name="vision_stop_speaking">Stop Speaking</string>
+    <string name="vision_speak_again">Speak Again</string>
+    <string name="vision_ask_another">Ask Another</string>
+    <string name="vision_retry">Try Again</string>
 </resources>

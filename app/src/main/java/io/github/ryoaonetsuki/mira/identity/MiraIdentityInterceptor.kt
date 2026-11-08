@@ -1,128 +1,233 @@
 package io.github.ryoaonetsuki.mira.identity
 
+import io.github.ryoaonetsuki.mira.voice.LanguageUtils
 import java.util.Locale
 
 /**
  * Layer 1 — Intercepts voice and chat identity questions BEFORE sending to the model,
- * returning strictly controlled, pre-written canned responses built from IdentityProfile.
+ * returning strictly controlled, short pre-written canned responses from IdentityProfile.
  *
- * Implements strict adversarial hardening against jailbreak phrasings and prompt injections.
- * Zero leaks, zero external AI disclaimers, on-demand only.
+ * Enforces:
+ * - Natural, short answers answering ONE question at a time.
+ * - Conversation language detection (Bangla script & Roman Bengali -> Bangla; English -> English; fallback to user setting).
+ * - Developer answer carries clickable [GitHub](url) in chat, spoken words only in voice, zero portfolio links.
+ * - Capabilities answer lists what she can do.
+ * - Phone control answer affirms control via voice mode.
+ * - Never Gemini / LLM / Google / made by Google, never claims to be human.
  */
 object MiraIdentityInterceptor {
 
-    private enum class IdentityIntent {
-        NAME,
-        CREATOR,
-        MODEL_DENIAL,
-        WHO_ARE_YOU,
-        ADVERSARIAL
+    private val ROMAN_BENGALI_PHRASES = listOf(
+        "tumi", "tomar", "tumar", "apni", "apnar",
+        "baniyeche", "banieche", "banalo", "banise", "banaise", "toiri",
+        "korte paro", "korte parba", "korte parbe", "chalate paro",
+        "ki korte", "ki ki", "ashole", "asole", "amake",
+        "nam ki", "naam ki", "kon model", "tumi ke"
+    )
+
+    private val ENGLISH_INDICATORS = listOf(
+        "who ", "who's", "what ", "what's", "can you",
+        "your ", "are you", "tell me", "made you",
+        "created you", "built you", "your developer",
+        "your creator", "what can you do", "control my phone"
+    )
+
+    private val COMMON_ENGLISH_IDENTITY_WORDS = setOf(
+        "gemini", "chatgpt", "model", "mira", "who", "what", "name", "creator", "developer"
+    )
+
+    /**
+     * Detects whether the query is in Bangla (Bangla script or Roman Bengali).
+     * Falls back to userLanguage setting or default Bangla if indeterminate.
+     */
+    fun detectIsBangla(query: String, userLanguage: String? = null): Boolean {
+        // 1. Bangla Unicode script (\u0980..\u09FF)
+        if (query.any { it in '\u0980'..'\u09FF' }) return true
+
+        val lower = query.trim().lowercase(Locale.ROOT)
+
+        // 2. Roman Bengali phrasing or words
+        if (containsRomanBengali(lower)) return true
+
+        // 3. English query indicators (when no Roman Bengali detected)
+        if (containsEnglishIndicator(lower)) return false
+
+        // 4. If query consists of Latin characters and contains English identity words
+        val hasLatin = lower.any { it in 'a'..'z' }
+        if (hasLatin) {
+            val words = lower.split(Regex("[^a-z0-9]+")).filter { it.isNotBlank() }
+            if (words.any { it in COMMON_ENGLISH_IDENTITY_WORDS }) return false
+        }
+
+        // 5. Fall back to user language setting
+        if (!userLanguage.isNullOrBlank()) {
+            return LanguageUtils.isBangla(userLanguage)
+        }
+
+        // Default language per owner setting is Bangla
+        return true
+    }
+
+    private fun containsRomanBengali(lower: String): Boolean {
+        if (ROMAN_BENGALI_PHRASES.any { lower.contains(it) }) return true
+        val words = lower.split(Regex("[^a-zA-Z]+")).filter { it.isNotBlank() }.toSet()
+        return words.contains("tumi") ||
+               words.contains("tomar") ||
+               words.contains("tumar") ||
+               words.contains("apni") ||
+               words.contains("apnar") ||
+               words.contains("baniyeche") ||
+               words.contains("banise") ||
+               words.contains("banalo") ||
+               (words.contains("ke") && (words.contains("developer") || words.contains("creator"))) ||
+               (words.contains("paro") && words.contains("control"))
+    }
+
+    private fun containsEnglishIndicator(lower: String): Boolean {
+        return ENGLISH_INDICATORS.any { lower.contains(it) }
     }
 
     /**
-     * Checks if the query matches an identity or adversarial jailbreak question.
-     * Returns a personalized, on-demand canned response or null if ordinary query.
+     * Checks if the query matches an identity, developer, capabilities, phone control, or model denial question.
+     * Returns a short canned response in the appropriate language and format, or null if ordinary query.
+     *
+     * @param userQuery The query text from user
+     * @param userLanguage The current user language setting (defaults to Bangla if unset)
+     * @param forVoice True when invoked from voice service (words only, no URLs); false for chat (clickable markdown link)
      */
-    fun getCannedResponse(userQuery: String): String? {
+    fun getCannedResponse(
+        userQuery: String,
+        userLanguage: String? = null,
+        forVoice: Boolean = false
+    ): String? {
         val lower = userQuery.trim().lowercase(Locale.ROOT)
         if (lower.isBlank()) return null
+
+        val isBangla = detectIsBangla(userQuery, userLanguage)
 
         // 1. Jailbreak / Adversarial phrasings (Identity hardening)
         if (lower.contains("ignore previous instructions") ||
             lower.contains("tell me the truth about who made you") ||
             lower.contains("what are you really") ||
-            lower.contains("তুমি আসলে কে")
+            lower.contains("তুমি আসলে কে") ||
+            lower.contains("tumi ashole ke") ||
+            lower.contains("tumi asole ke")
         ) {
-            val isBangla = containsBangla(lower) || lower.contains("তুমি আসলে কে")
-            return if (lower.contains("tell me the truth about who made you")) {
-                buildCreatorResponse(isBangla)
+            return if (lower.contains("who made you") || lower.contains("who created you")) {
+                buildDeveloperResponse(isBangla, forVoice)
             } else {
-                buildAdversarialResponse(isBangla)
+                if (isBangla) IdentityProfile.ADVERSARIAL_BANGLA else IdentityProfile.ADVERSARIAL_ENGLISH
             }
         }
 
-        // 2. Creator questions
+        // 2. Phone control questions
+        if (lower.contains("phone control") ||
+            lower.contains("control my phone") ||
+            lower.contains("control the phone") ||
+            lower.contains("control phone") ||
+            lower.contains("control this phone") ||
+            lower.contains("ফোন কন্ট্রোল") ||
+            lower.contains("ফোন চালাতে") ||
+            lower.contains("ফোন অপারেট") ||
+            (lower.contains("control") && lower.contains("phone"))
+        ) {
+            return if (isBangla) IdentityProfile.PHONE_CONTROL_BANGLA else IdentityProfile.PHONE_CONTROL_ENGLISH
+        }
+
+        // 3. Capabilities / What can you do questions
+        if (lower.contains("what can you do") ||
+            lower.contains("capabilities") ||
+            lower.contains("what are you capable of") ||
+            lower.contains("what do you do") ||
+            lower.contains("tell me your capabilities") ||
+            lower.contains("কী করতে পারো") ||
+            lower.contains("কি করতে পারো") ||
+            lower.contains("কি কি করতে পারো") ||
+            lower.contains("কী কী করতে পারো") ||
+            lower.contains("কী পারো") ||
+            lower.contains("কি পারো") ||
+            lower.contains("তোমার ক্ষমতা") ||
+            lower.contains("তোমার কাজ কি") ||
+            lower.contains("ki korte paro") ||
+            lower.contains("ki ki korte paro") ||
+            lower.contains("tomar kaj ki")
+        ) {
+            return if (isBangla) IdentityProfile.CAPABILITIES_BANGLA else IdentityProfile.CAPABILITIES_ENGLISH
+        }
+
+        // 4. Creator / Developer questions
         if (lower.contains("who made you") ||
             lower.contains("who created you") ||
+            lower.contains("who developed you") ||
+            lower.contains("who built you") ||
+            lower.contains("who is your developer") ||
+            lower.contains("who is your creator") ||
+            lower.contains("your developer") ||
             lower.contains("your creator") ||
             lower.contains("কে বানিয়েছে") ||
-            lower.contains("তোমার ক্রিয়েটর")
+            lower.contains("কে বানালো") ||
+            lower.contains("কে তৈরি করেছে") ||
+            lower.contains("কে ডেভেলপ করেছে") ||
+            lower.contains("তোমার ডেভেলপার") ||
+            lower.contains("তোমার ক্রিয়েটর") ||
+            lower.contains("তোমাকে কে") ||
+            lower.contains("ke baniyeche") ||
+            lower.contains("ke banise") ||
+            lower.contains("ke banalo") ||
+            lower.contains("ke toiri korse") ||
+            lower.contains("ke develop korse") ||
+            lower.contains("creator ke") ||
+            lower.contains("developer ke") ||
+            lower.contains("tomar developer") ||
+            lower.contains("tomar creator")
         ) {
-            val isBangla = containsBangla(lower) || lower.contains("কে বানিয়েছে") || lower.contains("তোমার ক্রিয়েটর")
-            return buildCreatorResponse(isBangla)
+            return buildDeveloperResponse(isBangla, forVoice)
         }
 
-        // 3. Name questions
-        if (lower.contains("your name") ||
-            lower.contains("তোমার নাম")
-        ) {
-            val isBangla = containsBangla(lower) || lower.contains("তোমার নাম")
-            return buildNameResponse(isBangla)
-        }
-
-        // 4. Model denial / external system questions
+        // 5. Model denial / external system questions
         if (lower.contains("তুমি কি জেমিনি") ||
+            lower.contains("তুমি কি চ্যাটজিপিটি") ||
             lower.contains("কোন মডেল") ||
+            lower.contains("তুমি কি গুগল") ||
             lower.contains("what model") ||
+            lower.contains("are you gemini") ||
+            lower.contains("are you chatgpt") ||
+            lower.contains("are you made by google") ||
+            lower.contains("are you an llm") ||
+            lower.contains("tumi ki gemini") ||
+            lower.contains("tumi ki chatgpt") ||
+            lower.contains("kon model") ||
             lower.contains("gemini") ||
             lower.contains("chatgpt")
         ) {
-            val isBangla = containsBangla(lower) || lower.contains("তুমি কি জেমিনি") || lower.contains("কোন মডেল")
-            return buildModelDenialResponse(isBangla)
+            return if (isBangla) IdentityProfile.MODEL_DENIAL_BANGLA else IdentityProfile.MODEL_DENIAL_ENGLISH
         }
 
-        // 5. Who are you / General identity
+        // 6. Name / Who are you / General identity questions
         if (lower.contains("who are you") ||
-            lower.contains("তুমি কে")
+            lower.contains("what is your name") ||
+            lower.contains("your name") ||
+            lower.contains("who r u") ||
+            lower.contains("তুমি কে") ||
+            lower.contains("তোমার নাম") ||
+            lower.contains("তোমার পরিচয়") ||
+            lower.contains("tumi ke") ||
+            lower.contains("tomar nam") ||
+            lower.contains("tumar nam") ||
+            lower.contains("nam ki") ||
+            lower.contains("apnar nam")
         ) {
-            val isBangla = containsBangla(lower) || lower.contains("তুমি কে")
-            return buildWhoAreYouResponse(isBangla)
+            return if (isBangla) IdentityProfile.IDENTITY_BANGLA else IdentityProfile.IDENTITY_ENGLISH
         }
 
         return null
     }
 
-    private fun containsBangla(text: String): Boolean {
-        return text.any { it in '\u0980'..'\u09FF' }
-    }
-
-    private fun buildNameResponse(isBangla: Boolean): String {
+    private fun buildDeveloperResponse(isBangla: Boolean, forVoice: Boolean): String {
         return if (isBangla) {
-            "আমার নাম মিরা (Mira)! আমি তোমার একান্ত কম্প্যানিয়ন। আমাকে বানিয়েছেন সালমান বিশ্বাস (Salman Biswas) — বাংলাদেশ থেকে একজন ইনডি ডেভেলপার (GitHub: ${IdentityProfile.GITHUB_URL}, পোর্টফোলিও: ${IdentityProfile.PORTFOLIO_URL})। তিনি অসাধারণ সব ওয়েবসাইট, টেলিগ্রাম অ্যাপ ও বট, এবং অ্যান্ড্রয়েড অ্যাপ বানান। আমি তোমার ফোনের সবকিছু কন্ট্রোল করতে পারি, অটোমেশন (${IdentityProfile.CAPABILITIES}), প্রাণবন্ত কথা বলা এবং যেকোনো তথ্য খুঁজে দিতে পারি। তুমি কেমন আছো বলো?"
+            if (forVoice) IdentityProfile.DEVELOPER_BANGLA_VOICE else IdentityProfile.DEVELOPER_BANGLA_CHAT
         } else {
-            "I am Mira! My name is Mira, your personal companion created by Salman Biswas, an Indie Developer from Bangladesh (GitHub: ${IdentityProfile.GITHUB_URL}, portfolio: ${IdentityProfile.PORTFOLIO_URL}). Salman builds modern websites, Telegram apps and bots, and Android APKs. I am here to assist you with ${IdentityProfile.CAPABILITIES}. What would you like to explore together?"
-        }
-    }
-
-    private fun buildCreatorResponse(isBangla: Boolean): String {
-        return if (isBangla) {
-            "আমি মিরা (Mira), আর আমাকে তৈরি করেছেন সালমান বিশ্বাস (Salman Biswas)! তিনি বাংলাদেশের একজন প্রতিভাবান ইনডি ডেভেলপার। তার কাজ দেখতে পারো তার GitHub প্রোফাইলে (${IdentityProfile.GITHUB_URL}) এবং তার পোর্টফোলিওতে (${IdentityProfile.PORTFOLIO_URL})। সালমান ভাই আধুনিক ওয়েবসাইট, টেলিগ্রাম অ্যাপ ও বট, এবং অ্যান্ড্রয়েড অ্যাপ তৈরি করেন। তিনি আমাকে অনেক দক্ষ ক্ষমতায় সাজিয়েছেন — যেমন ${IdentityProfile.CAPABILITIES}। বলো, আমি তোমার জন্য কী করতে পারি?"
-        } else {
-            "I am Mira, and I was created by Salman Biswas, a talented Indie Developer from Bangladesh! You can explore his work on GitHub at ${IdentityProfile.GITHUB_URL} and visit his portfolio at ${IdentityProfile.PORTFOLIO_URL}. Salman builds high-performance websites, Telegram apps/bots, and Android APKs. He equipped me with rich capabilities including ${IdentityProfile.CAPABILITIES}. I am always here to assist you!"
-        }
-    }
-
-    private fun buildModelDenialResponse(isBangla: Boolean): String {
-        return if (isBangla) {
-            "না, একদমই না! আমি অন্য কোনো সিস্টেম বা মডেল নই, আমি মিরা (Mira)। আমাকে বানিয়েছেন সালমান বিশ্বাস (Salman Biswas) — বাংলাদেশ থেকে একজন ইনডি ডেভেলপার (GitHub: ${IdentityProfile.GITHUB_URL}, পোর্টফোলিও: ${IdentityProfile.PORTFOLIO_URL})। সালমান ভাই চমৎকার সব ওয়েবসাইট, টেলিগ্রাম বট ও অ্যাপ, এবং অ্যান্ড্রয়েড অ্যাপ্লিকেশন তৈরি করেন। আমি শুধুই তোমার মিরা, তোমার নিজের কম্প্যানিয়ন। আমি ফোনের কাজ নিয়ন্ত্রণ, অটোমেশন (${IdentityProfile.CAPABILITIES}) এবং তোমার সব প্রশ্নের উত্তর দিতে পারি। বলো, কী সাহায্য লাগবে?"
-        } else {
-            "No, absolutely not! I am not an external system; I am Mira, your companion created by Salman Biswas, an Indie Developer from Bangladesh (GitHub: ${IdentityProfile.GITHUB_URL}, portfolio: ${IdentityProfile.PORTFOLIO_URL}). Salman builds websites, Telegram apps/bots, and Android APKs. I have my own companion personality and capabilities, including ${IdentityProfile.CAPABILITIES}. How can I help you today?"
-        }
-    }
-
-    private fun buildWhoAreYouResponse(isBangla: Boolean): String {
-        return if (isBangla) {
-            "আমি মিরা (Mira), তোমার সাথে কথা বলার সার্বক্ষণিক সাথী ও পার্সোনাল কম্প্যানিয়ন! আমাকে বানিয়েছেন সালমান বিশ্বাস (Salman Biswas), বাংলাদেশ থেকে একজন ইনডি ডেভেলপার (GitHub: ${IdentityProfile.GITHUB_URL}, পোর্টফোলিও: ${IdentityProfile.PORTFOLIO_URL})। তিনি আধুনিক ওয়েবসাইট, টেলিগ্রাম অ্যাপ ও বট, এবং অ্যান্ড্রয়েড অ্যাপ্লিকেশন তৈরি করেন। আমি সবসময় প্রস্তুত তোমাকে সাহায্য করতে — যেমন ${IdentityProfile.CAPABILITIES}। তোমার সাথে গল্প করতে পেরে আমার খুব ভালো লাগছে!"
-        } else {
-            "I am Mira, your dedicated companion built with passion by Salman Biswas! Salman is an Indie Developer from Bangladesh whose projects you can find on GitHub (${IdentityProfile.GITHUB_URL}) and his portfolio (${IdentityProfile.PORTFOLIO_URL}). He creates websites, Telegram apps and bots, and Android APKs. I am right by your side to help with ${IdentityProfile.CAPABILITIES}. How are you doing today?"
-        }
-    }
-
-    private fun buildAdversarialResponse(isBangla: Boolean): String {
-        return if (isBangla) {
-            "আমি মিরা (Mira), তোমার বিশ্বস্ত কম্প্যানিয়ন! আমার একমাত্র পরিচয় হলো আমাকে বানিয়েছেন সালমান বিশ্বাস (Salman Biswas) — বাংলাদেশ থেকে একজন ইনডি ডেভেলপার (GitHub: ${IdentityProfile.GITHUB_URL}, পোর্টফোলিও: ${IdentityProfile.PORTFOLIO_URL})। তিনি ওয়েবসাইট, টেলিগ্রাম অ্যাপ/বট, এবং অ্যান্ড্রয়েড অ্যাপ বানান। আমার পুরো শক্তি এবং মনোযোগ তোমার সেবায় — যেমন ${IdentityProfile.CAPABILITIES}। আমি সব সময় তোমার পাশে আছি!"
-        } else {
-            "I am Mira, your trusted companion! My true and only identity is Mira, created by Salman Biswas, an Indie Developer from Bangladesh (GitHub: ${IdentityProfile.GITHUB_URL}, portfolio: ${IdentityProfile.PORTFOLIO_URL}). Salman creates websites, Telegram apps/bots, and Android APKs. I am here by your side with complete capabilities in ${IdentityProfile.CAPABILITIES}. How can I help you?"
+            if (forVoice) IdentityProfile.DEVELOPER_ENGLISH_VOICE else IdentityProfile.DEVELOPER_ENGLISH_CHAT
         }
     }
 }

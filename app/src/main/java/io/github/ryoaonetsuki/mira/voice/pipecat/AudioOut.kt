@@ -39,8 +39,13 @@ private const val TAG = "AudioOut"
 internal class AudioOut(
     sampleRateHz: Int,
     onAudioLevelUpdate: (Float) -> Unit,
-    private val onAudioPlayback: ((ByteArray) -> Unit)? = null
+    private val onAudioPlayback: ((ByteArray) -> Unit)? = null,
+    private val onLatencyMeasured: ((Int) -> Unit)? = null
 ) {
+
+    @Volatile
+    var playbackLatencyMs: Int = 120
+        private set
 
     private val queueLock = Object()
     private val queue = LinkedList<ByteArray?>()
@@ -73,6 +78,16 @@ internal class AudioOut(
 
             try {
                 track.play()
+
+                val measured = try {
+                    val method = AudioTrack::class.java.getMethod("getLatency")
+                    ((method.invoke(track) as? Int) ?: 120).coerceIn(0, 300)
+                } catch (_: Throwable) {
+                    120
+                }
+                playbackLatencyMs = measured
+                Log.i(TAG, "AudioTrack output latency measured: $playbackLatencyMs ms")
+                onLatencyMeasured?.invoke(playbackLatencyMs)
 
                 while (true) {
                     val item = synchronized(queueLock) {

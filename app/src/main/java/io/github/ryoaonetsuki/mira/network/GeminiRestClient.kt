@@ -763,10 +763,18 @@ class GeminiRestClient(
             MiraChatSearchHeuristic.isSearchRequest(lastUserMessage)
         }
 
-        var effectiveSysPrompt = listOf(
-            systemPrompt.trim(),
-            "Reply using exactly one language: the user's primary/default language. If it is not specified, use Bangla. Never add a translation or a second-language version underneath."
-        ).filter { it.isNotBlank() }.joinToString("\n\n")
+        val hasLanguageRule = systemPrompt.contains("Reply ONLY in", ignoreCase = true) ||
+            systemPrompt.contains("Language rule:", ignoreCase = true) ||
+            systemPrompt.contains("RESPOND IN", ignoreCase = true)
+
+        var effectiveSysPrompt = if (hasLanguageRule) {
+            systemPrompt.trim()
+        } else {
+            listOf(
+                systemPrompt.trim(),
+                "Reply using exactly one language: the user's primary/default language. If it is not specified, use Bangla. Never add a translation or a second-language version underneath."
+            ).filter { it.isNotBlank() }.joinToString("\n\n")
+        }
         val allSources = mutableListOf<GroundingSource>()
 
         // 1. Research-first for build requests (gated on shouldSearch)
@@ -800,7 +808,9 @@ class GeminiRestClient(
             val maxRes = if (isChatCall) 8 else 5
             val searchResults = FreeWebSearch.search(lastUserMessage, maxResults = maxRes)
             if (searchResults.isNotEmpty()) {
-                val dateLine = currentDateTimeLine()
+                val detectedLanguage = Regex("""(?:Reply ONLY in|Language rule: Reply ONLY in|RESPOND IN)\s+([^\n.]+)""", RegexOption.IGNORE_CASE)
+                    .find(effectiveSysPrompt)?.groupValues?.get(1)?.trim()
+                val dateLine = currentDateTimeLine(detectedLanguage ?: "Bangla (Bengali)")
                 val searchBlock = FreeWebSearch.formatForModel(searchResults, dateLine)
                 val newLastMsg = "$lastUserMessage\n\n$searchBlock"
                 val lastUserIdx = history.indexOfLast { it.role == "user" }

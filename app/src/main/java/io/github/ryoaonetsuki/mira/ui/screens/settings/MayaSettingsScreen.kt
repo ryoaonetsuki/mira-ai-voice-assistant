@@ -18,6 +18,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.ryoaonetsuki.mira.R
@@ -93,17 +94,21 @@ fun MayaSettingsScreen(
 
                 // Persona Cards (Mira and Orion)
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(IntrinsicSize.Min),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     val isMira = persona == "Mira"
                     MiraCard(
                         modifier = Modifier
                             .weight(1f)
+                            .fillMaxHeight()
                             .then(
                                 if (isMira) Modifier.border(1.5.dp, palette.primary, RoundedCornerShape(16.dp))
                                 else Modifier
                             ),
+                        contentPadding = PaddingValues(14.dp),
                         onClick = {
                             scope.launch {
                                 userPrefs.setPersona("Mira")
@@ -117,9 +122,11 @@ fun MayaSettingsScreen(
                         ) {
                             Text(
                                 text = "Mira (Default)",
-                                fontSize = 15.sp,
+                                fontSize = 14.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = if (isMira) palette.primary else palette.textPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f)
                             )
                             if (isMira) {
@@ -144,10 +151,12 @@ fun MayaSettingsScreen(
                     MiraCard(
                         modifier = Modifier
                             .weight(1f)
+                            .fillMaxHeight()
                             .then(
                                 if (isOrion) Modifier.border(1.5.dp, palette.secondary, RoundedCornerShape(16.dp))
                                 else Modifier
                             ),
+                        contentPadding = PaddingValues(14.dp),
                         onClick = {
                             scope.launch {
                                 userPrefs.setPersona("Orion")
@@ -161,9 +170,11 @@ fun MayaSettingsScreen(
                         ) {
                             Text(
                                 text = "Orion",
-                                fontSize = 15.sp,
+                                fontSize = 14.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = if (isOrion) palette.secondary else palette.textPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f)
                             )
                             if (isOrion) {

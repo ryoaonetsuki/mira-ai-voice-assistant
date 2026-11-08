@@ -185,6 +185,11 @@ internal class AudioIn @RequiresPermission(android.Manifest.permission.RECORD_AU
                         LiveVoiceDiagnostics.updateAecEnabled(false)
 
                         try {
+                            record.stop()
+                        } catch (e: Throwable) {
+                            Log.w(TAG, "Error stopping AudioRecord: ${e.message}")
+                        }
+                        try {
                             record.release()
                         } catch (e: Throwable) {
                             Log.w(TAG, "Error releasing AudioRecord: ${e.message}")

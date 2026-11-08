@@ -2,6 +2,11 @@ package io.github.ryoaonetsuki.mira.service
 
 import android.app.Notification
 import android.content.Context
+import android.content.ContextWrapper
+import android.content.res.ColorStateList
+import android.content.res.Resources
+import android.graphics.Color
+import android.graphics.drawable.Drawable
 import androidx.core.app.NotificationCompat
 import io.github.ryoaonetsuki.mira.R
 import io.github.ryoaonetsuki.mira.voice.pipecat.SessionManagerState
@@ -25,6 +30,71 @@ class CallNotificationStopPathRegressionTest {
     private var lastCancelledId = -1
 
     private lateinit var controller: CallNotificationController
+
+    // Robolectric cannot resolve the colour AndroidX CallStyle needs for the
+    // decline action (Resource ID #0x7f06002f, androidx.core.R.color.call_notification_decline_color,
+    // "Bad identifier"). In Android SDK, Context.getColor is final and delegates to
+    // getResources().getColor(id, getTheme()); we override getResources() on ContextWrapper
+    // so that unresolvable colours fall back to grey in tests only. Test-only; production is untouched.
+    private fun testContext(): Context {
+        val baseResources = context.resources
+        @Suppress("DEPRECATION")
+        val wrappedResources = object : Resources(
+            baseResources.assets,
+            baseResources.displayMetrics,
+            baseResources.configuration
+        ) {
+            override fun getColor(id: Int, theme: Theme?): Int = try {
+                baseResources.getColor(id, theme)
+            } catch (e: NotFoundException) {
+                Color.GRAY
+            }
+
+            @Suppress("DEPRECATION")
+            override fun getColor(id: Int): Int = try {
+                baseResources.getColor(id)
+            } catch (e: NotFoundException) {
+                Color.GRAY
+            }
+
+            override fun getColorStateList(id: Int, theme: Theme?): ColorStateList = try {
+                baseResources.getColorStateList(id, theme)
+            } catch (e: NotFoundException) {
+                ColorStateList.valueOf(Color.GRAY)
+            }
+
+            @Suppress("DEPRECATION")
+            override fun getColorStateList(id: Int): ColorStateList = try {
+                baseResources.getColorStateList(id)
+            } catch (e: NotFoundException) {
+                ColorStateList.valueOf(Color.GRAY)
+            }
+
+            override fun getText(id: Int): CharSequence = baseResources.getText(id)
+            override fun getString(id: Int): String = baseResources.getString(id)
+            override fun getQuantityText(id: Int, quantity: Int): CharSequence = baseResources.getQuantityText(id, quantity)
+            override fun getQuantityString(id: Int, quantity: Int): String = baseResources.getQuantityString(id, quantity)
+            override fun getQuantityString(id: Int, quantity: Int, vararg formatArgs: Any?): String = baseResources.getQuantityString(id, quantity, *formatArgs)
+            override fun getString(id: Int, vararg formatArgs: Any?): String = baseResources.getString(id, *formatArgs)
+            override fun getDimension(id: Int): Float = baseResources.getDimension(id)
+            override fun getDimensionPixelOffset(id: Int): Int = baseResources.getDimensionPixelOffset(id)
+            override fun getDimensionPixelSize(id: Int): Int = baseResources.getDimensionPixelSize(id)
+            override fun getDrawable(id: Int, theme: Theme?): Drawable? = baseResources.getDrawable(id, theme)
+            @Suppress("DEPRECATION")
+            override fun getDrawable(id: Int): Drawable? = baseResources.getDrawable(id)
+            override fun getBoolean(id: Int): Boolean = baseResources.getBoolean(id)
+            override fun getInteger(id: Int): Int = baseResources.getInteger(id)
+            override fun getIdentifier(name: String?, defType: String?, defPackage: String?): Int = baseResources.getIdentifier(name, defType, defPackage)
+            override fun getResourceName(id: Int): String = baseResources.getResourceName(id)
+            override fun getResourcePackageName(id: Int): String = baseResources.getResourcePackageName(id)
+            override fun getResourceTypeName(id: Int): String = baseResources.getResourceTypeName(id)
+            override fun getResourceEntryName(id: Int): String = baseResources.getResourceEntryName(id)
+        }
+
+        return object : ContextWrapper(context) {
+            override fun getResources(): Resources = wrappedResources
+        }
+    }
 
     @Before
     fun setUp() {
@@ -201,7 +271,7 @@ class CallNotificationStopPathRegressionTest {
 
     @Test
     fun testBuildCallNotification_usesNewSmallIcon_andConfiguresCallStyleWithEndAndMute() {
-        val notification = CallNotificationFactory.build(context, isMuted = false)
+        val notification = CallNotificationFactory.build(testContext(), isMuted = false)
 
         // 1. Assert uses the NEW small-icon resource
         assertEquals(
@@ -247,7 +317,7 @@ class CallNotificationStopPathRegressionTest {
         assertNotNull("Mute action must be present in notification actions", muteAction)
         assertEquals("Mute", muteAction?.title)
 
-        val mutedNotification = CallNotificationFactory.build(context, isMuted = true)
+        val mutedNotification = CallNotificationFactory.build(testContext(), isMuted = true)
         val unmuteAction = mutedNotification.actions?.find { it.title == "Unmute" }
         assertNotNull("Unmute action must be present when isMuted=true", unmuteAction)
 
@@ -272,7 +342,7 @@ class CallNotificationStopPathRegressionTest {
         )
 
         // 2. Factory-built call notification DOES carry FLAG_ONLY_ALERT_ONCE
-        val callNotification = CallNotificationFactory.build(context)
+        val callNotification = CallNotificationFactory.build(testContext())
         assertTrue(
             "Service-built call notification must carry FLAG_ONLY_ALERT_ONCE",
             (callNotification.flags and Notification.FLAG_ONLY_ALERT_ONCE) != 0
@@ -307,13 +377,13 @@ class CallNotificationStopPathRegressionTest {
 
         // Repeated updates on state change (e.g. LISTENING -> SPEAKING -> LISTENING)
         trackingController.postCallNotificationIfForeground {
-            CallNotificationFactory.build(context, liveState = LiveState.SPEAKING)
+            CallNotificationFactory.build(testContext(), liveState = LiveState.SPEAKING)
         }
         trackingController.postCallNotificationIfForeground {
-            CallNotificationFactory.build(context, liveState = LiveState.LISTENING)
+            CallNotificationFactory.build(testContext(), liveState = LiveState.LISTENING)
         }
         trackingController.postCallNotificationIfForeground {
-            CallNotificationFactory.build(context, isMuted = true)
+            CallNotificationFactory.build(testContext(), isMuted = true)
         }
 
         // Assert: NO additional alerting posts produced; all 3 updates were silent

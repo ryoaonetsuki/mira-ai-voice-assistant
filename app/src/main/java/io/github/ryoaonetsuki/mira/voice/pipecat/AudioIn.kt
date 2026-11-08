@@ -28,8 +28,12 @@ package io.github.ryoaonetsuki.mira.voice.pipecat
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder.AudioSource
+import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.AudioEffect
+import android.media.audiofx.NoiseSuppressor
 import android.util.Log
 import androidx.annotation.RequiresPermission
+import io.github.ryoaonetsuki.mira.voice.LiveVoiceDiagnostics
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 import kotlin.math.sqrt
@@ -96,8 +100,77 @@ internal class AudioIn @RequiresPermission(android.Manifest.permission.RECORD_AU
                         bufferBytes
                     )
 
+                    var aec: AcousticEchoCanceler? = null
+                    var ns: NoiseSuppressor? = null
+
                     try {
                         record.startRecording()
+
+                        // AcousticEchoCanceler (AEC)
+                        val aecAvailable = try {
+                            AcousticEchoCanceler.isAvailable()
+                        } catch (e: Throwable) {
+                            Log.w(TAG, "Error checking AcousticEchoCanceler availability", e)
+                            false
+                        }
+
+                        var aecEnabled = false
+                        if (aecAvailable) {
+                            try {
+                                val created = AcousticEchoCanceler.create(record.audioSessionId)
+                                if (created != null) {
+                                    val status = created.setEnabled(true)
+                                    if (status != AudioEffect.SUCCESS) {
+                                        Log.w(TAG, "AcousticEchoCanceler.setEnabled(true) failed with status $status")
+                                    }
+                                    aec = created
+                                    aecEnabled = created.enabled
+                                } else {
+                                    Log.w(TAG, "AcousticEchoCanceler.create returned null on session ${record.audioSessionId}")
+                                }
+                            } catch (e: Throwable) {
+                                Log.w(TAG, "Failed to create or enable AcousticEchoCanceler on session ${record.audioSessionId}", e)
+                            }
+                        }
+
+                        Log.i(
+                            TAG,
+                            "AcousticEchoCanceler: available=$aecAvailable, enabled=$aecEnabled, sessionId=${record.audioSessionId}"
+                        )
+                        LiveVoiceDiagnostics.updateAecState(available = aecAvailable, enabled = aecEnabled)
+
+                        // NoiseSuppressor (NS)
+                        val nsAvailable = try {
+                            NoiseSuppressor.isAvailable()
+                        } catch (e: Throwable) {
+                            Log.w(TAG, "Error checking NoiseSuppressor availability", e)
+                            false
+                        }
+
+                        var nsEnabled = false
+                        if (nsAvailable) {
+                            try {
+                                val created = NoiseSuppressor.create(record.audioSessionId)
+                                if (created != null) {
+                                    val status = created.setEnabled(true)
+                                    if (status != AudioEffect.SUCCESS) {
+                                        Log.w(TAG, "NoiseSuppressor.setEnabled(true) failed with status $status")
+                                    }
+                                    ns = created
+                                    nsEnabled = created.enabled
+                                } else {
+                                    Log.w(TAG, "NoiseSuppressor.create returned null on session ${record.audioSessionId}")
+                                }
+                            } catch (e: Throwable) {
+                                Log.w(TAG, "Failed to create or enable NoiseSuppressor on session ${record.audioSessionId}", e)
+                            }
+                        }
+
+                        Log.i(
+                            TAG,
+                            "NoiseSuppressor: available=$nsAvailable, enabled=$nsEnabled, sessionId=${record.audioSessionId}"
+                        )
+
                         val buf = ByteArray(bufferBytes)
 
                         while (!stop.get() && !mute.get()) {
@@ -112,7 +185,29 @@ internal class AudioIn @RequiresPermission(android.Manifest.permission.RECORD_AU
                             onAudioCaptured(buf.copyOf(readResult))
                         }
                     } finally {
-                        record.release()
+                        try {
+                            aec?.setEnabled(false)
+                            aec?.release()
+                        } catch (e: Throwable) {
+                            Log.w(TAG, "Error releasing AcousticEchoCanceler: ${e.message}")
+                        }
+                        aec = null
+
+                        try {
+                            ns?.setEnabled(false)
+                            ns?.release()
+                        } catch (e: Throwable) {
+                            Log.w(TAG, "Error releasing NoiseSuppressor: ${e.message}")
+                        }
+                        ns = null
+
+                        LiveVoiceDiagnostics.updateAecEnabled(false)
+
+                        try {
+                            record.release()
+                        } catch (e: Throwable) {
+                            Log.w(TAG, "Error releasing AudioRecord: ${e.message}")
+                        }
                     }
                 }
             } catch (e: Exception) {

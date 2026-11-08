@@ -559,9 +559,15 @@ class MiraGeminiLiveTransport(
     )
 
     override fun release() {
-        thread.assertCurrent()
-        restoreNormalAudioMode()
-        client?.close()
+        try {
+            thread.assertCurrent()
+        } catch (_: Throwable) {}
+        try {
+            restoreNormalAudioMode()
+        } catch (_: Throwable) {}
+        try {
+            client?.close()
+        } catch (_: Throwable) {}
         client = null
     }
 

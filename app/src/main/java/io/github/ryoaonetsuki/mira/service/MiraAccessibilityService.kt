@@ -225,7 +225,9 @@ class MiraAccessibilityService : AccessibilityService() {
                 ?.takeIf { it.packageName != self }
 
             val chosen = focused ?: foreign.firstOrNull() ?: active
-            if (chosen != null) traverseAll(listOf(chosen)) else emptyList()
+            val roots = if (chosen != null) listOf(chosen) else emptyList()
+            if (roots.isEmpty()) return emptyList()
+            traverseAll(roots)
         } catch (e: Throwable) {
             Log.e(TAG, "dumpScreen failed", e)
             emptyList()
@@ -237,8 +239,14 @@ class MiraAccessibilityService : AccessibilityService() {
     ): List<Map<String, Any>> {
         val out = mutableListOf<Map<String, Any>>()
         var index = 0
+        val startTimeMs = SystemClock.elapsedRealtime()
         for (root in roots) {
-            index = traverse(root, index, out)
+            if (out.size >= MAX_DUMP_NODES || SystemClock.elapsedRealtime() - startTimeMs >= MAX_DUMP_TIME_MS) break
+            index = traverse(root, index, out, startTimeMs, MAX_DUMP_NODES, MAX_DUMP_TIME_MS)
+        }
+        val elapsedMs = SystemClock.elapsedRealtime() - startTimeMs
+        if (out.size >= MAX_DUMP_NODES || elapsedMs >= MAX_DUMP_TIME_MS) {
+            Log.w(TAG, "dumpScreen bounded: truncated at ${out.size} nodes in ${elapsedMs}ms (cap=$MAX_DUMP_NODES, budget=${MAX_DUMP_TIME_MS}ms)")
         }
         return out
     }
@@ -246,9 +254,14 @@ class MiraAccessibilityService : AccessibilityService() {
     private fun traverse(
         node: AccessibilityNodeInfo?,
         startIndex: Int,
-        out: MutableList<Map<String, Any>>
+        out: MutableList<Map<String, Any>>,
+        startTimeMs: Long,
+        maxNodes: Int = MAX_DUMP_NODES,
+        timeBudgetMs: Long = MAX_DUMP_TIME_MS,
+        clockMs: () -> Long = { SystemClock.elapsedRealtime() }
     ): Int {
         if (node == null) return startIndex
+        if (out.size >= maxNodes || clockMs() - startTimeMs >= timeBudgetMs) return startIndex
         var index = startIndex
 
         val rect = Rect()
@@ -290,9 +303,12 @@ class MiraAccessibilityService : AccessibilityService() {
             index++
         }
 
+        if (out.size >= maxNodes || clockMs() - startTimeMs >= timeBudgetMs) return index
+
         for (i in 0 until node.childCount) {
+            if (out.size >= maxNodes || clockMs() - startTimeMs >= timeBudgetMs) break
             val child = node.getChild(i) ?: continue
-            index = traverse(child, index, out)
+            index = traverse(child, index, out, startTimeMs, maxNodes, timeBudgetMs, clockMs)
         }
         return index
     }
@@ -635,6 +651,10 @@ class MiraAccessibilityService : AccessibilityService() {
 
     private fun dispatch(gesture: GestureDescription): Boolean {
         return try {
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                Log.e(TAG, "dispatch called on main thread; cannot await CountDownLatch without deadlock — failing gesture")
+                return false
+            }
             val latch = CountDownLatch(1)
             val completed = AtomicBoolean(false)
             val accepted = dispatchGesture(
@@ -656,13 +676,20 @@ class MiraAccessibilityService : AccessibilityService() {
                 },
                 mainHandler
             )
-            if (!accepted) return false
-            if (Looper.myLooper() == Looper.getMainLooper()) {
-                Log.w(TAG, "dispatch called on main thread; cannot await CountDownLatch without deadlock")
-                return accepted
+            if (!accepted) {
+                Log.w(TAG, "dispatch: dispatchGesture rejected gesture (returned false)")
+                return false
             }
             val finished = latch.await(2, TimeUnit.SECONDS)
-            finished && completed.get()
+            if (!finished) {
+                Log.w(TAG, "dispatch: gesture callback never fired within 2s")
+                return false
+            }
+            val ok = completed.get()
+            if (!ok) {
+                Log.w(TAG, "dispatch: gesture callback returned onCancelled")
+            }
+            ok
         } catch (e: Throwable) {
             Log.e(TAG, "Gesture dispatch failed", e)
             false
@@ -718,6 +745,53 @@ class MiraAccessibilityService : AccessibilityService() {
             val maxX = (displayWidth - 1).coerceAtLeast(0).toFloat()
             val maxY = (displayHeight - 1).coerceAtLeast(0).toFloat()
             return Pair(x.coerceIn(0f, maxX), y.coerceIn(0f, maxY))
+        }
+
+        const val MAX_DUMP_NODES: Int = 800
+        const val MAX_DUMP_TIME_MS: Long = 3000L
+
+        /**
+         * Generic bounded tree traversal used for unit testing and bounding tree reads.
+         * Caps at [maxNodes] and bounds execution to [timeBudgetMs].
+         * Returns number of collected items.
+         */
+        fun <T> traverseTreeBounded(
+            root: T?,
+            startIndex: Int,
+            out: MutableList<T>,
+            maxNodes: Int = MAX_DUMP_NODES,
+            timeBudgetMs: Long = MAX_DUMP_TIME_MS,
+            startTimeMs: Long,
+            clockMs: () -> Long = { SystemClock.elapsedRealtime() },
+            isEligible: (T) -> Boolean,
+            getChildren: (T) -> List<T>
+        ): Int {
+            if (root == null) return startIndex
+            if (out.size >= maxNodes || clockMs() - startTimeMs >= timeBudgetMs) return startIndex
+
+            var index = startIndex
+            if (isEligible(root)) {
+                out.add(root)
+                index++
+            }
+            if (out.size >= maxNodes || clockMs() - startTimeMs >= timeBudgetMs) return index
+
+            val children = getChildren(root)
+            for (child in children) {
+                if (out.size >= maxNodes || clockMs() - startTimeMs >= timeBudgetMs) break
+                index = traverseTreeBounded(
+                    root = child,
+                    startIndex = index,
+                    out = out,
+                    maxNodes = maxNodes,
+                    timeBudgetMs = timeBudgetMs,
+                    startTimeMs = startTimeMs,
+                    clockMs = clockMs,
+                    isEligible = isEligible,
+                    getChildren = getChildren
+                )
+            }
+            return index
         }
 
         @Volatile

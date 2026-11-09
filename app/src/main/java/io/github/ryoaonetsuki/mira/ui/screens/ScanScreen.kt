@@ -155,8 +155,7 @@ fun ScanScreen(
             audioPlayerJob?.cancel()
             currentAudioPlayer?.let { player ->
                 try {
-                    player.stopImmediatelyAndFlush()
-                    player.release()
+                    player.stopPreviewCleanly()
                 } catch (_: Exception) {}
             }
         }
@@ -167,8 +166,7 @@ fun ScanScreen(
         audioPlayerJob = null
         currentAudioPlayer?.let { player ->
             try {
-                player.stopImmediatelyAndFlush()
-                player.release()
+                player.stopPreviewCleanly()
             } catch (_: Exception) {}
         }
         currentAudioPlayer = null

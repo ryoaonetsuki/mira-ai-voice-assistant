@@ -14,8 +14,10 @@ class TaskExecutorTest {
     // --- Fake AutomationPort for pure JVM unit testing ---
     private class FakeAutomationPort(
         var serviceEnabled: Boolean = true,
-        var currentPkg: String? = null,
+        var currentPkg: String? = "io.github.ryoaonetsuki.mira",
         var actionSuccess: Boolean = true,
+        var simulateEffect: Boolean = true,
+        var screenshotBytes: ByteArray? = byteArrayOf(1, 2, 3),
         val actionsPerformed: MutableList<String> = mutableListOf(),
         var screenNodes: List<ScreenNode> = listOf(
             ScreenNode(
@@ -38,8 +40,36 @@ class TaskExecutorTest {
             )
         )
     ) : AutomationPort {
+        private var mutationTick = 0
+
+        private fun mutateScreenState(label: String) {
+            if (!simulateEffect) return
+            mutationTick++
+            screenNodes = listOf(
+                ScreenNode(
+                    index = 0,
+                    text = "$label#$mutationTick",
+                    contentDescription = label,
+                    className = "android.widget.Button",
+                    viewId = "btn_$mutationTick",
+                    isClickable = true,
+                    isEditable = false,
+                    isScrollable = false,
+                    isCheckable = false,
+                    isEnabled = true,
+                    left = 10,
+                    top = 10,
+                    right = 100,
+                    bottom = 50,
+                    centerX = 55,
+                    centerY = 30
+                )
+            )
+        }
+
         override fun isServiceEnabled(): Boolean = serviceEnabled
         override fun dumpScreen(): List<ScreenNode> = screenNodes
+        override fun getScreenElements(): List<ScreenNode> = screenNodes
         override fun formatNodes(nodes: List<ScreenNode>): String = "nodes count: ${nodes.size}"
         override fun getCompressedScreenDescription(nodes: List<ScreenNode>, goal: String): String =
             "Screen description for $goal"
@@ -47,30 +77,35 @@ class TaskExecutorTest {
         override fun clickText(text: String, nodes: List<ScreenNode>): Boolean {
             if (!actionSuccess) return false
             actionsPerformed.add("clickText:$text")
+            mutateScreenState("clicked:$text")
             return true
         }
 
         override fun clickAt(x: Float, y: Float): Boolean {
             if (!actionSuccess) return false
             actionsPerformed.add("clickAt:$x,$y")
+            mutateScreenState("clickedAt:$x,$y")
             return true
         }
 
         override fun typeText(text: String): Boolean {
             if (!actionSuccess) return false
             actionsPerformed.add("typeText:$text")
+            mutateScreenState("typed:$text")
             return true
         }
 
         override fun pressEnter(): Boolean {
             if (!actionSuccess) return false
             actionsPerformed.add("pressEnter")
+            mutateScreenState("enter")
             return true
         }
 
         override fun scroll(direction: String): Boolean {
             if (!actionSuccess) return false
             actionsPerformed.add("scroll:$direction")
+            mutateScreenState("scroll:$direction")
             return true
         }
 
@@ -83,28 +118,42 @@ class TaskExecutorTest {
         ): Boolean {
             if (!actionSuccess) return false
             actionsPerformed.add("swipe:$startX,$startY->$endX,$endY")
+            mutateScreenState("swipe")
             return true
         }
 
         override fun pressBack(): Boolean {
             if (!actionSuccess) return false
             actionsPerformed.add("pressBack")
+            mutateScreenState("back")
             return true
         }
 
         override fun pressHome(): Boolean {
             if (!actionSuccess) return false
             actionsPerformed.add("pressHome")
+            if (simulateEffect) {
+                currentPkg = "com.android.launcher3"
+                mutateScreenState("home")
+            }
             return true
         }
 
         override fun openApp(query: String): String? {
-            if (!actionSuccess) return null
-            actionsPerformed.add("openApp:$query")
-            return query
+            val trimmed = query.trim()
+            if (!actionSuccess || trimmed.isEmpty()) return null
+            actionsPerformed.add("openApp:$trimmed")
+            val launchedPkg = ScreenAutomationService.resolveKnownAppPackage(trimmed) ?: "com.example.$trimmed"
+            if (simulateEffect) {
+                currentPkg = launchedPkg
+                mutateScreenState("opened:$launchedPkg")
+            }
+            return launchedPkg
         }
 
         override fun getCurrentPackage(): String? = currentPkg
+
+        override suspend fun takeScreenshotJpeg(maxWidthPx: Int): ByteArray? = screenshotBytes
     }
 
     // --- Fake in-memory SkillStore for pure JVM testing ---
@@ -419,28 +468,31 @@ class TaskExecutorTest {
     }
 
     @Test
-    fun testTaskExecutor_ExecuteGoal_EmptySkillMatch_FailsTruthfully() = runBlocking {
+    fun testTaskExecutor_ExecuteGoal_StaleOrEmptySkillMatch_FallsThroughToAiLoop() = runBlocking {
         val fakePort = FakeAutomationPort(serviceEnabled = true)
         // Stored skill with 0 steps (representing legacy or empty macro recorded on phone)
         val store = InMemorySkillStore("""[{"id":"empty-skill","goal":"play song","steps":[]}]""")
         val skills = SkillMemoryService(store)
 
-        var thinkCalled = false
+        var thinkTurns = 0
         val executor = TaskExecutor(
             automation = fakePort,
             skills = skills,
             think = { _, _, _ ->
-                thinkCalled = true
-                """{"action": "done"}"""
+                thinkTurns++
+                if (thinkTurns == 1) {
+                    """{"action": "open_app", "params": {"app": "youtube"}}"""
+                } else {
+                    """{"action": "done", "is_complete": true}"""
+                }
             },
             stepDelayMs = 0
         )
 
         val result = executor.executeGoal("play song")
-        assertEquals(TaskStatus.FAILED, result.status)
-        assertEquals(0, result.stepsUsed)
-        assertTrue(result.message.contains("no recorded steps"))
-        assertFalse("Must not hallucinate done through AI think", thinkCalled)
+        assertEquals("F-08: Stale/empty skill must fall through to AI loop and succeed", TaskStatus.SUCCESS, result.status)
+        assertTrue(thinkTurns >= 2)
+        assertTrue(fakePort.actionsPerformed.contains("openApp:youtube"))
     }
 
     @Test
@@ -561,5 +613,211 @@ class TaskExecutorTest {
         assertEquals("Lofi hip hop", steps[2].stringParam("text"))
 
         assertEquals(TaskStep.ACTION_PRESS_ENTER, steps[3].action)
+    }
+
+    // =========================================================================
+    // 6. Round 25 Fix Turn A — F-01, F-02, F-04, F-07, F-08, F-09, F-14 & Vision
+    // =========================================================================
+
+    @Test
+    fun testF01_UserTurnTranscriptBuffer_AccumulatesChunksAndDispatchesOncePerTurn() {
+        val buffer = io.github.ryoaonetsuki.mira.voice.pipecat.UserTurnTranscriptBuffer()
+
+        val c1 = buffer.appendChunk("YouTube")
+        assertEquals("YouTube", c1)
+        assertFalse(MiraAutomationBridge.isAutomationIntent(c1))
+
+        val c2 = buffer.appendChunk(" open")
+        assertEquals("YouTube open", c2)
+
+        val c3 = buffer.appendChunk(" করো")
+        assertEquals("YouTube open করো", c3)
+
+        val completed = buffer.completeTurn(resetBuffer = false)
+        assertEquals("YouTube open করো", completed)
+        assertTrue(MiraAutomationBridge.isAutomationIntent(completed!!))
+
+        // Duplicate boundary within the same turn must return null (dispatched at most once)
+        assertNull(buffer.completeTurn(resetBuffer = true))
+
+        // Next turn starts fresh
+        assertEquals("গান", buffer.appendChunk("গান"))
+        assertEquals("গান চালাও", buffer.appendChunk(" চালাও"))
+        assertEquals("গান চালাও", buffer.completeTurn(resetBuffer = true))
+    }
+
+    @Test
+    fun testF02_And_F14_BanglaIntentsExtractTargetAppAndNarrowPlayRegex() {
+        // F-02: Bangla-script intents and verbs
+        assertTrue(MiraAutomationBridge.isAutomationIntent("গান চালাও"))
+        assertTrue(MiraAutomationBridge.isAutomationIntent("মিউজিক বাজাও"))
+        assertTrue(MiraAutomationBridge.isAutomationIntent("গান প্লে করো"))
+        assertTrue(MiraAutomationBridge.isAutomationIntent("গান শোনাও"))
+        assertTrue(MiraAutomationBridge.isAutomationIntent("ইউটিউব ওপেন করো"))
+        assertTrue(MiraAutomationBridge.isAutomationIntent("ইউটিউব চালু করো"))
+        assertTrue(MiraAutomationBridge.isAutomationIntent("স্পটিফাই এ গান বাজাও"))
+        assertTrue(MiraAutomationBridge.isAutomationIntent("ক্যামেরা ওপেন করো"))
+        assertTrue(MiraAutomationBridge.isAutomationIntent("সেটিংস বন্ধ করো"))
+
+        // F-02: extractTargetApp canonical resolution
+        assertEquals("com.google.android.youtube", MiraAutomationBridge.extractTargetApp("ইউটিউব ওপেন করো"))
+        assertEquals("com.google.android.youtube", MiraAutomationBridge.extractTargetApp("গান চালাও"))
+        assertEquals("com.spotify.music", MiraAutomationBridge.extractTargetApp("স্পটিফাই এ গান বাজাও"))
+        assertEquals("com.whatsapp", MiraAutomationBridge.extractTargetApp("হোয়াটসঅ্যাপ খুলো"))
+        assertEquals("com.android.chrome", MiraAutomationBridge.extractTargetApp("ক্রোম চালু করো"))
+        assertEquals("camera", MiraAutomationBridge.extractTargetApp("ক্যামেরা খুলো"))
+        assertEquals("com.android.settings", MiraAutomationBridge.extractTargetApp("সেটিংস ওপেন করো"))
+
+        // F-14: Narrow play regex — conversational "play" questions must NOT match
+        assertFalse(MiraAutomationBridge.isAutomationIntent("Can children play outside?"))
+        assertFalse(MiraAutomationBridge.isAutomationIntent("How do you play chess?"))
+        assertFalse(MiraAutomationBridge.isAutomationIntent("Let's role play a scenario"))
+        // Real media play commands still match
+        assertTrue(MiraAutomationBridge.isAutomationIntent("play music"))
+        assertTrue(MiraAutomationBridge.isAutomationIntent("play some music"))
+        assertTrue(MiraAutomationBridge.isAutomationIntent("play a song on YouTube"))
+        assertTrue(MiraAutomationBridge.isAutomationIntent("play lofi on music"))
+    }
+
+    @Test
+    fun testF04_PrematureDoneRejected_AndSingleStepIsCompleteExecutesFirst() = runBlocking {
+        // 1. ACTION_DONE on step 1 when executedSteps is empty must NOT return SUCCESS
+        val fakePort1 = FakeAutomationPort(serviceEnabled = true)
+        val skills1 = SkillMemoryService(InMemorySkillStore())
+        val executor1 = TaskExecutor(
+            automation = fakePort1,
+            skills = skills1,
+            think = { _, _, _ -> """{"action": "done", "is_complete": true}""" },
+            maxSteps = 2,
+            stepDelayMs = 0
+        )
+        val res1 = executor1.executeGoal("open youtube")
+        assertEquals(TaskStatus.FAILED, res1.status)
+        assertTrue(fakePort1.actionsPerformed.isEmpty())
+
+        // 2. Non-done action with is_complete=true executes and verifies effect FIRST before honouring isComplete
+        val fakePort2 = FakeAutomationPort(serviceEnabled = true, simulateEffect = true)
+        val skills2 = SkillMemoryService(InMemorySkillStore())
+        val executor2 = TaskExecutor(
+            automation = fakePort2,
+            skills = skills2,
+            think = { _, _, _ ->
+                """{"action": "open_app", "params": {"app": "youtube"}, "is_complete": true}"""
+            },
+            maxSteps = 2,
+            stepDelayMs = 0
+        )
+        val res2 = executor2.executeGoal("open youtube")
+        assertEquals(TaskStatus.SUCCESS, res2.status)
+        assertEquals(listOf("openApp:youtube"), fakePort2.actionsPerformed)
+    }
+
+    @Test
+    fun testF07_NoEffect_RecordedAndPreventsFalseSuccess() = runBlocking {
+        // Action returns true from dispatch, but screen/package never changes (simulateEffect = false)
+        val fakePort = FakeAutomationPort(serviceEnabled = true, simulateEffect = false)
+        val skills = SkillMemoryService(InMemorySkillStore())
+        val seenHistories = mutableListOf<List<Pair<String, String>>>()
+
+        var turn = 0
+        val executor = TaskExecutor(
+            automation = fakePort,
+            skills = skills,
+            think = { _, _, history ->
+                seenHistories.add(history.toList())
+                turn++
+                if (turn == 1) {
+                    """{"action": "click_text", "params": {"text": "Home"}, "is_complete": true}"""
+                } else {
+                    """{"action": "done", "is_complete": true}"""
+                }
+            },
+            maxSteps = 2,
+            stepDelayMs = 0
+        )
+
+        val result = executor.executeGoal("tap home")
+        assertEquals("Must fail when no action had a verified screen effect", TaskStatus.FAILED, result.status)
+        assertTrue(
+            "History must record [NO_EFFECT] so LLM knows the action had no effect",
+            seenHistories.last().any { it.second.contains("[NO_EFFECT]") }
+        )
+    }
+
+    @Test
+    fun testF09_EmptyScreenOnStep1_CallsThinkInsteadOfStalling() = runBlocking {
+        val fakePort = FakeAutomationPort(
+            serviceEnabled = true,
+            screenNodes = emptyList(),
+            simulateEffect = true
+        )
+        val skills = SkillMemoryService(InMemorySkillStore())
+        val seenScreenDescriptions = mutableListOf<String>()
+
+        var turn = 0
+        val executor = TaskExecutor(
+            automation = fakePort,
+            skills = skills,
+            think = { _, screenDesc, _ ->
+                seenScreenDescriptions.add(screenDesc)
+                turn++
+                if (turn == 1) {
+                    """{"action": "open_app", "params": {"app": "youtube"}, "is_complete": true}"""
+                } else {
+                    """{"action": "done", "is_complete": true}"""
+                }
+            },
+            maxSteps = 2,
+            stepDelayMs = 0
+        )
+
+        val result = executor.executeGoal("ইউটিউব খুলো")
+        assertEquals(TaskStatus.SUCCESS, result.status)
+        assertTrue(
+            "Step 1 empty screen must pass launch hint to think",
+            seenScreenDescriptions.first().contains("Screen appears empty (use open_app to launch the target app)")
+        )
+        assertTrue(fakePort.actionsPerformed.contains("openApp:youtube"))
+    }
+
+    @Test
+    fun testScreenSeeing_ShouldAttachScreenshot_AndVisionRouting() = runBlocking {
+        val fakePort = FakeAutomationPort(serviceEnabled = true)
+        val skills = SkillMemoryService(InMemorySkillStore())
+        var visionCalled = false
+
+        val executor = TaskExecutor(
+            automation = fakePort,
+            skills = skills,
+            think = { _, _, _ -> """{"action": "done", "is_complete": true}""" },
+            thinkWithVision = { _, _, _, bytes ->
+                visionCalled = bytes.isNotEmpty()
+                """{"action": "open_app", "params": {"app": "youtube"}, "is_complete": true}"""
+            },
+            stepDelayMs = 0
+        )
+
+        // 1. Empty nodes -> true
+        assertTrue(executor.shouldAttachScreenshot(emptyList(), lastStepHadNoEffect = false))
+
+        // 2. >50% clickable nodes unlabeled -> true
+        val unlabeledNodes = listOf(
+            ScreenNode(0, "", "", "android.view.View", "", isClickable = true, isEditable = false, isScrollable = false, isCheckable = false, isEnabled = true, 0, 0, 10, 10, 5, 5),
+            ScreenNode(1, "", "", "android.view.View", "", isClickable = true, isEditable = false, isScrollable = false, isCheckable = false, isEnabled = true, 0, 0, 10, 10, 5, 5),
+            ScreenNode(2, "Search", "", "android.widget.Button", "", isClickable = true, isEditable = false, isScrollable = false, isCheckable = false, isEnabled = true, 0, 0, 10, 10, 5, 5)
+        )
+        assertTrue(executor.shouldAttachScreenshot(unlabeledNodes, lastStepHadNoEffect = false))
+
+        // 3. Labeled nodes + previous step had effect -> false
+        assertFalse(executor.shouldAttachScreenshot(fakePort.screenNodes, lastStepHadNoEffect = false))
+
+        // 4. Labeled nodes + previous step had NO effect -> true
+        assertTrue(executor.shouldAttachScreenshot(fakePort.screenNodes, lastStepHadNoEffect = true))
+
+        // 5. End-to-end: unlabeled screen routes through thinkWithVision
+        fakePort.screenNodes = unlabeledNodes
+        val result = executor.executeGoal("open youtube")
+        assertEquals(TaskStatus.SUCCESS, result.status)
+        assertTrue("thinkWithVision must be invoked when >50% clickable nodes lack labels", visionCalled)
     }
 }

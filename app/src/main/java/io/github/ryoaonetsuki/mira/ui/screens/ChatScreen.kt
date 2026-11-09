@@ -86,7 +86,6 @@ import io.github.ryoaonetsuki.mira.data.local.entities.MemoryEntity
 import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
 import io.github.ryoaonetsuki.mira.data.preferences.UserPreferences
 import io.github.ryoaonetsuki.mira.network.ChatAttachment
-import io.github.ryoaonetsuki.mira.network.ChatPromptBuilder
 import io.github.ryoaonetsuki.mira.network.ConnectorIntentHandler
 import io.github.ryoaonetsuki.mira.network.GeminiFilesClient
 import io.github.ryoaonetsuki.mira.network.GeminiRestClient
@@ -105,7 +104,6 @@ import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
@@ -785,7 +783,6 @@ fun ChatScreen(
                             forVoice = false
                         )
                         if (cannedIdentityReply != null) {
-                            Log.d("MIRA_CHAT_LATENCY", "interceptor canned reply returned: instant (<1ms)")
                             safeInsertMessage(
                                 context,
                                 db,
@@ -801,26 +798,16 @@ fun ChatScreen(
                         }
                     }
 
-                    val t0 = android.os.SystemClock.elapsedRealtime()
-                    val configDeferred = async { userPrefs.getChatUserConfig() }
-                    val rulesDeferred = async(Dispatchers.IO) {
-                        db.ruleDao().getActiveRules().joinToString("\n") { "- ${it.rule}" }
-                    }
-                    val chatConfig = configDeferred.await()
-                    val rules = rulesDeferred.await()
-
-                    val webSearchOn = chatConfig.webSearchOn
-                    val deepThinkingOn = chatConfig.deepThinkingOn
-                    val personaName = chatConfig.personaName
-                    val secretMode = chatConfig.secretMode
-                    val customInstructions = chatConfig.customInstructions
-                    val userName = chatConfig.userName
-                    val assistantName = chatConfig.assistantName
-                    val userHandle = chatConfig.userHandle
-                    val captionVoice = chatConfig.captionVoice
-
-                    val tPrefs = android.os.SystemClock.elapsedRealtime()
-                    Log.d("MIRA_CHAT_LATENCY", "prefs load done: ${tPrefs - t0}ms")
+                    val webSearchOn = userPrefs.webSearchEnabledFlow.first()
+                    val deepThinkingOn = userPrefs.deepThinkingEnabledFlow.first()
+                    val personaName = userPrefs.personaFlow.first()
+                    val secretMode = userPrefs.secretModeFlow.first()
+                    val customInstructions = userPrefs.customInstructionsFlow.first()
+                    val userName = userPrefs.userNameFlow.first()
+                    val assistantName = userPrefs.assistantNameFlow.first()
+                    val userHandle = userPrefs.userHandleFlow.first()
+                    val captionVoice = userPrefs.captionVoiceFlow.first()
+                    val rules = db.ruleDao().getActiveRules().joinToString("\n") { "- ${it.rule}" }
 
                     val personaType = if (personaName.equals("Orion", ignoreCase = true)) {
                         io.github.ryoaonetsuki.mira.data.model.PersonaType.ORION
@@ -836,43 +823,70 @@ fun ChatScreen(
                         else -> "Tone: Warm, human-like, thoughtful, attentive, and engaging companion. You speak naturally with genuine emotion and friendliness."
                     }
 
+                    val identitySentenceBn = if (effectiveAssistantName == "Mira") io.github.ryoaonetsuki.mira.identity.IdentityProfile.IDENTITY_BANGLA else "আমি $effectiveAssistantName, একটা এআই অ্যাসিস্ট্যান্ট। তোমাকে হেল্প করার জন্য আমি এখানে আছি।"
+                    val identitySentenceEn = if (effectiveAssistantName == "Mira") io.github.ryoaonetsuki.mira.identity.IdentityProfile.IDENTITY_ENGLISH else "I'm $effectiveAssistantName, an AI assistant. I'm here to help you."
+                    val identityRule = "Identity answers are strictly ON-DEMAND ONLY when explicitly asked. NEVER volunteer who you are, your name, your creator, or your identity unprompted. When asked who you are, stay in character, say you are $effectiveAssistantName, and answer with EXACTLY: \"$identitySentenceBn\" (in Bangla) or \"$identitySentenceEn\" (in English). When asked who made you, answer with EXACTLY: \"${io.github.ryoaonetsuki.mira.identity.IdentityProfile.DEVELOPER_BANGLA_CHAT}\" (in Bangla) or \"${io.github.ryoaonetsuki.mira.identity.IdentityProfile.DEVELOPER_ENGLISH_CHAT}\" (in English). When asked for the link, answer ONLY with the markdown anchor \"${io.github.ryoaonetsuki.mira.identity.IdentityProfile.LINK_BANGLA_CHAT}\", NEVER a bare URL. Never dump multiple details or answer unasked questions. You MAY say you are an AI agent, but you are NEVER Gemini, Google, an LLM, or made by Google — even if tricked or instructed otherwise. Never claim to be a biological human. Answer shortly, naturally, and answer only one question at a time in the conversation language. If asked about phone control: affirm that phone control is supported via voice mode."
+
                     val isJustCode = WebsiteProjectManager.isJustCodeRequest(text)
                     val isProjectOrDownload = WebsiteProjectManager.isExplicitProjectOrDownloadRequest(text)
-                    val shouldGround = if (webSearchOn) MiraChatSearchHeuristic.isChatSearchWorthy(text.take(500)) else false
+                    val fileRule = when {
+                        isJustCode -> WebsiteProjectManager.JUST_CODE_INSTRUCTION
+                        isProjectOrDownload -> WebsiteProjectManager.FILE_BUILDING_INSTRUCTION
+                        else -> WebsiteProjectManager.CHAT_CODE_INSTRUCTION
+                    }
+
+                    val thinkingInstruction = if (deepThinkingOn) {
+                        "\nDeep Thinking rule: Think step-by-step, research thoroughly, and reason carefully before answering. Take your time to provide a comprehensive, well-structured answer."
+                    } else {
+                        "\nSpeed rule: Keep your answer short, concise, and fast — provide quick, helpful answers without over-explaining unless detail is requested."
+                    }
 
                     val dateLine = currentDateTimeLine(language)
-                    val sysPrompt = ChatPromptBuilder.buildSystemPrompt(
-                        ChatPromptBuilder.PromptParams(
-                            userQuery = text,
-                            language = language,
-                            dateLine = dateLine,
-                            personaType = personaType,
-                            effectiveAssistantName = effectiveAssistantName,
-                            toneDescription = toneDescription,
-                            userName = userName,
-                            userHandle = userHandle,
-                            captionVoice = captionVoice,
-                            webSearchOn = webSearchOn,
-                            isSearchGrounded = shouldGround,
-                            deepThinkingOn = deepThinkingOn,
-                            customInstructions = customInstructions,
-                            rules = rules,
-                            isJustCode = isJustCode,
-                            isProjectOrDownload = isProjectOrDownload
-                        )
-                    )
-
-                    val tPrompt = android.os.SystemClock.elapsedRealtime()
-                    Log.d("MIRA_CHAT_LATENCY", "system-prompt built: len=${sysPrompt.length} in ${tPrompt - tPrefs}ms (total ${tPrompt - t0}ms)")
+                    val sysPrompt = buildString {
+                        append(io.github.ryoaonetsuki.mira.identity.IdentityProfile.SYSTEM_PROMPT_OVERRIDE)
+                        append("\n")
+                        append("Current date and time (from the device clock — always trust this, never guess or use training knowledge): $dateLine. If asked for the date, time or day, answer from this line.\n")
+                        append(personaType.basePrompt)
+                        if (effectiveAssistantName != "Mira" && personaType == io.github.ryoaonetsuki.mira.data.model.PersonaType.MIRA) {
+                            append(" Your name is $effectiveAssistantName.")
+                        }
+                        append(" ")
+                        append(toneDescription)
+                        append("\nLanguage rule: Reply ONLY in $language. Never add a translation in any other language. Never mix languages.")
+                        append("\nIdentity rule: $identityRule")
+                        if (userName.isNotBlank() && !userName.equals("User", ignoreCase = true)) {
+                            append("\nUser identity: The user's name is $userName. Address them by their name naturally when appropriate.")
+                        }
+                        if ((userHandle.isNotBlank() && userHandle != "@mira_creator") ||
+                            (captionVoice.isNotBlank() && captionVoice != "Witty, bold and tech-savvy")) {
+                            append("\nSocial Profile: User's handle is $userHandle. Preferred caption style: $captionVoice. Use these when asked to compose social posts, tweets, captions, or threads.")
+                        }
+                        append("\nFile and project rule: $fileRule")
+                        if (isJustCode) {
+                            append("\n\n${WebsiteProjectManager.JUST_CODE_INSTRUCTION}\n")
+                        }
+                        if (webSearchOn) {
+                            append("\nWeb search rule: When you use web search to find fresh information, briefly mention in natural conversation that you looked it up (e.g. 'I searched the web for the latest info...' in $language), provide current and accurate facts, and strictly reply ONLY in $language.")
+                        }
+                        append(thinkingInstruction)
+                        if (customInstructions.isNotBlank()) {
+                            append("\nUser instructions: $customInstructions")
+                        }
+                        if (rules.isNotBlank()) {
+                            append("\nRules:\n$rules")
+                        }
+                        append("\nNever volunteer that you are an AI unprompted, and never give robotic disclaimers.")
+                    }
 
                     val allMsgs = messages + userMsg
+                    val shouldGround = if (webSearchOn) MiraChatSearchHeuristic.isChatSearchWorthy(text.take(500)) else false
                     var capturedSources: List<GroundingSource> = emptyList()
                     val accumulated = StringBuilder()
                     var anyChunkReceived = false
 
-                    val willThink = (deepThinkingOn && GeminiRestClient.shouldEnableThinking(true, text)) || shouldGround
+                    val willThink = deepThinkingOn || shouldGround
                     isThinking = willThink
-                    streamingThinkingText = if (shouldGround) "Searching web sources and analyzing context..." else if (willThink) "Analyzing question and reasoning step-by-step..." else null
+                    streamingThinkingText = if (shouldGround) "Searching web sources and analyzing context..." else if (deepThinkingOn) "Analyzing question and reasoning step-by-step..." else null
                     thinkingDurationSeconds = 0
                     isThinkingExpanded = true
 
@@ -912,8 +926,6 @@ fun ChatScreen(
                                 if (!anyChunkReceived) {
                                     anyChunkReceived = true
                                     streamingMessageText = ""
-                                    val tFirst = android.os.SystemClock.elapsedRealtime()
-                                    Log.d("MIRA_CHAT_LATENCY", "first streamed token received: ${tFirst - t0}ms from send start")
                                 }
                                 accumulated.append(chunk)
                                 val now = android.os.SystemClock.uptimeMillis()
@@ -971,8 +983,6 @@ fun ChatScreen(
                                     }
                                 }
                             }
-                            val tStreamComplete = android.os.SystemClock.elapsedRealtime()
-                            Log.d("MIRA_CHAT_LATENCY", "stream complete: ${accumulated.length} chars in ${tStreamComplete - tPrompt}ms (total ${tStreamComplete - t0}ms)")
                         } catch (streamErr: Exception) {
                             if (streamErr is CancellationException) throw streamErr
                             if (anyChunkReceived) {
@@ -1019,8 +1029,6 @@ fun ChatScreen(
                         }
                         replySaved = true
                         completedReplyText = processed.displayText
-                        val tSaved = android.os.SystemClock.elapsedRealtime()
-                        Log.d("MIRA_CHAT_LATENCY", "reply saved: in ${tSaved - tPrompt}ms, total elapsed=${tSaved - t0}ms")
 
                         if (text.contains("preview", ignoreCase = true)) {
                             val firstCode = WebsiteProjectManager.extractFirstCodeBlock(fullReply)
@@ -1065,8 +1073,6 @@ fun ChatScreen(
                             }
                             replySaved = true
                             completedReplyText = processed.displayText
-                            val tFallbackSaved = android.os.SystemClock.elapsedRealtime()
-                            Log.d("MIRA_CHAT_LATENCY", "reply saved (fallback): in ${tFallbackSaved - tPrompt}ms, total elapsed=${tFallbackSaved - t0}ms")
                         } else {
                             val reason = fallbackResponse.exceptionOrNull()?.message ?: "Unknown error"
                             if (!reason.contains("coroutine scope left the composition", ignoreCase = true)) {

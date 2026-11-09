@@ -1,4 +1,5 @@
 // Ported from Jarvis (github.com/AbuZar-Ansarii/Jarvis), MIT Licence, Copyright (c) 2026 AbuZar Ansarii — Dart → Kotlin port for Mira.
+// Post-action UI effect verification adapted from ClosePaw (github.com/imoonkey/closepaw, Apache-2.0) and MobileAgent (github.com/X-PLUG/MobileAgent, MIT).
 package io.github.ryoaonetsuki.mira.automation.agent
 
 import android.util.Log
@@ -23,6 +24,7 @@ data class TaskResult(
 interface AutomationPort {
     fun isServiceEnabled(): Boolean
     fun dumpScreen(): List<ScreenNode>
+    fun getScreenElements(): List<ScreenNode> = dumpScreen()
     fun formatNodes(nodes: List<ScreenNode>): String
     fun getCompressedScreenDescription(nodes: List<ScreenNode>, goal: String): String
     fun clickText(text: String, nodes: List<ScreenNode>): Boolean
@@ -35,6 +37,7 @@ interface AutomationPort {
     fun pressHome(): Boolean
     fun openApp(query: String): String?
     fun getCurrentPackage(): String? = null
+    suspend fun takeScreenshotJpeg(maxWidthPx: Int = 720): ByteArray? = null
 }
 
 /**
@@ -138,8 +141,12 @@ class TaskExecutor(
     private val think: (suspend (goal: String, screenDescription: String, history: List<Pair<String, String>>) -> String)? = null,
     private val maxSteps: Int = 15,
     private val stepDelayMs: Long = 600,
-    private val onProgress: ((step: Int, description: String) -> Unit)? = null
+    private val onProgress: ((step: Int, description: String) -> Unit)? = null,
+    private val thinkWithVision: (suspend (goal: String, screenDescription: String, history: List<Pair<String, String>>, screenshotJpeg: ByteArray) -> String)? = null
 ) {
+    private val settleDelayMs: Long = if (stepDelayMs == 0L) 0L else 700L
+    private val openAppSettleDelayMs: Long = if (stepDelayMs == 0L) 0L else 1200L
+
     @Volatile
     private var _isRunning: Boolean = false
     val isRunning: Boolean get() = _isRunning
@@ -171,16 +178,9 @@ class TaskExecutor(
                 )
             }
 
-            // 2. Skill-memory fast path (Jarvis behaviour)
+            // 2. Skill-memory fast path (Jarvis task_executor.dart:308-333 behaviour)
             val matchedSkill = skills.findMatch(goal)
             if (matchedSkill != null) {
-                if (matchedSkill.steps.isEmpty()) {
-                    return TaskResult(
-                        status = TaskStatus.FAILED,
-                        message = "Skill '${matchedSkill.goal}' has no recorded steps. Please re-record the macro.",
-                        stepsUsed = 0
-                    )
-                }
                 onProgress?.invoke(0, "Found memorized skill (${matchedSkill.steps.size} steps). Replaying…")
                 val replaySuccess = replaySkill(matchedSkill)
                 if (_cancelRequested) {
@@ -194,13 +194,10 @@ class TaskExecutor(
                         stepsUsed = matchedSkill.steps.size
                     )
                 }
-                // Stale skill failed — mark failure truthfully
+                // Stale skill failed — delete stale skill and fall through to live AI loop
                 skills.markReplayOutcome(matchedSkill.id, false)
-                return TaskResult(
-                    status = TaskStatus.FAILED,
-                    message = "Skill replay failed during execution. Please re-record the macro.",
-                    stepsUsed = 0
-                )
+                logInfo("Saved skill failed — falling back to AI loop")
+                onProgress?.invoke(0, "Saved skill failed — falling back to AI loop")
             }
 
             // 3. AI loop
@@ -273,39 +270,60 @@ class TaskExecutor(
             stepCount++
             onProgress?.invoke(stepCount, "Replaying: ${step.action}")
 
-            val nodes = try {
-                automation.dumpScreen()
+            val preNodes = try {
+                automation.getScreenElements()
             } catch (_: Throwable) {
                 emptyList()
             }
+            val prePackage = automation.getCurrentPackage().orEmpty()
+            val preSignature = computeNodeSignature(preNodes)
 
-            val blocked = AutomationSafety.isBlocked(step, automation.getCurrentPackage())
+            val blocked = AutomationSafety.isBlocked(step, prePackage.ifEmpty { null })
             if (blocked != null) {
                 logWarn("Replayed step blocked for safety: $blocked")
                 return false
             }
 
-            val ok = _performAction(step, nodes)
+            val ok = _performAction(step, preNodes)
             if (!ok && step.action != TaskStep.ACTION_WAIT) {
                 logWarn("Replayed step failed: ${step.action}")
                 return false
             }
-            delay(stepDelayMs)
+
+            if (step.action != TaskStep.ACTION_WAIT && step.action != TaskStep.ACTION_DONE) {
+                delay(if (step.action == TaskStep.ACTION_OPEN_APP) openAppSettleDelayMs else settleDelayMs)
+                val postNodes = try {
+                    automation.getScreenElements()
+                } catch (_: Throwable) {
+                    emptyList()
+                }
+                val postPackage = automation.getCurrentPackage().orEmpty()
+                val postSignature = computeNodeSignature(postNodes)
+                if (!verifyEffect(step, prePackage, preSignature, postPackage, postSignature)) {
+                    logWarn("Replayed step had no verified effect on screen: ${step.action}")
+                    return false
+                }
+            } else {
+                delay(stepDelayMs)
+            }
         }
         return stepCount > 0
     }
 
     private suspend fun runAiLoop(goal: String): TaskResult {
-        val thinkFn = think ?: return TaskResult(
-            status = TaskStatus.FAILED,
-            message = "No think function provided",
-            stepsUsed = 0
-        )
+        if (think == null && thinkWithVision == null) {
+            return TaskResult(
+                status = TaskStatus.FAILED,
+                message = "No think function provided",
+                stepsUsed = 0
+            )
+        }
 
         val history = mutableListOf<Pair<String, String>>()
         val executedSteps = mutableListOf<TaskStep>()
         var parseFailures = 0
         var step = 0
+        var lastStepHadNoEffect = false
 
         while (step < maxSteps) {
             if (_cancelRequested) {
@@ -317,28 +335,34 @@ class TaskExecutor(
 
             // --- Observe ---
             val nodes = try {
-                automation.dumpScreen()
+                automation.getScreenElements()
             } catch (e: Throwable) {
                 logWarn("Failed to read screen: ${e.message}")
                 delay(stepDelayMs)
                 continue
             }
 
+            val description: String
             if (nodes.isEmpty()) {
-                logInfo("Screen appears empty (locked?). Waiting...")
-                delay(1500)
-                continue
+                if (executedSteps.isEmpty()) {
+                    logInfo("Screen appears empty on step 1 — passing open_app hint to AI")
+                    description = "Screen appears empty (use open_app to launch the target app)"
+                } else {
+                    logInfo("Screen appears empty (locked?). Waiting...")
+                    delay(1500)
+                    continue
+                }
+            } else {
+                val fullDump = automation.formatNodes(nodes)
+                recovery.recordScreen(fullDump)
+                description = automation.getCompressedScreenDescription(nodes, goal)
             }
-
-            val fullDump = automation.formatNodes(nodes)
-            recovery.recordScreen(fullDump)
-            val description = automation.getCompressedScreenDescription(nodes, goal)
 
             // --- Think ---
             onProgress?.invoke(step, "Thinking...")
             val raw: String
             try {
-                raw = thinkFn(goal, description, history)
+                raw = _decideNextStep(goal, description, nodes, history, lastStepHadNoEffect)
             } catch (e: Throwable) {
                 logError("Think step failed: ${e.message}", e)
                 return TaskResult(TaskStatus.FAILED, "AI request failed: ${e.message}", step)
@@ -375,10 +399,19 @@ class TaskExecutor(
             // --- Act ---
             onProgress?.invoke(step, decision.reasoning.ifEmpty { decision.action })
 
-            if (decision.action == TaskStep.ACTION_DONE || decision.isComplete) {
-                if (executedSteps.isNotEmpty()) {
-                    skills.saveOrUpdate(goal, executedSteps)
+            // F-04 & F-07: Never return SUCCESS on ACTION_DONE when executedSteps (verified effects) is empty
+            if (decision.action == TaskStep.ACTION_DONE) {
+                if (executedSteps.isEmpty()) {
+                    logWarn("Rejected premature ACTION_DONE with zero verified executed steps")
+                    lastStepHadNoEffect = true
+                    pushTurn(
+                        history,
+                        raw,
+                        "ACTION RESULT: [NO_EFFECT] Cannot complete task before executing at least one action with a verified effect on screen. Use open_app or interact with the screen first."
+                    )
+                    continue
                 }
+                skills.saveOrUpdate(goal, executedSteps)
                 return TaskResult(
                     status = TaskStatus.SUCCESS,
                     message = "Goal completed in $step step(s).",
@@ -386,14 +419,62 @@ class TaskExecutor(
                 )
             }
 
-            val ok = _performAction(decision, nodes)
-            executedSteps.add(decision)
+            val prePackage = automation.getCurrentPackage().orEmpty()
+            val preSignature = computeNodeSignature(nodes)
+
+            val dispatched = _performAction(decision, nodes)
             recovery.recordAction(decision)
-            pushTurn(
-                history,
-                raw,
-                "ACTION RESULT: ${if (ok) "success" else "FAILED"} for ${decision.action}. If the screen did not change, pick a different approach."
-            )
+
+            if (!dispatched) {
+                lastStepHadNoEffect = true
+                pushTurn(
+                    history,
+                    raw,
+                    "ACTION RESULT: [NO_EFFECT] ${decision.action} dispatch failed. Pick a different approach."
+                )
+            } else if (decision.action == TaskStep.ACTION_WAIT) {
+                lastStepHadNoEffect = false
+                pushTurn(
+                    history,
+                    raw,
+                    "ACTION RESULT: [OK] waited."
+                )
+            } else {
+                delay(if (decision.action == TaskStep.ACTION_OPEN_APP) openAppSettleDelayMs else settleDelayMs)
+                val postNodes = try {
+                    automation.getScreenElements()
+                } catch (_: Throwable) {
+                    emptyList()
+                }
+                val postPackage = automation.getCurrentPackage().orEmpty()
+                val postSignature = computeNodeSignature(postNodes)
+                val effectVerified = verifyEffect(decision, prePackage, preSignature, postPackage, postSignature)
+
+                if (effectVerified) {
+                    lastStepHadNoEffect = false
+                    executedSteps.add(decision)
+                    pushTurn(
+                        history,
+                        raw,
+                        "ACTION RESULT: [OK] for ${decision.action}."
+                    )
+                    if (decision.isComplete && executedSteps.isNotEmpty()) {
+                        skills.saveOrUpdate(goal, executedSteps)
+                        return TaskResult(
+                            status = TaskStatus.SUCCESS,
+                            message = "Goal completed in $step step(s).",
+                            stepsUsed = step
+                        )
+                    }
+                } else {
+                    lastStepHadNoEffect = true
+                    pushTurn(
+                        history,
+                        raw,
+                        "ACTION RESULT: [NO_EFFECT] ${decision.action} was dispatched but the screen did not change. Pick a different approach."
+                    )
+                }
+            }
 
             // Recovery safeguard
             if (recovery.shouldRecover) {
@@ -413,6 +494,34 @@ class TaskExecutor(
             message = "Reached the maximum of $maxSteps steps without completing the goal.",
             stepsUsed = step
         )
+    }
+
+    fun shouldAttachScreenshot(nodes: List<ScreenNode>, lastStepHadNoEffect: Boolean): Boolean =
+        Companion.shouldAttachScreenshot(nodes, lastStepHadNoEffect)
+
+    private suspend fun _decideNextStep(
+        goal: String,
+        screenDescription: String,
+        nodes: List<ScreenNode>,
+        history: List<Pair<String, String>>,
+        lastStepHadNoEffect: Boolean
+    ): String {
+        val screenshot = if (shouldAttachScreenshot(nodes, lastStepHadNoEffect)) {
+            try {
+                automation.takeScreenshotJpeg()
+            } catch (e: Throwable) {
+                logWarn("Screenshot capture skipped: ${e.message}")
+                null
+            }
+        } else {
+            null
+        }
+        val visionFn = thinkWithVision
+        if (screenshot != null && visionFn != null) {
+            return visionFn(goal, screenDescription, history, screenshot)
+        }
+        val thinkFn = think ?: throw IllegalStateException("No think function provided")
+        return thinkFn(goal, screenDescription, history)
     }
 
     private suspend fun _performAction(step: TaskStep, nodes: List<ScreenNode>): Boolean {
@@ -447,7 +556,8 @@ class TaskExecutor(
                 TaskStep.ACTION_PRESS_BACK -> automation.pressBack()
                 TaskStep.ACTION_PRESS_HOME -> automation.pressHome()
                 TaskStep.ACTION_OPEN_APP -> {
-                    val query = step.stringParam("app") ?: step.stringParam("package") ?: ""
+                    val query = (step.stringParam("app") ?: step.stringParam("package") ?: "").trim()
+                    if (query.isEmpty()) return false
                     automation.openApp(query) != null
                 }
                 TaskStep.ACTION_WAIT -> {
@@ -491,5 +601,56 @@ class TaskExecutor(
 
     companion object {
         private const val TAG = "TaskExecutor"
+
+        fun computeNodeSignature(nodes: List<ScreenNode>): Int =
+            nodes.joinToString("|") {
+                "${it.className}:${it.text}:${it.contentDescription}:${it.left},${it.top},${it.right},${it.bottom}:${it.isClickable}:${it.isEditable}"
+            }.hashCode()
+
+        fun verifyEffect(
+            step: TaskStep,
+            prePackage: String,
+            preSignature: Int,
+            postPackage: String,
+            postSignature: Int
+        ): Boolean {
+            return when (step.action) {
+                TaskStep.ACTION_OPEN_APP -> {
+                    val targetQuery = (step.stringParam("app") ?: step.stringParam("package") ?: "").trim()
+                    if (targetQuery.isEmpty() || postPackage.isEmpty()) return false
+                    if (postPackage == "io.github.ryoaonetsuki.mira" && !targetQuery.contains("mira", ignoreCase = true)) {
+                        return false
+                    }
+                    val resolvedCandidates = ScreenAutomationService.resolveKnownAppPackages(targetQuery)
+                    val matchesTarget = postPackage.contains(targetQuery, ignoreCase = true) ||
+                        resolvedCandidates.any {
+                            postPackage.equals(it, ignoreCase = true) || postPackage.contains(it, ignoreCase = true)
+                        }
+                    postPackage != prePackage || matchesTarget
+                }
+                TaskStep.ACTION_CLICK_TEXT,
+                TaskStep.ACTION_CLICK_AT,
+                TaskStep.ACTION_TYPE_TEXT,
+                TaskStep.ACTION_SCROLL,
+                TaskStep.ACTION_SWIPE,
+                TaskStep.ACTION_PRESS_BACK,
+                TaskStep.ACTION_PRESS_HOME,
+                TaskStep.ACTION_PRESS_ENTER -> {
+                    postPackage != prePackage || postSignature != preSignature
+                }
+                else -> true
+            }
+        }
+
+        fun shouldAttachScreenshot(nodes: List<ScreenNode>, lastStepHadNoEffect: Boolean): Boolean {
+            if (nodes.isEmpty()) return true
+            if (lastStepHadNoEffect) return true
+            val clickableNodes = nodes.filter { it.isClickable }
+            if (clickableNodes.isNotEmpty()) {
+                val unlabeledCount = clickableNodes.count { it.text.isBlank() && it.contentDescription.isBlank() }
+                if (unlabeledCount * 2 > clickableNodes.size) return true
+            }
+            return false
+        }
     }
 }

@@ -65,6 +65,7 @@ fun SkillsScreen(
     }
 
     var runningGoal by remember { mutableStateOf<String?>(null) }
+    var runningDetail by remember { mutableStateOf<String?>(null) }
     var statusMessage by remember { mutableStateOf<String?>(null) }
 
     var skillToRename by remember { mutableStateOf<Skill?>(null) }
@@ -105,11 +106,16 @@ fun SkillsScreen(
             return
         }
         runningGoal = skill.goal
+        runningDetail = null
         statusMessage = null
         scope.launch(Dispatchers.IO) {
             try {
                 val bridge = MiraAutomationBridge.getInstance(context)
-                val result = bridge.executeSkill(skill)
+                val result = bridge.executeSkill(skill) { _, desc ->
+                    scope.launch(Dispatchers.Main) {
+                        runningDetail = desc
+                    }
+                }
                 withContext(Dispatchers.Main) {
                     statusMessage = when (result.status) {
                         TaskStatus.SUCCESS ->
@@ -131,6 +137,7 @@ fun SkillsScreen(
             } finally {
                 withContext(Dispatchers.Main) {
                     runningGoal = null
+                    runningDetail = null
                 }
             }
         }
@@ -415,7 +422,7 @@ fun SkillsScreen(
                                         color = palette.textPrimary
                                     )
                                     Text(
-                                        text = runningGoal.orEmpty(),
+                                        text = if (runningDetail.isNullOrBlank()) runningGoal.orEmpty() else "${runningGoal.orEmpty()} — $runningDetail",
                                         fontSize = 12.sp,
                                         color = palette.textSecondary,
                                         maxLines = 1,

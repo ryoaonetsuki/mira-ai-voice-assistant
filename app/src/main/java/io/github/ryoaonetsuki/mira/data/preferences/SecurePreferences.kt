@@ -83,16 +83,6 @@ class SecurePreferences(context: Context) {
         return true
     }
 
-    fun getPinCode(): String? {
-        return sharedPreferences?.getString(KEY_PIN_CODE, null)
-    }
-
-    fun setPinCode(pin: String): Boolean {
-        val sp = sharedPreferences ?: return false
-        sp.edit().putString(KEY_PIN_CODE, pin.trim()).apply()
-        return true
-    }
-
     fun isFaceLockEnabled(): Boolean {
         return sharedPreferences?.getBoolean(KEY_FACE_LOCK, false) ?: false
     }
@@ -163,7 +153,6 @@ class SecurePreferences(context: Context) {
         private const val TAG = "SecurePreferences"
         private const val PREFS_FILENAME = "mira_encrypted_prefs"
         private const val KEY_GEMINI_API_KEY = "gemini_api_key"
-        private const val KEY_PIN_CODE = "pin_code"
         private const val KEY_TELEGRAM_CHAT_ID = "telegram_chat_id"
         private const val KEY_FACE_LOCK = "face_lock_enabled"
         private const val KEY_LICENCE_KEY = "licence_key"

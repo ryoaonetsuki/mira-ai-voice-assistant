@@ -12,7 +12,6 @@ import android.os.Bundle
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
-import android.speech.tts.TextToSpeech
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -250,21 +249,6 @@ fun ChatScreen(
     var imageGenStage by remember { mutableStateOf("Sketching it out...") }
     var activeGenerationJob by remember { mutableStateOf<Job?>(null) }
 
-    // TTS
-    var tts by remember { mutableStateOf<TextToSpeech?>(null) }
-    DisposableEffect(context) {
-        var ttsInstance: TextToSpeech? = null
-        ttsInstance = TextToSpeech(context) { status ->
-            if (status == TextToSpeech.SUCCESS) {
-                tts = ttsInstance
-            }
-        }
-        onDispose {
-            ttsInstance?.stop()
-            ttsInstance?.shutdown()
-        }
-    }
-
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -280,15 +264,6 @@ fun ChatScreen(
             lifecycleOwner.lifecycle.removeObserver(observer)
             ChatVisibilityTracker.isVisible = false
         }
-    }
-
-    fun speakMessage(text: String) {
-        val clean = text.replace(Regex("```[\\s\\S]*?```"), "")
-            .replace(Regex("[#*_`\\[\\]()]"), "")
-            .trim()
-        val bcp47 = LanguageUtils.mapLanguageToBcp47(language)
-        tts?.language = Locale.forLanguageTag(bcp47)
-        tts?.speak(clean, TextToSpeech.QUEUE_FLUSH, null, "mira_chat_tts")
     }
 
     fun stageUri(uri: android.net.Uri, temporaryFile: File? = null) {
@@ -1682,19 +1657,6 @@ fun ChatScreen(
                                                 painter = painterResource(if (liked == false) R.drawable.ic_fluent_thumb_dislike_24_filled else R.drawable.ic_fluent_thumb_dislike_24_regular),
                                                 contentDescription = "Dislike",
                                                 tint = if (liked == false) Color(0xFFEF4444) else palette.textSecondary,
-                                                modifier = Modifier.size(15.dp)
-                                            )
-                                        }
-
-                                        // Read Aloud
-                                        IconButton(
-                                            onClick = { speakMessage(answerText) },
-                                            modifier = Modifier.size(30.dp)
-                                        ) {
-                                            Icon(
-                                                painter = painterResource(R.drawable.ic_fluent_speaker_2_24_regular),
-                                                contentDescription = "Read Aloud",
-                                                tint = palette.textSecondary,
                                                 modifier = Modifier.size(15.dp)
                                             )
                                         }

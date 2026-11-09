@@ -78,10 +78,46 @@ class MiraAutomationBridge(
             }
         }
 
+        val thinkVisionLambda: suspend (String, String, List<Pair<String, String>>, ByteArray) -> String = { currentGoal, screenDescription, history, screenshotBytes ->
+            val key = apiKey()
+            val entities = ArrayList<ChatMessageEntity>(history.size + 1)
+            for ((role, content) in history) {
+                entities.add(
+                    ChatMessageEntity(
+                        conversationId = "automation",
+                        role = if (role == "assistant" || role == "model") "model" else "user",
+                        content = content
+                    )
+                )
+            }
+            entities.add(
+                ChatMessageEntity(
+                    conversationId = "automation",
+                    role = "user",
+                    content = "Goal: $currentGoal\nScreen:\n$screenDescription"
+                )
+            )
+
+            val visionResult = restClient.generateVision(
+                apiKey = key,
+                history = entities,
+                imageBytes = screenshotBytes,
+                systemPrompt = systemPrompt,
+                model = "gemini-3.8-flash",
+                enableThinking = false
+            )
+            if (visionResult.isSuccess) {
+                visionResult.getOrNull()?.text ?: ""
+            } else {
+                throw visionResult.exceptionOrNull() ?: Exception("LLM vision call failed")
+            }
+        }
+
         val executor = TaskExecutor(
             automation = automation,
             skills = skills,
-            think = thinkLambda
+            think = thinkLambda,
+            thinkWithVision = thinkVisionLambda
         )
         activeExecutor = executor
         return try {
@@ -141,15 +177,17 @@ class MiraAutomationBridge(
         }
 
         private val INTENT_PATTERNS = listOf(
-            Regex("""\bplay\s+.+\s+on\s+(youtube|spotify|ইউটিউব|স্পটিফাই)\b""", RegexOption.IGNORE_CASE),
-            Regex("""\bplay\s+.+\b""", RegexOption.IGNORE_CASE),
+            Regex("""\bplay\s+(?:music|song|songs|video|videos|some\s+music)\b""", RegexOption.IGNORE_CASE),
+            Regex("""\bplay\s+.+\s+on\s+(?:youtube|spotify|music|ইউটিউব|স্পটিফাই)\b""", RegexOption.IGNORE_CASE),
             Regex("""\bmessage\s+.+\s+on\s+(whatsapp|মেসেজ|হোয়াটসঅ্যাপ)\b""", RegexOption.IGNORE_CASE),
             Regex("""\btext\s+.+\s+on\s+(whatsapp|মেসেজ|হোয়াটসঅ্যাপ)\b""", RegexOption.IGNORE_CASE),
             Regex("""\bcall\s+.+\s+on\s+(whatsapp|ফোন|হোয়াটসঅ্যাপ)\b""", RegexOption.IGNORE_CASE),
             Regex("""\b(control|operate)\s+(the\s+|my\s+|this\s+)?phone\b""", RegexOption.IGNORE_CASE),
             Regex("""\bphone\s+control\b""", RegexOption.IGNORE_CASE),
-            Regex("""\bফোন\s+(কন্ট্রোল|নিয়ন্ত্রণ)\b""", RegexOption.IGNORE_CASE),
-            Regex("""\b(gaan|gan)\s+(bajao|chalao)\b""", RegexOption.IGNORE_CASE)
+            Regex("""ফোন\s+(কন্ট্রোল|নিয়ন্ত্রণ)""", RegexOption.IGNORE_CASE),
+            Regex("""\b(gaan|gan)\s+(bajao|chalao)\b""", RegexOption.IGNORE_CASE),
+            Regex("""(গান|মিউজিক|music)\s*(চালাও|বাজাও|প্লে\s*করো|শোনাও)""", RegexOption.IGNORE_CASE),
+            Regex("""(.+)\s*(খুলো|খোলো|ওপেন\s*করো|চালু\s*করো|চালাও)""", RegexOption.IGNORE_CASE)
         )
 
         private val ENGLISH_VERBS = setOf(
@@ -159,7 +197,8 @@ class MiraAutomationBridge(
         )
 
         private val BANGLA_VERBS = listOf(
-            "খুলো", "খোলো", "চালাও", "পাঠাও", "কল", "খুঁজো", "কন্ট্রোল", "নিয়ন্ত্রণ"
+            "খুলো", "খোলো", "চালাও", "পাঠাও", "কল", "খুঁজো", "কন্ট্রোল", "নিয়ন্ত্রণ",
+            "ওপেন", "চালু", "বাজাও", "প্লে", "শোনাও", "বন্ধ", "করো", "কর"
         )
 
         private val ROMAN_BENGALI_VERBS = setOf(
@@ -169,10 +208,41 @@ class MiraAutomationBridge(
 
         private val KNOWN_APPS = setOf(
             "youtube", "whatsapp", "maps", "chrome", "camera", "messages",
-            "phone", "gmail", "spotify", "facebook", "settings", "app",
-            "ইউটিউব", "হোয়াটসঅ্যাপ", "ম্যাপস", "ক্রোম", "ক্যামেরা",
-            "মেসেজ", "ফোন", "জিমেইল", "স্পটিফাই", "ফেসবুক", "সেটিংস", "অ্যাপ"
+            "phone", "gmail", "spotify", "facebook", "settings", "app", "music",
+            "ইউটিউব", "গান", "মিউজিক", "স্পটিফাই", "হোয়াটসঅ্যাপ", "ক্রোম",
+            "ক্যামেরা", "সেটিংস", "মেসেজ", "কল", "ফোন", "ফেসবুক", "জিমেইল", "ম্যাপস", "অ্যাপ"
         )
+
+        private val TARGET_APP_CANONICAL_MAP: List<Pair<List<String>, String>> = listOf(
+            listOf("স্পটিফাই", "spotify") to "com.spotify.music",
+            listOf("ইউটিউব", "youtube") to "com.google.android.youtube",
+            listOf("হোয়াটসঅ্যাপ", "whatsapp") to "com.whatsapp",
+            listOf("ক্রোম", "chrome") to "com.android.chrome",
+            listOf("ক্যামেরা", "camera") to "camera",
+            listOf("সেটিংস", "settings") to "com.android.settings",
+            listOf("মেসেজ", "messages") to "messages",
+            listOf("জিমেইল", "gmail") to "com.google.android.gm",
+            listOf("ম্যাপস", "maps") to "com.google.android.apps.maps",
+            listOf("ফেসবুক", "facebook") to "com.facebook.katana",
+            listOf("কল", "ফোন", "phone") to "phone",
+            listOf("গান", "মিউজিক", "music", "gaan", "gan") to "com.google.android.youtube"
+        )
+
+        fun extractTargetApp(text: String): String? {
+            val lower = text.trim().lowercase()
+            if (lower.isEmpty()) return null
+            for ((keywords, canonical) in TARGET_APP_CANONICAL_MAP) {
+                for (keyword in keywords) {
+                    val matched = if (keyword.all { it.isLetterOrDigit() && it.code < 128 }) {
+                        Regex("""\b${Regex.escape(keyword)}""").containsMatchIn(lower)
+                    } else {
+                        lower.contains(keyword)
+                    }
+                    if (matched) return canonical
+                }
+            }
+            return null
+        }
 
         /** Capability-question markers ("korte paro", "can you", "পারো"): asks IF she can, does not command. */
         private val CAPABILITY_QUESTION = listOf(
@@ -187,7 +257,7 @@ class MiraAutomationBridge(
         private val STRONG_ACTION = listOf(
             Regex("""\b(open|launch|start|play|message|text|call|search|find|show|turn\s+on|turn\s+off|set|take\s+a\s+photo)\b""", RegexOption.IGNORE_CASE),
             Regex("""\b(kholo|khulo|chalao|chalaw|pathao|pathaw|bajao|bajaw|dekhao|dekhaw)\b""", RegexOption.IGNORE_CASE),
-            Regex("খুলো|খোলো|চালাও|পাঠাও|কল|খুঁজো")
+            Regex("খুলো|খোলো|চালাও|পাঠাও|কল|খুঁজো|ওপেন|চালু|বাজাও|প্লে|শোনাও")
         )
 
         /** True for "can you control my phone"-style questions that carry no concrete action. */

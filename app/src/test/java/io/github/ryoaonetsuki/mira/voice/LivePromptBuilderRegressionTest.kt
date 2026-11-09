@@ -155,7 +155,7 @@ class LivePromptBuilderRegressionTest {
         assertTrue("Must forbid volunteering identity unprompted",
             prompt.contains("NEVER volunteer") && prompt.contains("unprompted"))
         assertTrue("Must forbid self-introduction greeting", prompt.contains("NEVER greet the user with a self-introduction"))
-        assertTrue("Must forbid unprompted intro at session start", prompt.contains("Do not introduce yourself when the session starts"))
+        assertTrue("Must forbid unprompted intro at session start", prompt.contains("Do not speak at all when the session starts or reconnects"))
         assertTrue("Must forbid stating creator unprompted", prompt.contains("never state your creator or introduce yourself unprompted"))
         // Turn 25: no "EXACTLY" directive in the identity rule
         assertFalse("Identity rule must NOT contain 'EXACTLY'", prompt.contains("EXACTLY"))

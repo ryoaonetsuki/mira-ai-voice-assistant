@@ -142,11 +142,10 @@ class AgentDataLayerTest {
     assertEquals(TaskStep.ACTION_TYPE_TEXT, typeStep?.action)
     assertEquals("cat videos", typeStep?.stringParam("text"))
 
-    // task complete -> done
-    val doneStep = TaskStep.tryParse("The task completed successfully.")
-    assertNotNull(doneStep)
-    assertEquals(TaskStep.ACTION_DONE, doneStep?.action)
-    assertTrue(doneStep?.isComplete ?: false)
+    // F-05: prose heuristic false-done is removed; non-JSON "task completed"/"finished" returns null
+    assertNull(TaskStep.tryParse("The task completed successfully."))
+    assertNull(TaskStep.tryParse("Task complete! I have finished everything."))
+    assertNull(TaskStep.tryParse("Goal complete"))
   }
 
   @Test

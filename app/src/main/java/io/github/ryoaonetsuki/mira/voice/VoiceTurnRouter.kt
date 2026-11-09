@@ -17,7 +17,16 @@ enum class VoiceTurnRoute {
 }
 
 object VoiceTurnRouter {
-    private val STOP_WORDS = setOf("stop", "thamo", "থামো")
+    private val STOP_WORDS = setOf(
+        "stop", "thamo", "থামো",
+        "रुको", "रोको", "روکو", "توقف", "قف",
+        "detén", "para", "arrête", "stopp", "stoppe",
+        "止めて", "ストップ", "멈춰", "중지", "pare",
+        "стоп", "останови", "dur", "durdur", "berhenti",
+        "dừng", "หยุด", "நிறுத்து", "ఆపు", "थांब", "थांबा",
+        "રોકો", "ਰੋਕੋ", "നിർത്തൂ", "ನಿಲ್ಲಿಸು", "ferma",
+        "zatrzymaj", "stoppa", "зупини", "σταμάτα", "停止", "停"
+    )
 
     fun route(
         text: String,

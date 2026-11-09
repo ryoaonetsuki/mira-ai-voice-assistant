@@ -3,7 +3,13 @@
 package io.github.ryoaonetsuki.mira.automation.agent
 
 import android.util.Log
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 
 enum class TaskStatus {
@@ -154,9 +160,12 @@ class TaskExecutor(
     private val think: (suspend (goal: String, screenDescription: String, history: List<Pair<String, String>>) -> String)? = null,
     private val maxSteps: Int = 15,
     private val stepDelayMs: Long = 600,
-    private val onProgress: ((step: Int, description: String) -> Unit)? = null,
+    var onProgress: ((step: Int, description: String) -> Unit)? = null,
     private val thinkWithVision: (suspend (goal: String, screenDescription: String, history: List<Pair<String, String>>, screenshotJpeg: ByteArray) -> String)? = null,
-    private val taskTimeoutMs: Long = DEFAULT_TASK_TIMEOUT_MS
+    private val taskTimeoutMs: Long = DEFAULT_TASK_TIMEOUT_MS,
+    private val thinkTimeoutMs: Long = DEFAULT_THINK_TIMEOUT_MS,
+    private val clockMs: () -> Long = { System.currentTimeMillis() },
+    private val phaseWarningThresholdSec: Long = DEFAULT_PHASE_WARNING_THRESHOLD_SEC
 ) {
     private val settleDelayMs: Long = if (stepDelayMs == 0L) 0L else 700L
     private val openAppSettleDelayMs: Long = if (stepDelayMs == 0L) 0L else 1200L
@@ -167,6 +176,47 @@ class TaskExecutor(
 
     @Volatile
     private var _cancelRequested: Boolean = false
+
+    @Volatile
+    private var _currentStep: Int = 0
+    val currentStep: Int get() = _currentStep
+
+    @Volatile
+    private var _currentPhase: String = "idle"
+    val currentPhase: String get() = _currentPhase
+
+    @Volatile
+    private var _phaseStartTimeMs: Long = 0L
+    val phaseStartTimeMs: Long get() = _phaseStartTimeMs
+
+    @Volatile
+    private var _phaseDetail: String = ""
+    val phaseDetail: String get() = _phaseDetail
+
+    @Volatile
+    private var _lastDiagnosis: String? = null
+    val lastDiagnosis: String? get() = _lastDiagnosis
+
+    @Volatile
+    private var _lastError: String? = null
+    val lastError: String? get() = _lastError
+
+    @Volatile
+    private var lastActionError: String? = null
+
+    private fun enterPhase(phase: String, step: Int, detail: String = "") {
+        _currentPhase = phase
+        _currentStep = step
+        _phaseDetail = detail
+        _phaseStartTimeMs = clockMs()
+        val text = if (detail.isNotBlank()) detail else phase
+        onProgress?.invoke(step, text)
+    }
+
+    private fun recordDiagnosis(diag: String) {
+        _lastDiagnosis = diag
+        _lastError = diag
+    }
 
     private val recovery = RecoveryEngine()
 
@@ -180,25 +230,64 @@ class TaskExecutor(
         }
         _isRunning = true
         _cancelRequested = false
+        _lastDiagnosis = null
+        _lastError = null
+        lastActionError = null
+        _currentStep = 0
+        _currentPhase = "starting"
+        _phaseDetail = goal
+        _phaseStartTimeMs = clockMs()
         recovery.reset()
 
         try {
             val timedResult = withTimeoutOrNull(taskTimeoutMs) {
-                executeGoalInternal(goal)
+                coroutineScope {
+                    val phaseWatcher = launch {
+                        while (isActive) {
+                            delay(1000L)
+                            val start = _phaseStartTimeMs
+                            if (start > 0L) {
+                                val elapsedSec = (clockMs() - start) / 1000L
+                                if (elapsedSec >= phaseWarningThresholdSec) {
+                                    val detailSuffix = if (_phaseDetail.isNotBlank()) " — ${_phaseDetail}" else ""
+                                    val warning = "Still ${_currentPhase}… (${elapsedSec}s)$detailSuffix"
+                                    _lastDiagnosis = warning
+                                    onProgress?.invoke(_currentStep, warning)
+                                }
+                            }
+                        }
+                    }
+                    try {
+                        executeGoalInternal(goal)
+                    } finally {
+                        phaseWatcher.cancel()
+                    }
+                }
             }
             if (timedResult == null) {
                 _cancelRequested = true
-                logWarn("Task '$goal' timed out after ${taskTimeoutMs}ms")
+                val step = _currentStep
+                val phase = _currentPhase
+                val timeoutMsg = when (phase) {
+                    "thinking" -> "Timed out while waiting for the AI reply (step $step, think call exceeded ${thinkTimeoutMs / 1000}s)"
+                    "observing" -> "Timed out during screen read (step $step, dumpScreen exceeded cap)"
+                    "acting" -> "Timed out while executing action (step $step, ${_phaseDetail.ifEmpty { "action hung" }})"
+                    else -> "Task timed out after ${taskTimeoutMs / 1000}s during $phase (step $step)"
+                }
+                recordDiagnosis(timeoutMsg)
+                logWarn("Task '$goal' timed out after ${taskTimeoutMs}ms: $timeoutMsg")
                 return TaskResult(
                     status = TaskStatus.FAILED,
-                    message = "Task timed out after 120s",
-                    stepsUsed = 0
+                    message = timeoutMsg,
+                    stepsUsed = step
                 )
             }
             return timedResult
         } finally {
             _isRunning = false
             _cancelRequested = false
+            _currentPhase = "idle"
+            _phaseStartTimeMs = 0L
         }
     }
 
@@ -244,25 +333,64 @@ class TaskExecutor(
         }
         _isRunning = true
         _cancelRequested = false
+        _lastDiagnosis = null
+        _lastError = null
+        lastActionError = null
+        _currentStep = 0
+        _currentPhase = "starting"
+        _phaseDetail = skill.goal
+        _phaseStartTimeMs = clockMs()
         recovery.reset()
 
         try {
             val timedResult = withTimeoutOrNull(taskTimeoutMs) {
-                replaySkillDirectInternal(skill)
+                coroutineScope {
+                    val phaseWatcher = launch {
+                        while (isActive) {
+                            delay(1000L)
+                            val start = _phaseStartTimeMs
+                            if (start > 0L) {
+                                val elapsedSec = (clockMs() - start) / 1000L
+                                if (elapsedSec >= phaseWarningThresholdSec) {
+                                    val detailSuffix = if (_phaseDetail.isNotBlank()) " — ${_phaseDetail}" else ""
+                                    val warning = "Still ${_currentPhase}… (${elapsedSec}s)$detailSuffix"
+                                    _lastDiagnosis = warning
+                                    onProgress?.invoke(_currentStep, warning)
+                                }
+                            }
+                        }
+                    }
+                    try {
+                        replaySkillDirectInternal(skill)
+                    } finally {
+                        phaseWatcher.cancel()
+                    }
+                }
             }
             if (timedResult == null) {
                 _cancelRequested = true
-                logWarn("Skill replay '${skill.goal}' timed out after ${taskTimeoutMs}ms")
+                val step = _currentStep
+                val phase = _currentPhase
+                val timeoutMsg = when {
+                    phase == "observing" -> "Timed out during screen read (replay step $step, dumpScreen exceeded cap)"
+                    phase == "acting" -> "Timed out while executing action (replay step $step, ${_phaseDetail.ifEmpty { "action hung" }})"
+                    phase.startsWith("replaying") -> "Timed out during $phase (${_phaseDetail.ifEmpty { "step hung" }})"
+                    else -> "Task timed out after ${taskTimeoutMs / 1000}s during $phase (step $step)"
+                }
+                recordDiagnosis(timeoutMsg)
+                logWarn("Skill replay '${skill.goal}' timed out after ${taskTimeoutMs}ms: $timeoutMsg")
                 return TaskResult(
                     status = TaskStatus.FAILED,
-                    message = "Task timed out after 120s",
-                    stepsUsed = 0
+                    message = timeoutMsg,
+                    stepsUsed = step
                 )
             }
             return timedResult
         } finally {
             _isRunning = false
             _cancelRequested = false
+            _currentPhase = "idle"
+            _phaseStartTimeMs = 0L
         }
     }
 
@@ -313,9 +441,10 @@ class TaskExecutor(
                 TaskStatus.CANCELLED -> aiResult
                 TaskStatus.FAILED -> {
                     skills.markReplayOutcome(skill.id, false)
+                    val replayDiag = _lastDiagnosis?.let { " ($it)" }.orEmpty()
                     TaskResult(
                         status = TaskStatus.FAILED,
-                        message = "Skill replay failed and AI fallback could not complete the goal: ${aiResult.message}",
+                        message = "Skill replay failed$replayDiag and AI fallback could not complete the goal: ${aiResult.message}",
                         stepsUsed = aiResult.stepsUsed
                     )
                 }
@@ -323,10 +452,11 @@ class TaskExecutor(
         }
 
         skills.markReplayOutcome(skill.id, false)
+        val diag = _lastDiagnosis ?: "Skill replay failed during execution. Please re-record the macro."
         return TaskResult(
             status = TaskStatus.FAILED,
-            message = "Skill replay failed during execution. Please re-record the macro.",
-            stepsUsed = 0
+            message = diag,
+            stepsUsed = _currentStep
         )
     }
 
@@ -341,10 +471,14 @@ class TaskExecutor(
         for (step in skill.steps) {
             if (_cancelRequested) return false
             stepCount++
-            onProgress?.invoke(stepCount, "Replaying: ${step.action}")
+            _currentStep = stepCount
+            enterPhase("replaying step $stepCount", stepCount, "Replaying: ${step.action}")
 
+            enterPhase("observing", stepCount, "reading screen (step $stepCount)")
             var preNodes = try {
                 automation.getScreenElements()
+            } catch (e: CancellationException) {
+                throw e
             } catch (_: Throwable) {
                 emptyList()
             }
@@ -353,24 +487,31 @@ class TaskExecutor(
 
             val blocked = AutomationSafety.isBlocked(step, prePackage.ifEmpty { null })
             if (blocked != null) {
+                recordDiagnosis("Replayed step blocked for safety: $blocked")
                 logWarn("Replayed step blocked for safety: $blocked")
                 return false
             }
 
             if (step.action == TaskStep.ACTION_WAIT || step.action == TaskStep.ACTION_DONE) {
+                enterPhase("acting", stepCount, "executing ${step.action} (step $stepCount)")
                 _performAction(step, preNodes)
                 delay(stepDelayMs)
                 continue
             }
 
             // (i) Dispatch with one retry after re-dumping the screen
+            enterPhase("acting", stepCount, "executing ${step.action} (step $stepCount)")
             var ok = _performAction(step, preNodes)
             if (!ok) {
-                logWarn("Replayed step $stepCount/$totalSteps (${step.action}) dispatch failed on attempt 1 — re-dumping screen and retrying once")
+                val reason = lastActionError ?: "${step.action} dispatch failed"
+                logWarn("Replayed step $stepCount/$totalSteps (${step.action}) dispatch failed ($reason) on attempt 1 — re-dumping screen and retrying once")
                 delay(stepDelayMs)
                 if (_cancelRequested) return false
+                enterPhase("observing", stepCount, "re-reading screen for retry (step $stepCount)")
                 preNodes = try {
                     automation.getScreenElements()
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (_: Throwable) {
                     emptyList()
                 }
@@ -378,21 +519,28 @@ class TaskExecutor(
                 preSignature = computeNodeSignature(preNodes)
                 val retryBlocked = AutomationSafety.isBlocked(step, prePackage.ifEmpty { null })
                 if (retryBlocked != null) {
+                    recordDiagnosis("Replayed step blocked for safety on retry: $retryBlocked")
                     logWarn("Replayed step blocked for safety on retry: $retryBlocked")
                     return false
                 }
+                enterPhase("acting", stepCount, "retrying ${step.action} (step $stepCount)")
                 ok = _performAction(step, preNodes)
             }
             if (!ok) {
-                logWarn("Replayed step $stepCount/$totalSteps (${step.action}) dispatch failed after retry — aborting replay")
+                val reason = lastActionError ?: "${step.action} dispatch failed"
+                recordDiagnosis("Macro replay step $stepCount failed: $reason")
+                logWarn("Replayed step $stepCount/$totalSteps (${step.action}) dispatch failed after retry ($reason) — aborting replay")
                 return false
             }
 
             // (ii) Verify effect; if no effect, retry once, then skip non-critical or fail critical
             val waitMs = if (step.action == TaskStep.ACTION_OPEN_APP) openAppSettleDelayMs else settleDelayMs
             delay(waitMs)
+            enterPhase("observing", stepCount, "verifying effect (step $stepCount)")
             var postNodes = try {
                 automation.getScreenElements()
+            } catch (e: CancellationException) {
+                throw e
             } catch (_: Throwable) {
                 emptyList()
             }
@@ -408,14 +556,19 @@ class TaskExecutor(
                 preSignature = postSignature
                 val retryBlocked = AutomationSafety.isBlocked(step, prePackage.ifEmpty { null })
                 if (retryBlocked != null) {
+                    recordDiagnosis("Replayed step blocked for safety on effect retry: $retryBlocked")
                     logWarn("Replayed step blocked for safety on effect retry: $retryBlocked")
                     return false
                 }
+                enterPhase("acting", stepCount, "retrying ${step.action} for effect verification (step $stepCount)")
                 val retryDispatched = _performAction(step, preNodes)
                 if (retryDispatched) {
                     delay(waitMs)
+                    enterPhase("observing", stepCount, "verifying effect on retry (step $stepCount)")
                     postNodes = try {
                         automation.getScreenElements()
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (_: Throwable) {
                         emptyList()
                     }
@@ -427,7 +580,14 @@ class TaskExecutor(
 
             if (!effectVerified) {
                 if (isCriticalReplayStep(step.action)) {
-                    logWarn("Replayed critical step $stepCount/$totalSteps (${step.action}) had no verified effect after retry — aborting replay")
+                    val detail = if (step.action == TaskStep.ACTION_OPEN_APP) {
+                        val app = (step.stringParam("app") ?: step.stringParam("package") ?: "app").trim()
+                        "failed to open $app (app did not open or enter foreground; current='$postPackage')"
+                    } else {
+                        "critical step ${step.action} had no verified effect"
+                    }
+                    recordDiagnosis("Macro replay step $stepCount failed: $detail")
+                    logWarn("Replayed critical step $stepCount/$totalSteps (${step.action}) had no verified effect after retry — aborting replay: $detail")
                     return false
                 }
                 skippedCount++
@@ -437,7 +597,9 @@ class TaskExecutor(
 
         // (iii) If skipped steps are more than half of all steps, replay overall fails
         if (skippedCount * 2 > totalSteps) {
-            logWarn("Replay failed: skipped $skippedCount of $totalSteps steps (>50%) for '${skill.goal}'")
+            val diag = "Macro replay failed: skipped $skippedCount of $totalSteps steps (>50%) for '${skill.goal}'"
+            recordDiagnosis(diag)
+            logWarn(diag)
             return false
         }
         return stepCount > 0
@@ -464,11 +626,14 @@ class TaskExecutor(
             }
 
             step++
-            onProgress?.invoke(step, "Observing screen (step $step/$maxSteps)...")
+            _currentStep = step
+            enterPhase("observing", step, "Observing screen (step $step/$maxSteps)...")
 
             // --- Observe ---
             val nodes = try {
                 automation.getScreenElements()
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Throwable) {
                 logWarn("Failed to read screen: ${e.message}")
                 delay(stepDelayMs)
@@ -492,13 +657,29 @@ class TaskExecutor(
             }
 
             // --- Think ---
-            onProgress?.invoke(step, "Thinking...")
+            enterPhase("thinking", step, "waiting for AI reply (step $step)")
             val raw: String
             try {
-                raw = _decideNextStep(goal, description, nodes, history, lastStepHadNoEffect)
+                raw = withTimeout(thinkTimeoutMs) {
+                    _decideNextStep(goal, description, nodes, history, lastStepHadNoEffect)
+                }
+            } catch (e: TimeoutCancellationException) {
+                val detail = "think call exceeded ${thinkTimeoutMs / 1000}s"
+                val thinkMsg = "Timed out while waiting for the AI reply (step $step, $detail)"
+                recordDiagnosis(thinkMsg)
+                logWarn(thinkMsg)
+                return TaskResult(
+                    status = TaskStatus.FAILED,
+                    message = thinkMsg,
+                    stepsUsed = step
+                )
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Throwable) {
                 logError("Think step failed: ${e.message}", e)
-                return TaskResult(TaskStatus.FAILED, "AI request failed: ${e.message}", step)
+                val errMsg = "AI request failed: ${e.message}"
+                recordDiagnosis(errMsg)
+                return TaskResult(TaskStatus.FAILED, errMsg, step)
             }
 
             val decision = TaskStep.tryParse(raw)
@@ -506,9 +687,11 @@ class TaskExecutor(
                 parseFailures++
                 logWarn("Could not parse AI output as action JSON (attempt $parseFailures): $raw")
                 if (parseFailures >= 3) {
+                    val giveUpMsg = "Giving up: AI kept replying non-JSON."
+                    recordDiagnosis(giveUpMsg)
                     return TaskResult(
                         status = TaskStatus.FAILED,
-                        message = "Giving up: AI kept replying non-JSON.",
+                        message = giveUpMsg,
                         stepsUsed = step
                     )
                 }
@@ -525,12 +708,13 @@ class TaskExecutor(
             val blockedReason = AutomationSafety.isBlocked(decision, automation.getCurrentPackage())
             if (blockedReason != null) {
                 val blockMessage = "Blocked for safety: $blockedReason — ask me first."
+                recordDiagnosis(blockMessage)
                 logWarn(blockMessage)
                 return TaskResult(TaskStatus.FAILED, blockMessage, step)
             }
 
             // --- Act ---
-            onProgress?.invoke(step, decision.reasoning.ifEmpty { decision.action })
+            enterPhase("acting", step, decision.reasoning.ifEmpty { decision.action })
 
             // F-04 & F-07: Never return SUCCESS on ACTION_DONE when executedSteps (verified effects) is empty
             if (decision.action == TaskStep.ACTION_DONE) {
@@ -560,10 +744,12 @@ class TaskExecutor(
 
             if (!dispatched) {
                 lastStepHadNoEffect = true
+                val reason = lastActionError ?: "${decision.action} dispatch failed"
+                recordDiagnosis("Step $step: $reason")
                 pushTurn(
                     history,
                     raw,
-                    "ACTION RESULT: [NO_EFFECT] ${decision.action} dispatch failed. Pick a different approach."
+                    "ACTION RESULT: [NO_EFFECT] $reason. Pick a different approach."
                 )
             } else if (decision.action == TaskStep.ACTION_WAIT) {
                 lastStepHadNoEffect = false
@@ -574,8 +760,11 @@ class TaskExecutor(
                 )
             } else {
                 delay(if (decision.action == TaskStep.ACTION_OPEN_APP) openAppSettleDelayMs else settleDelayMs)
+                enterPhase("observing", step, "verifying effect of ${decision.action} (step $step)")
                 val postNodes = try {
                     automation.getScreenElements()
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (_: Throwable) {
                     emptyList()
                 }
@@ -642,6 +831,8 @@ class TaskExecutor(
         val screenshot = if (shouldAttachScreenshot(nodes, lastStepHadNoEffect)) {
             try {
                 automation.takeScreenshotJpeg()
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Throwable) {
                 logWarn("Screenshot capture skipped: ${e.message}")
                 null
@@ -658,42 +849,99 @@ class TaskExecutor(
     }
 
     private suspend fun _performAction(step: TaskStep, nodes: List<ScreenNode>): Boolean {
+        lastActionError = null
         return try {
             when (step.action) {
                 TaskStep.ACTION_CLICK_TEXT -> {
                     val text = step.stringParam("text") ?: ""
                     val fallbackX = step.intParam("fallbackX") ?: step.intParam("x")
                     val fallbackY = step.intParam("fallbackY") ?: step.intParam("y")
-                    automation.clickText(text, nodes, fallbackX, fallbackY)
+                    val success = automation.clickText(text, nodes, fallbackX, fallbackY)
+                    if (!success) {
+                        lastActionError = if (fallbackX != null && fallbackY != null) {
+                            "clickText '$text' not found and fallback coordinate tap ($fallbackX, $fallbackY) rejected/timed out"
+                        } else {
+                            "clickText '$text' not found on screen and no fallback coordinates"
+                        }
+                    }
+                    success
                 }
                 TaskStep.ACTION_CLICK_AT -> {
-                    val x = step.intParam("x") ?: return false
-                    val y = step.intParam("y") ?: return false
-                    automation.clickAt(x.toFloat(), y.toFloat())
+                    val x = step.intParam("x") ?: run {
+                        lastActionError = "click_at missing x coordinate"
+                        return false
+                    }
+                    val y = step.intParam("y") ?: run {
+                        lastActionError = "click_at missing y coordinate"
+                        return false
+                    }
+                    val success = automation.clickAt(x.toFloat(), y.toFloat())
+                    if (!success) {
+                        lastActionError = "click_at ($x, $y) failed (gesture rejected or callback timed out)"
+                    }
+                    success
                 }
                 TaskStep.ACTION_TYPE_TEXT -> {
-                    val text = step.stringParam("text") ?: return false
-                    automation.typeText(text)
+                    val text = step.stringParam("text") ?: run {
+                        lastActionError = "type_text missing text param"
+                        return false
+                    }
+                    val success = automation.typeText(text)
+                    if (!success) {
+                        lastActionError = "type_text failed (no focused editable field)"
+                    }
+                    success
                 }
-                TaskStep.ACTION_PRESS_ENTER -> automation.pressEnter()
+                TaskStep.ACTION_PRESS_ENTER -> {
+                    val success = automation.pressEnter()
+                    if (!success) {
+                        lastActionError = "press_enter failed"
+                    }
+                    success
+                }
                 TaskStep.ACTION_SCROLL -> {
                     val dir = step.stringParam("direction") ?: "down"
-                    automation.scroll(dir)
+                    val success = automation.scroll(dir)
+                    if (!success) {
+                        lastActionError = "scroll '$dir' failed (gesture rejected or callback timed out)"
+                    }
+                    success
                 }
                 TaskStep.ACTION_SWIPE -> {
-                    val sx = step.intParam("startX") ?: return false
-                    val sy = step.intParam("startY") ?: return false
-                    val ex = step.intParam("endX") ?: return false
-                    val ey = step.intParam("endY") ?: return false
+                    val sx = step.intParam("startX") ?: run { lastActionError = "swipe missing startX"; return false }
+                    val sy = step.intParam("startY") ?: run { lastActionError = "swipe missing startY"; return false }
+                    val ex = step.intParam("endX") ?: run { lastActionError = "swipe missing endX"; return false }
+                    val ey = step.intParam("endY") ?: run { lastActionError = "swipe missing endY"; return false }
                     val duration = (step.intParam("durationMs") ?: 350).toLong()
-                    automation.swipe(sx.toFloat(), sy.toFloat(), ex.toFloat(), ey.toFloat(), duration)
+                    val success = automation.swipe(sx.toFloat(), sy.toFloat(), ex.toFloat(), ey.toFloat(), duration)
+                    if (!success) {
+                        lastActionError = "swipe failed (gesture rejected or callback timed out)"
+                    }
+                    success
                 }
-                TaskStep.ACTION_PRESS_BACK -> automation.pressBack()
-                TaskStep.ACTION_PRESS_HOME -> automation.pressHome()
+                TaskStep.ACTION_PRESS_BACK -> {
+                    val success = automation.pressBack()
+                    if (!success) lastActionError = "press_back failed"
+                    success
+                }
+                TaskStep.ACTION_PRESS_HOME -> {
+                    val success = automation.pressHome()
+                    if (!success) lastActionError = "press_home failed"
+                    success
+                }
                 TaskStep.ACTION_OPEN_APP -> {
                     val query = (step.stringParam("app") ?: step.stringParam("package") ?: "").trim()
-                    if (query.isEmpty()) return false
-                    automation.openApp(query) != null
+                    if (query.isEmpty()) {
+                        lastActionError = "open_app target not specified"
+                        return false
+                    }
+                    val launched = automation.openApp(query)
+                    if (launched == null) {
+                        lastActionError = "could not resolve or launch app '$query'"
+                        false
+                    } else {
+                        true
+                    }
                 }
                 TaskStep.ACTION_WAIT -> {
                     val ms = (step.intParam("ms") ?: 1500).coerceIn(100, 10000).toLong()
@@ -701,9 +949,15 @@ class TaskExecutor(
                     true
                 }
                 TaskStep.ACTION_DONE -> true
-                else -> false
+                else -> {
+                    lastActionError = "unknown action: ${step.action}"
+                    false
+                }
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Throwable) {
+            lastActionError = "${step.action} threw: ${e.message}"
             logError("Action ${step.action} threw: ${e.message}", e)
             false
         }
@@ -737,12 +991,15 @@ class TaskExecutor(
     companion object {
         private const val TAG = "TaskExecutor"
         const val DEFAULT_TASK_TIMEOUT_MS: Long = 120_000L
+        const val DEFAULT_THINK_TIMEOUT_MS: Long = 45_000L
+        const val DEFAULT_PHASE_WARNING_THRESHOLD_SEC: Long = 20L
+        const val MAX_SIGNATURE_NODES: Int = 200
 
         fun isCriticalReplayStep(action: String): Boolean =
             action == TaskStep.ACTION_OPEN_APP || action == TaskStep.ACTION_TYPE_TEXT
 
         fun computeNodeSignature(nodes: List<ScreenNode>): Int =
-            nodes.joinToString("|") {
+            nodes.take(MAX_SIGNATURE_NODES).joinToString("|") {
                 "${it.className}:${it.text}:${it.contentDescription}:${it.left},${it.top},${it.right},${it.bottom}:${it.isClickable}:${it.isEditable}"
             }.hashCode()
 

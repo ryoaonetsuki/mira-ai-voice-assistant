@@ -3,12 +3,17 @@ package io.github.ryoaonetsuki.mira.identity
 import java.util.Locale
 
 /**
- * Layer 2 — Output Filter for Gemini model responses and transcripts.
+ * Repair-only output filter for Gemini model responses and transcripts.
  *
- * 1. Forbidden token replacement: replaces whole response with exact short identity sentence.
- * 2. Long identity replacement: replaces long identity / developer answers with exact short canned answer.
- * 3. Bare URL rewrite: rewrites bare occurrences of GitHub profile into markdown anchor [GitHub](url) in chat,
- *    and into spoken word "GitHub" in voice (never speaks URLs aloud).
+ * 1. Forbidden-token repair: when a sentence contains a forbidden vendor token
+ *    (Gemini, Google, LLM, etc.) the offending sentence is replaced in-place with
+ *    a short identity repair string; the rest of the model answer is preserved unchanged.
+ *    A good model answer in the model's own words is NEVER replaced wholesale.
+ * 2. (Removed) Long-identity replacement — superseded. Short, natural answers are
+ *    taught via prompt layers; the filter no longer enforces verbatim replacement.
+ * 3. Bare-URL rewrite: bare occurrences of the GitHub profile URL become a markdown
+ *    anchor [GitHub](url) in chat; in voice they become the spoken word "GitHub" only.
+ *    Never speaks URLs aloud.
  */
 object MiraOutputFilter {
 
@@ -23,102 +28,78 @@ object MiraOutputFilter {
     )
 
     /**
-     * Sanitizes chat response text against forbidden identity tokens, long identity dumps,
-     * and bare GitHub URLs.
+     * Sanitizes chat response text: repairs forbidden-token sentences in place,
+     * and rewrites bare GitHub URLs to markdown anchors.
      */
     fun sanitize(responseText: String): String {
         return sanitizeInternal(responseText, forVoice = false)
     }
 
     /**
-     * Sanitizes voice transcript / TTS text. Drops URLs completely so nothing URL-like is ever spoken aloud.
+     * Sanitizes voice transcript / TTS text. Drops URLs completely so nothing URL-like
+     * is ever spoken aloud.
      */
     fun sanitizeForVoice(responseText: String): String {
         return sanitizeInternal(responseText, forVoice = true)
     }
 
     private fun sanitizeInternal(responseText: String, forVoice: Boolean): String {
-        val lower = responseText.lowercase(Locale.ROOT)
-        val containsForbidden = FORBIDDEN_TOKENS.any { lower.contains(it) }
+        // 1. Forbidden-token REPAIR: replace only the offending sentence(s) in place.
+        val repaired = repairForbiddenTokens(responseText)
 
-        // 1. Forbidden model / vendor tokens -> whole response replaced with exact canonical identity
-        if (containsForbidden) {
-            val isBangla = responseText.any { it in '\u0980'..'\u09FF' }
-            return if (isBangla) {
-                IdentityProfile.identityTemplateBangla
-            } else {
-                IdentityProfile.identityTemplate
-            }
-        }
+        // 2. (Step 2 removed — no long-identity wholesale replacement.)
 
-        val isBangla = responseText.any { it in '\u0980'..'\u09FF' }
-
-        // 2. Long-identity replacement: if response has identity-answer shape and is long
-        val hasIdentityShape = isIdentityAnswer(responseText)
-        val hasDeveloperShape = isDeveloperAnswer(responseText)
-
-        if ((hasIdentityShape || hasDeveloperShape) && isLongIdentityAnswer(responseText)) {
-            return if (hasIdentityShape) {
-                if (isBangla) IdentityProfile.IDENTITY_BANGLA else IdentityProfile.IDENTITY_ENGLISH
-            } else {
-                if (forVoice) {
-                    if (isBangla) IdentityProfile.DEVELOPER_BANGLA_VOICE else IdentityProfile.DEVELOPER_ENGLISH_VOICE
-                } else {
-                    if (isBangla) IdentityProfile.DEVELOPER_BANGLA_CHAT else IdentityProfile.DEVELOPER_ENGLISH_CHAT
-                }
-            }
-        }
-
-        // 3. Bare-URL rewrite
+        // 3. Bare-URL rewrite.
         return if (forVoice) {
-            rewriteUrlsForVoice(responseText)
+            rewriteUrlsForVoice(repaired)
         } else {
-            rewriteUrlsForChat(responseText)
+            rewriteUrlsForChat(repaired)
         }
     }
 
-    private fun countSentences(text: String): Int {
-        val textWithoutUrls = text.replace(Regex("https?://\\S+"), "")
-        val trimmed = textWithoutUrls.trim()
-        if (trimmed.isEmpty()) return 0
-        val sentences = trimmed.split(Regex("[।!?\\n]+|\\.\\s+")).filter { it.trim().isNotEmpty() }
-        return sentences.size
-    }
-
-    private fun isLongIdentityAnswer(text: String): Boolean {
-        // Canonical short answers are <= 73 chars and <= 2 sentences.
-        // A response is long if over 100 chars, more than 2 sentences, or dumps GitHub profile link.
-        return text.length > 100 || countSentences(text) > 2 || text.contains("github.com/ryoaonetsuki", ignoreCase = true)
-    }
-
-    private fun isIdentityAnswer(text: String): Boolean {
+    /**
+     * Splits the text into sentences, replaces any sentence that contains a forbidden token
+     * with a short in-place repair string, and reassembles. The surrounding text is untouched.
+     */
+    private fun repairForbiddenTokens(text: String): String {
         val lower = text.lowercase(Locale.ROOT)
-        return text.contains("আমি মিরা") ||
-                text.contains("আমার নাম মিরা") ||
-                text.contains("আমি mira", ignoreCase = true) ||
-                lower.contains("i am mira") ||
-                lower.contains("i'm mira") ||
-                lower.contains("my name is mira")
+        if (FORBIDDEN_TOKENS.none { lower.contains(it) }) return text
+
+        val isBangla = text.any { it in '\u0980'..'\u09FF' }
+        val repairSentence = if (isBangla) {
+            IdentityProfile.identityTemplateBangla
+        } else {
+            IdentityProfile.identityTemplate
+        }
+
+        // Split on sentence boundaries (keeping delimiters) so we can repair individual sentences.
+        val parts = splitKeepingDelimiters(text, Regex("[।!?]|\\.(?:\\s|$)"))
+        val result = StringBuilder()
+        for (part in parts) {
+            val partLower = part.lowercase(Locale.ROOT)
+            if (FORBIDDEN_TOKENS.any { partLower.contains(it) }) {
+                // Replace just this sentence with the repair string.
+                result.append(repairSentence)
+            } else {
+                result.append(part)
+            }
+        }
+        return result.toString().trim()
     }
 
-    private fun isDeveloperAnswer(text: String): Boolean {
-        val lower = text.lowercase(Locale.ROOT)
-        val banglaDeveloper = text.contains("আমার ডেভেলপার") ||
-                text.contains("আমার ক্রিয়েটর") ||
-                text.contains("আমাকে বানিয়ে") ||
-                text.contains("আমাকে তৈরি") ||
-                ((text.contains("বানিয়ে") || text.contains("তৈরি")) &&
-                        (text.contains("আমি") || text.contains("আমাকে") || text.contains("মিরা")) &&
-                        (text.contains("সালমান") || text.contains("বিশ্বাস")))
-
-        val englishDeveloper = lower.contains("my developer") ||
-                lower.contains("my creator") ||
-                lower.contains("who made me") ||
-                ((lower.contains("made by") || lower.contains("created by") || lower.contains("built by") || lower.contains("developed by")) &&
-                        (lower.contains("mira") || lower.contains("i was") || lower.contains("i am") || lower.contains("me")) &&
-                        (lower.contains("salman") || lower.contains("developer")))
-
-        return banglaDeveloper || englishDeveloper
+    /**
+     * Splits [text] by [delimiter], yielding alternating content / delimiter pieces
+     * so the full text can be reconstructed.
+     */
+    private fun splitKeepingDelimiters(text: String, delimiter: Regex): List<String> {
+        val result = mutableListOf<String>()
+        var last = 0
+        for (match in delimiter.findAll(text)) {
+            result.add(text.substring(last, match.range.last + 1))
+            last = match.range.last + 1
+        }
+        if (last < text.length) result.add(text.substring(last))
+        return result
     }
 
     private fun rewriteUrlsForChat(text: String): String {

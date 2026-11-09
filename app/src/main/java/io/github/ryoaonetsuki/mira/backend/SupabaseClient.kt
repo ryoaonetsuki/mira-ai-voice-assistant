@@ -35,6 +35,8 @@ class SupabaseClient(
     private val anonKey: String = resolveAnonKey()
 ) {
     companion object {
+        private const val TAG = "MiraSupabaseClient"
+
         fun resolveBaseUrl(): String =
             try { BuildConfig.SUPABASE_URL } catch (_: Throwable) { "https://zvnfwlqxdbommtozugzt.supabase.co" }
 
@@ -151,9 +153,5 @@ class SupabaseClient(
             Log.e(TAG, "fetchMacros error: ${e.message}", e)
             Result.failure(e)
         }
-    }
-
-    companion object {
-        private const val TAG = "MiraSupabaseClient"
     }
 }

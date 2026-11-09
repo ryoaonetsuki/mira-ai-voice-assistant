@@ -108,6 +108,55 @@ private data class ParsedFunctionCall(
     val args: Map<String, String>
 )
 
+internal class UserTurnTranscriptBuffer {
+    private val buffer = StringBuilder()
+    private var turnDispatched = false
+
+    @Synchronized
+    fun appendChunk(chunk: String): String {
+        if (turnDispatched) {
+            buffer.clear()
+            turnDispatched = false
+        }
+        if (chunk.isNotEmpty()) {
+            if (buffer.isNotEmpty() &&
+                !buffer.last().isWhitespace() &&
+                !chunk.first().isWhitespace()
+            ) {
+                buffer.append(' ')
+            }
+            buffer.append(chunk)
+        }
+        return buffer.toString().trim()
+    }
+
+    @Synchronized
+    fun completeTurn(resetBuffer: Boolean = true): String? {
+        val fullText = buffer.toString().trim()
+        if (resetBuffer) {
+            buffer.clear()
+        }
+        if (fullText.isEmpty() || turnDispatched) {
+            if (resetBuffer) turnDispatched = false
+            return null
+        }
+        turnDispatched = true
+        if (resetBuffer) {
+            turnDispatched = false
+        }
+        return fullText
+    }
+
+    @Synchronized
+    fun reset() {
+        buffer.clear()
+        turnDispatched = false
+    }
+
+    @Synchronized
+    fun peek(): String = buffer.toString().trim()
+}
+
 /**
  * Forked and enhanced OkHttp WebSocket client for Gemini Live (ROUND 19).
  *
@@ -155,6 +204,10 @@ class MiraGeminiClient private constructor(
         fun onSessionResumptionUpdate(handle: String, resumable: Boolean)
         fun onGoAway(timeLeft: String)
         fun onUserTranscript(text: String)
+        fun onUserTranscript(text: String, isFinal: Boolean) {
+            onUserTranscript(text)
+        }
+        fun onTurnComplete() {}
         fun onModelTranscript(text: String)
     }
 
@@ -168,14 +221,16 @@ class MiraGeminiClient private constructor(
         data object SetupCompleteReceived : ClientThreadEvent
         class SessionResumptionUpdateReceived(val handle: String, val resumable: Boolean) : ClientThreadEvent
         class GoAwayReceived(val timeLeft: String) : ClientThreadEvent
-        class UserTranscriptReceived(val text: String) : ClientThreadEvent
+        class UserTranscriptReceived(val text: String, val finished: Boolean = false) : ClientThreadEvent
         class ModelTranscriptReceived(val text: String) : ClientThreadEvent
         class ToolCallReceived(val functionCalls: List<ParsedFunctionCall>) : ClientThreadEvent
         class ServerContentReceived(
             val modelParts: List<ParsedTurnPart>,
             val interrupted: Boolean,
             val turnComplete: Boolean,
+            val generationComplete: Boolean = false,
             val userInputTranscript: String?,
+            val userInputFinished: Boolean = false,
             val modelTranscript: String?
         ) : ClientThreadEvent
         class SetMicMute(val muted: Boolean) : ClientThreadEvent
@@ -190,6 +245,7 @@ class MiraGeminiClient private constructor(
             val events = LinkedBlockingQueue<ClientThreadEvent>()
             val isMicMutedRef = AtomicReference<(() -> Boolean)?>(null)
             val outputGate = io.github.ryoaonetsuki.mira.voice.ModelAudioGate()
+            val userTurnBuffer = UserTurnTranscriptBuffer()
 
             fun postEvent(event: ClientThreadEvent) = events.put(event)
 
@@ -302,9 +358,14 @@ class MiraGeminiClient private constructor(
                             checkResumptionUpdate(root)
                             checkGoAway(root)
 
-                            if (root.has("inputAudioTranscription")) {
-                                val text = root.getJSONObject("inputAudioTranscription").optString("text")
-                                if (text.isNotBlank()) postEvent(ClientThreadEvent.UserTranscriptReceived(text))
+                            if (root.has("inputAudioTranscription") || root.has("inputTranscription")) {
+                                val inputObj = root.optJSONObject("inputAudioTranscription")
+                                    ?: root.optJSONObject("inputTranscription")
+                                val text = inputObj?.optString("text", "") ?: ""
+                                val finished = inputObj?.optBoolean("finished", false) ?: false
+                                if (text.isNotBlank() || finished) {
+                                    postEvent(ClientThreadEvent.UserTranscriptReceived(text, finished))
+                                }
                             }
 
                             if (root.has("outputAudioTranscription")) {
@@ -320,6 +381,7 @@ class MiraGeminiClient private constructor(
                                 val inputTrans = sc.optJSONObject("inputAudioTranscription")
                                     ?: sc.optJSONObject("inputTranscription")
                                 val inputTransText = inputTrans?.optString("text")?.takeIf { it.isNotBlank() }
+                                val inputTransFinished = inputTrans?.optBoolean("finished", false) ?: false
 
                                 val outputTrans = sc.optJSONObject("outputAudioTranscription")
                                     ?: sc.optJSONObject("outputTranscription")
@@ -327,6 +389,7 @@ class MiraGeminiClient private constructor(
 
                                 val interrupted = sc.optBoolean("interrupted", false)
                                 val turnComplete = sc.optBoolean("turnComplete", false)
+                                val generationComplete = sc.optBoolean("generationComplete", false)
 
                                 val modelTurnParts = mutableListOf<ParsedTurnPart>()
                                 val mt = sc.optJSONObject("modelTurn")
@@ -351,7 +414,9 @@ class MiraGeminiClient private constructor(
                                         modelParts = modelTurnParts,
                                         interrupted = interrupted,
                                         turnComplete = turnComplete,
+                                        generationComplete = generationComplete,
                                         userInputTranscript = inputTransText,
+                                        userInputFinished = inputTransFinished,
                                         modelTranscript = outputTransText
                                     )
                                 )
@@ -542,19 +607,54 @@ class MiraGeminiClient private constructor(
                         }
 
                         is ClientThreadEvent.UserTranscriptReceived -> {
-                            Log.i(TAG, "User transcript: ${event.text}")
-                            listenerRef.get()?.onUserTranscript(event.text)
+                            val accumulated = if (event.text.isNotBlank()) {
+                                userTurnBuffer.appendChunk(event.text)
+                            } else {
+                                userTurnBuffer.peek()
+                            }
+                            if (event.finished) {
+                                val finalTurn = userTurnBuffer.completeTurn(resetBuffer = false) ?: accumulated
+                                if (finalTurn.isNotBlank()) {
+                                    Log.i(TAG, "User transcript (final): $finalTurn")
+                                    listenerRef.get()?.onUserTranscript(finalTurn, true)
+                                }
+                            } else if (accumulated.isNotBlank()) {
+                                Log.i(TAG, "User transcript (partial): $accumulated")
+                                listenerRef.get()?.onUserTranscript(accumulated, false)
+                            }
                         }
 
                         is ClientThreadEvent.ModelTranscriptReceived -> {
+                            userTurnBuffer.completeTurn(resetBuffer = false)?.let { finalTurn ->
+                                listenerRef.get()?.onUserTranscript(finalTurn, true)
+                            }
                             Log.i(TAG, "Model transcript: ${event.text}")
                             listenerRef.get()?.onModelTranscript(event.text)
                         }
 
                         is ClientThreadEvent.ServerContentReceived -> {
                             if (event.userInputTranscript != null) {
-                                listenerRef.get()?.onUserTranscript(event.userInputTranscript)
+                                val accumulated = userTurnBuffer.appendChunk(event.userInputTranscript)
+                                if (event.userInputFinished) {
+                                    val finalTurn = userTurnBuffer.completeTurn(resetBuffer = false) ?: accumulated
+                                    if (finalTurn.isNotBlank()) {
+                                        listenerRef.get()?.onUserTranscript(finalTurn, true)
+                                    }
+                                } else if (accumulated.isNotBlank()) {
+                                    listenerRef.get()?.onUserTranscript(accumulated, false)
+                                }
+                            } else if (event.userInputFinished) {
+                                userTurnBuffer.completeTurn(resetBuffer = false)?.let { finalTurn ->
+                                    listenerRef.get()?.onUserTranscript(finalTurn, true)
+                                }
                             }
+
+                            if (event.modelParts.isNotEmpty() || event.modelTranscript != null) {
+                                userTurnBuffer.completeTurn(resetBuffer = false)?.let { finalTurn ->
+                                    listenerRef.get()?.onUserTranscript(finalTurn, true)
+                                }
+                            }
+
                             if (event.modelTranscript != null) {
                                 listenerRef.get()?.onModelTranscript(event.modelTranscript)
                             }
@@ -583,6 +683,8 @@ class MiraGeminiClient private constructor(
 
                             if (event.interrupted) {
                                 Log.i(TAG, "User interrupted model output")
+                                userTurnBuffer.reset()
+                                listenerRef.get()?.onTurnComplete()
                                 echoRouter.onInterrupted()
                                 isUserTalking = true
                                 listenerRef.get()?.onUserTalking(true)
@@ -590,13 +692,19 @@ class MiraGeminiClient private constructor(
                                 audioOut.interrupt()
                             }
 
-                            if (event.turnComplete) {
-                                Log.d(TAG, "Model turn complete")
-                                echoRouter.onTurnComplete()
-                                listenerRef.get()?.onBotTalking(false)
-                                if (!isUserTalking) {
-                                    isUserTalking = true
-                                    listenerRef.get()?.onUserTalking(true)
+                            if (event.turnComplete || event.generationComplete) {
+                                Log.d(TAG, "Model turn complete (turnComplete=${event.turnComplete}, generationComplete=${event.generationComplete})")
+                                userTurnBuffer.completeTurn(resetBuffer = true)?.let { finalTurn ->
+                                    listenerRef.get()?.onUserTranscript(finalTurn, true)
+                                }
+                                listenerRef.get()?.onTurnComplete()
+                                if (event.turnComplete) {
+                                    echoRouter.onTurnComplete()
+                                    listenerRef.get()?.onBotTalking(false)
+                                    if (!isUserTalking) {
+                                        isUserTalking = true
+                                        listenerRef.get()?.onUserTalking(true)
+                                    }
                                 }
                             }
                         }

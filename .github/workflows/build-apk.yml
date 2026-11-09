@@ -35,9 +35,13 @@ jobs:
 
       - name: Run Unit Tests
         run: ./gradlew testDebugUnitTest --stacktrace
+        env:
+          IMAGE_API_KEY: ${{ secrets.IMAGE_API_KEY }}
 
       - name: Build Debug APK
         run: ./gradlew assembleDebug --stacktrace
+        env:
+          IMAGE_API_KEY: ${{ secrets.IMAGE_API_KEY }}
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4

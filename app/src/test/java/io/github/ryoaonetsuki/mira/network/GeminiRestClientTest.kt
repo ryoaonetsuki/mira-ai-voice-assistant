@@ -212,4 +212,69 @@ class GeminiRestClientTest {
         assertTrue("Message must mention network error", outcome.message.contains("Network error"))
         assertFalse("Must NEVER blanket label as 'Not Supported'", outcome.message.contains("Not Supported"))
     }
+
+    @Test
+    fun testCancellationException_propagatesOutOfSingleAttemptCall_neverSwallowed() = runBlocking {
+        val mockClient = OkHttpClient.Builder()
+            .addInterceptor(Interceptor { _ ->
+                throw kotlinx.coroutines.CancellationException("Simulated coroutine cancellation during HTTP call")
+            })
+            .build()
+
+        val restClient = GeminiRestClient()
+        var exceptionThrown: Throwable? = null
+        try {
+            restClient.executeGenerateContentSingleAttempt(
+                apiKey = "AIzaSyTestKey123",
+                history = emptyList(),
+                systemPrompt = "",
+                model = "gemini-3.8-flash",
+                httpClient = mockClient
+            )
+        } catch (e: Throwable) {
+            exceptionThrown = e
+        }
+
+        assertNotNull("CancellationException must propagate out of single attempt call", exceptionThrown)
+        assertTrue(
+            "Expected CancellationException to propagate but was: ${exceptionThrown?.javaClass?.name}",
+            exceptionThrown is kotlinx.coroutines.CancellationException
+        )
+    }
+
+    @Test
+    fun testCoroutineCancellation_cancelsCallAndPropagatesException() = runBlocking {
+        val gate = java.util.concurrent.CountDownLatch(1)
+        val mockClient = OkHttpClient.Builder()
+            .addInterceptor(Interceptor { chain ->
+                gate.countDown()
+                try {
+                    Thread.sleep(3000L)
+                } catch (_: InterruptedException) {}
+                chain.proceed(chain.request())
+            })
+            .build()
+
+        val restClient = GeminiRestClient()
+        var caughtCancellation = false
+        val job = kotlinx.coroutines.launch(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                restClient.executeGenerateContentSingleAttempt(
+                    apiKey = "AIzaSyTestKey123",
+                    history = emptyList(),
+                    systemPrompt = "",
+                    model = "gemini-3.8-flash",
+                    httpClient = mockClient
+                )
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                caughtCancellation = true
+                throw e
+            }
+        }
+
+        gate.await(2, java.util.concurrent.TimeUnit.SECONDS)
+        job.cancel()
+        job.join()
+        assertTrue("CancellationException must propagate out when coroutine is cancelled", caughtCancellation)
+    }
 }

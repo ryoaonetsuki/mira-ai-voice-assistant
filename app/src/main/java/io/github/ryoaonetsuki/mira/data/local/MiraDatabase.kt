@@ -15,11 +15,9 @@ import io.github.ryoaonetsuki.mira.data.local.entities.*
         ChatMessageEntity::class,
         MemoryEntity::class,
         RuleEntity::class,
-        NotificationEntity::class,
-        ScheduledPostEntity::class,
-        SosContactEntity::class
+        NotificationEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class MiraDatabase : RoomDatabase() {
@@ -27,8 +25,6 @@ abstract class MiraDatabase : RoomDatabase() {
     abstract fun memoryDao(): MemoryDao
     abstract fun ruleDao(): RuleDao
     abstract fun notificationDao(): NotificationDao
-    abstract fun postDao(): PostDao
-    abstract fun sosContactDao(): SosContactDao
 
     companion object {
         @Volatile
@@ -52,6 +48,13 @@ abstract class MiraDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("DROP TABLE IF EXISTS scheduled_posts")
+                db.execSQL("DROP TABLE IF EXISTS sos_contacts")
+            }
+        }
+
         fun getInstance(context: Context): MiraDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -59,7 +62,7 @@ abstract class MiraDatabase : RoomDatabase() {
                     MiraDatabase::class.java,
                     "mira_database"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                     .fallbackToDestructiveMigration()
                     .build()
                 INSTANCE = instance

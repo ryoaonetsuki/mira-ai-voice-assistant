@@ -251,7 +251,9 @@ class AgentDataLayerTest {
         TaskStep(action = TaskStep.ACTION_OPEN_APP, params = mapOf("app" to "Spotify")),
         TaskStep(action = TaskStep.ACTION_CLICK_TEXT, params = mapOf("text" to "Play"))
       ),
-      successCount = 3
+      successCount = 3,
+      consecutiveFailures = 2,
+      lastFailedAt = 1700000000000L
     )
     val json = original.toJson()
     val restored = Skill.fromJson(json)
@@ -260,6 +262,8 @@ class AgentDataLayerTest {
     assertEquals(original.goal, restored.goal)
     assertEquals(original.normalizedGoal, restored.normalizedGoal)
     assertEquals(original.successCount, restored.successCount)
+    assertEquals(2, restored.consecutiveFailures)
+    assertEquals(1700000000000L, restored.lastFailedAt)
     assertEquals(2, restored.steps.size)
     assertEquals(TaskStep.ACTION_OPEN_APP, restored.steps[0].action)
     assertEquals(TaskStep.ACTION_CLICK_TEXT, restored.steps[1].action)
@@ -273,6 +277,8 @@ class AgentDataLayerTest {
     assertEquals("", skill.goal)
     assertTrue(skill.steps.isEmpty())
     assertEquals(0, skill.successCount)
+    assertEquals(0, skill.consecutiveFailures)
+    assertEquals(0L, skill.lastFailedAt)
   }
 
   // =========================================================================
@@ -371,7 +377,7 @@ class AgentDataLayerTest {
   }
 
   @Test
-  fun testSkillMemoryService_MarkReplayOutcomeFailureDeletes() {
+  fun testSkillMemoryService_MarkReplayOutcome_C1_KeepsOnOneOrTwoFailures_ResetsOnSuccess_DeletesOnThird() {
     val store = InMemorySkillStore()
     val service = SkillMemoryService(store)
     val skill = service.saveOrUpdate(
@@ -380,8 +386,39 @@ class AgentDataLayerTest {
     )
     assertNotNull(service.findMatch("play podcast"))
 
+    // 1st failure -> kept with consecutiveFailures = 1
     service.markReplayOutcome(skill.id, false)
-    assertNull(service.findMatch("play podcast"))
+    val afterFail1 = service.findMatch("play podcast")
+    assertNotNull("Skill must be kept after 1st failed replay", afterFail1)
+    assertEquals(1, afterFail1?.consecutiveFailures)
+    assertTrue((afterFail1?.lastFailedAt ?: 0L) > 0L)
+
+    // 2nd failure -> kept with consecutiveFailures = 2
+    service.markReplayOutcome(skill.id, false)
+    val afterFail2 = service.findMatch("play podcast")
+    assertNotNull("Skill must be kept after 2nd failed replay", afterFail2)
+    assertEquals(2, afterFail2?.consecutiveFailures)
+
+    // Success resets consecutiveFailures = 0 and increments successCount
+    service.markReplayOutcome(skill.id, true)
+    val afterSuccess = service.findMatch("play podcast")
+    assertNotNull(afterSuccess)
+    assertEquals(0, afterSuccess?.consecutiveFailures)
+    assertEquals(1, afterSuccess?.successCount)
+
+    // Verify persistence across reload
+    val reloaded = SkillMemoryService(store).findMatch("play podcast")
+    assertNotNull(reloaded)
+    assertEquals(0, reloaded?.consecutiveFailures)
+    assertEquals(1, reloaded?.successCount)
+
+    // Now 3 consecutive failures -> 1st and 2nd keep, 3rd deletes
+    service.markReplayOutcome(skill.id, false)
+    assertNotNull(service.findMatch("play podcast"))
+    service.markReplayOutcome(skill.id, false)
+    assertNotNull(service.findMatch("play podcast"))
+    service.markReplayOutcome(skill.id, false)
+    assertNull("Skill must be deleted only on 3rd consecutive failure", service.findMatch("play podcast"))
     assertTrue(service.all().isEmpty())
   }
 

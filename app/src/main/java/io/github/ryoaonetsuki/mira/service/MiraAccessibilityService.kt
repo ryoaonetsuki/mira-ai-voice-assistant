@@ -6,21 +6,30 @@ import android.accessibilityservice.GestureDescription
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.Path
 import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import android.text.TextUtils
 import android.util.Log
+import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import io.github.ryoaonetsuki.mira.automation.agent.AutomationSafety
 import io.github.ryoaonetsuki.mira.automation.agent.TaskStep
+import java.io.ByteArrayOutputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.coroutines.resume
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 
 class MiraAccessibilityService : AccessibilityService() {
 
@@ -30,6 +39,9 @@ class MiraAccessibilityService : AccessibilityService() {
     @Volatile
     var isRecordingMacro: Boolean = false
         private set
+
+    @Volatile
+    private var lastObservedPackage: String? = null
 
     private val macroEvents = mutableListOf<Map<String, Any>>()
 
@@ -55,8 +67,17 @@ class MiraAccessibilityService : AccessibilityService() {
     fun getMacroRecordingStatus(): Boolean = isRecordingMacro
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (!isRecordingMacro || event == null) return
+        if (event == null) return
         val pkg = event.packageName?.toString() ?: ""
+        if (pkg.isNotEmpty() && pkg != packageName && pkg != OWN_PACKAGE && pkg != "com.android.systemui") {
+            if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
+                event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED ||
+                event.eventType == AccessibilityEvent.TYPE_VIEW_FOCUSED
+            ) {
+                lastObservedPackage = pkg
+            }
+        }
+        if (!isRecordingMacro) return
         if (pkg == packageName || pkg == OWN_PACKAGE) return // Ignore self-interactions inside Mira
 
         when (event.eventType) {
@@ -446,6 +467,137 @@ class MiraAccessibilityService : AccessibilityService() {
         )
     }
 
+    fun getActivePackageName(): String? {
+        return try {
+            val self = packageName.ifEmpty { OWN_PACKAGE }
+            val activePkg = rootInActiveWindow?.packageName?.toString()
+            if (!activePkg.isNullOrEmpty() && activePkg != self) {
+                return activePkg
+            }
+            val wins = try {
+                windows?.toList() ?: emptyList()
+            } catch (_: Exception) {
+                emptyList()
+            }
+            val focusedPkg = wins.firstOrNull { it.isActive || it.isFocused }?.root?.packageName?.toString()
+                ?.takeIf { it.isNotEmpty() && it != self }
+            val foreignPkg = wins.mapNotNull { it.root?.packageName?.toString() }
+                .firstOrNull { it.isNotEmpty() && it != self && it != "com.android.systemui" }
+            focusedPkg ?: foreignPkg ?: lastObservedPackage ?: activePkg
+        } catch (_: Throwable) {
+            lastObservedPackage
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Screenshot (Android 11+ / API 30+)
+    // Ported from Jarvis (github.com/AbuZar-Ansarii/Jarvis, AgentAccessibilityService.kt:419-463),
+    // MIT Licence, Copyright (c) 2026 AbuZar Ansarii.
+    // Debounce & FLAG_SECURE handling adapted from ClosePaw (github.com/imoonkey/closepaw), Apache-2.0.
+    // ------------------------------------------------------------------
+    @Volatile
+    private var lastScreenshotTimestampMs: Long = 0L
+
+    @Volatile
+    private var lastScreenshotErrorCode: Int = 0
+
+    private class ScreenshotCaptureOutcome(val bytes: ByteArray?)
+
+    suspend fun takeScreenshotJpeg(maxWidthPx: Int = 720, quality: Int = 70): ByteArray? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+
+        val activePkg = getActivePackageName()
+        if (activePkg != null && AutomationSafety.isBlocked(
+                TaskStep(action = TaskStep.ACTION_CLICK_AT),
+                activePkg
+            ) != null
+        ) {
+            Log.i(TAG, "Skipping screenshot on sensitive package: $activePkg")
+            return null
+        }
+
+        val now = SystemClock.elapsedRealtime()
+        val elapsed = now - lastScreenshotTimestampMs
+        if (elapsed in 0 until SCREENSHOT_DEBOUNCE_MS) {
+            delay(SCREENSHOT_DEBOUNCE_MS - elapsed)
+        }
+
+        val firstAttempt = captureScreenshotOnce(maxWidthPx, quality)
+        if (firstAttempt != null) return firstAttempt.bytes
+        if (lastScreenshotErrorCode == ERROR_TAKE_SCREENSHOT_INTERVAL_RESTRICTED) {
+            delay(SCREENSHOT_DEBOUNCE_MS)
+            return captureScreenshotOnce(maxWidthPx, quality)?.bytes
+        }
+        return null
+    }
+
+    private suspend fun captureScreenshotOnce(maxWidthPx: Int, quality: Int): ScreenshotCaptureOutcome? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+        lastScreenshotTimestampMs = SystemClock.elapsedRealtime()
+        lastScreenshotErrorCode = 0
+        return withTimeoutOrNull(3000L) {
+            suspendCancellableCoroutine { cont ->
+                try {
+                    takeScreenshot(
+                        Display.DEFAULT_DISPLAY,
+                        mainExecutor,
+                        object : TakeScreenshotCallback {
+                            override fun onSuccess(screenshotResult: ScreenshotResult) {
+                                try {
+                                    val hwBuffer = screenshotResult.hardwareBuffer
+                                    val hwBitmap = try {
+                                        Bitmap.wrapHardwareBuffer(hwBuffer, screenshotResult.colorSpace)
+                                    } finally {
+                                        try {
+                                            hwBuffer.close()
+                                        } catch (_: Throwable) {}
+                                    }
+                                    if (hwBitmap == null) {
+                                        if (cont.isActive) cont.resume(ScreenshotCaptureOutcome(null))
+                                        return
+                                    }
+                                    val soft = hwBitmap.copy(Bitmap.Config.ARGB_8888, false)
+                                    hwBitmap.recycle()
+                                    if (soft == null) {
+                                        if (cont.isActive) cont.resume(ScreenshotCaptureOutcome(null))
+                                        return
+                                    }
+                                    val scaled = if (soft.width > maxWidthPx && maxWidthPx > 0) {
+                                        val targetH = maxOf(
+                                            1,
+                                            Math.round(soft.height.toDouble() * maxWidthPx.toDouble() / soft.width.toDouble()).toInt()
+                                        )
+                                        Bitmap.createScaledBitmap(soft, maxWidthPx, targetH, true).also {
+                                            if (it != soft) soft.recycle()
+                                        }
+                                    } else {
+                                        soft
+                                    }
+                                    val stream = ByteArrayOutputStream()
+                                    scaled.compress(Bitmap.CompressFormat.JPEG, quality, stream)
+                                    scaled.recycle()
+                                    if (cont.isActive) cont.resume(ScreenshotCaptureOutcome(stream.toByteArray()))
+                                } catch (e: Throwable) {
+                                    Log.w(TAG, "Screenshot processing failed (FLAG_SECURE or buffer error): ${e.message}")
+                                    if (cont.isActive) cont.resume(ScreenshotCaptureOutcome(null))
+                                }
+                            }
+
+                            override fun onFailure(errorCode: Int) {
+                                lastScreenshotErrorCode = errorCode
+                                Log.w(TAG, "takeScreenshot failed with code $errorCode (skipping)")
+                                if (cont.isActive) cont.resume(null)
+                            }
+                        }
+                    )
+                } catch (e: Throwable) {
+                    Log.w(TAG, "takeScreenshot call threw (skipping): ${e.message}")
+                    if (cont.isActive) cont.resume(null)
+                }
+            }
+        }
+    }
+
     // ------------------------------------------------------------------
     // Dispatch helper
     // ------------------------------------------------------------------
@@ -490,6 +642,8 @@ class MiraAccessibilityService : AccessibilityService() {
     companion object {
         private const val TAG = "MiraAccessibility"
         private const val OWN_PACKAGE = "io.github.ryoaonetsuki.mira"
+        const val SCREENSHOT_DEBOUNCE_MS = 400L
+        const val ERROR_TAKE_SCREENSHOT_INTERVAL_RESTRICTED = 3
 
         @Volatile
         var instance: MiraAccessibilityService? = null

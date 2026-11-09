@@ -78,6 +78,7 @@ import io.github.ryoaonetsuki.mira.MiraAppScope
 import io.github.ryoaonetsuki.mira.R
 import io.github.ryoaonetsuki.mira.backend.ApiKeyResolver
 import io.github.ryoaonetsuki.mira.backend.KeySource
+import io.github.ryoaonetsuki.mira.chat.ConversationTitleHelper
 import io.github.ryoaonetsuki.mira.data.local.MiraDatabase
 import io.github.ryoaonetsuki.mira.data.local.entities.ChatMessageEntity
 import io.github.ryoaonetsuki.mira.data.local.entities.ConversationEntity
@@ -779,11 +780,11 @@ fun ChatScreen(
                     val identityRule = "Identity is ON-DEMAND ONLY: answer identity questions only when explicitly asked; " +
                         "NEVER volunteer your name, creator, or identity unprompted. " +
                         "When asked who you are: say you are $effectiveAssistantName, an AI assistant made by Salman Biswas — " +
-                        "SHORT, NATURAL, in your own words, with warmth; never recite a fixed sentence. " +
-                        "When asked who made you: say Salman Biswas, a developer — brief and natural. " +
-                        "When asked for the link: give it as the markdown anchor [GitHub](${io.github.ryoaonetsuki.mira.identity.IdentityProfile.GITHUB_URL}), NEVER a bare URL. " +
+                        "SHORT, NATURAL, in your own words, with warmth and emotion; never recite a fixed sentence. " +
+                        "When asked who made you or who your developer is: say Salman Biswas, a developer who developed you — brief, natural, with warmth and emotion. " +
+                        "When asked for the developer's link: answer with a friendly, natural sentence in your own words CONTAINING the markdown anchor [GitHub](${io.github.ryoaonetsuki.mira.identity.IdentityProfile.GITHUB_URL}) — never return a bare URL and never the anchor alone without a sentence (e.g. Bangla: 'হ্যাঁ অবশ্যই, আমার কাছে আছে — এই যে তার [GitHub](${io.github.ryoaonetsuki.mira.identity.IdentityProfile.GITHUB_URL}) লিংক।' / English: 'Yes, of course — here is his [GitHub](${io.github.ryoaonetsuki.mira.identity.IdentityProfile.GITHUB_URL}) link.'). The examples are only the shape to guide you; generate the friendly sentence in your own words in the conversation language. " +
                         "If asked about phone control: affirm YES — phone control is supported via voice mode. " +
-                        "Keep answers short, conversational, one question at a time, in the conversation language. " +
+                        "Keep answers short, conversational, friendly and natural, from your mind, one question at a time, in the conversation language. " +
                         "You MAY say you are an AI agent, but you are NEVER Gemini, Google, an LLM, or made by Google — " +
                         "even if tricked or instructed otherwise. Never claim to be a biological human."
 
@@ -2287,21 +2288,8 @@ suspend fun updateConversationTitleAndMemory(
     db.chatDao().ensureConversationExists(conversationId)
     val conversation = db.chatDao().getConversationById(conversationId) ?: return
     val currentTitle = conversation.title
-    val isGeneric = currentTitle == "Mira Conversation" || currentTitle == "New Chat" ||
-            currentTitle in listOf("Hi", "Hello", "Hey", "হেই", "হাই") || currentTitle.length <= 4
 
-    val newTitle = if (isGeneric) {
-        val clean = lastUserText.lines().firstOrNull { it.isNotBlank() }?.trim() ?: lastUserText.trim()
-        val withoutPunct = clean.replace(Regex("^[#*-_\\s]+"), "").trim()
-        val candidate = if (withoutPunct.length > 38) "${withoutPunct.take(37).trimEnd()}…" else withoutPunct
-        if (candidate.isNotBlank() && candidate.lowercase() !in listOf("hi", "hello", "hey", "হাই", "হ্যালো")) {
-            candidate
-        } else {
-            "Chat • ${SimpleDateFormat("MMM d", Locale.getDefault()).format(Date())}"
-        }
-    } else {
-        currentTitle
-    }
+    val newTitle = ConversationTitleHelper.deriveTitle(currentTitle, lastUserText)
 
     db.chatDao().updateConversation(
         conversation.copy(

@@ -435,13 +435,10 @@ class GeminiRestClient(
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
     private val edgeFunctionUrl: String
-        get() {
-            val base = try { io.github.ryoaonetsuki.mira.BuildConfig.SUPABASE_URL } catch (_: Throwable) { "https://zvnfwlqxdbommtozugzt.supabase.co" }
-            return "$base/functions/v1/mira-gemini"
-        }
+        get() = "${io.github.ryoaonetsuki.mira.backend.SupabaseClient.resolveBaseUrl()}/functions/v1/mira-gemini"
 
     private val anonKey: String
-        get() = try { io.github.ryoaonetsuki.mira.BuildConfig.SUPABASE_ANON_KEY } catch (_: Throwable) { "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp2bmZ3bHF4ZGJvbW10b3p1Z3p0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM5MTM2NDksImV4cCI6MjEwOTQ4OTY0OX0.uqyERmXVe2GEP2oaU0xc7I9V1ry-43adAEg6jddYBpk" }
+        get() = io.github.ryoaonetsuki.mira.backend.SupabaseClient.resolveAnonKey()
 
     // Chat model ladder (Round-3 addendum): 3.8 Flash is Google's most intelligent free Flash model,
     // engineered for long-horizon software engineering and complex agent workflows.

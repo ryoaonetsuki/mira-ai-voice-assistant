@@ -6,6 +6,7 @@ import android.graphics.Rect
 import android.util.Log
 import android.view.accessibility.AccessibilityNodeInfo
 import io.github.ryoaonetsuki.mira.service.MiraAccessibilityService
+import kotlinx.coroutines.CancellationException
 
 data class ScreenNode(
     val index: Int,
@@ -69,6 +70,8 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
         return try {
             val service = MiraAccessibilityService.instance ?: return emptyList()
             service.dumpScreen().map { ScreenNode.fromMap(it) }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Throwable) {
             Log.e(TAG, "dumpScreen failed", e)
             emptyList()
@@ -151,6 +154,9 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
         return try {
             if (text.isBlank()) return false
 
+            val service = MiraAccessibilityService.instance
+            val root = service?.rootInActiveWindow
+
             // 1. Direct clickable node matching text or description
             val directClickable = nodes.firstOrNull { node ->
                 node.isClickable && (
@@ -159,6 +165,22 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
                 )
             }
             if (directClickable != null) {
+                // Prefer performAction(ACTION_CLICK) on live accessibility node first
+                if (root != null) {
+                    val liveNode = findNodeMatchingText(root, text)
+                    if (liveNode != null) {
+                        var cur: AccessibilityNodeInfo? = liveNode
+                        while (cur != null) {
+                            if (cur.isClickable) {
+                                if (cur.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                                    return true
+                                }
+                                break
+                            }
+                            cur = cur.parent
+                        }
+                    }
+                }
                 return clickAt(directClickable.centerX.toFloat(), directClickable.centerY.toFloat())
             }
 
@@ -169,14 +191,15 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
             } ?: return false
 
             // Climb live accessibility node hierarchy first (like MacroRunner.clickNode)
-            val service = MiraAccessibilityService.instance
-            val root = service?.rootInActiveWindow
             if (root != null) {
                 val foundNode = findNodeMatchingText(root, text)
                 if (foundNode != null) {
                     var current: AccessibilityNodeInfo? = foundNode
                     while (current != null) {
                         if (current.isClickable) {
+                            if (current.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                                return true
+                            }
                             val rect = Rect()
                             current.getBoundsInScreen(rect)
                             return clickAt(rect.centerX().toFloat(), rect.centerY().toFloat())
@@ -200,6 +223,8 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
             } else {
                 clickAt(matchingNode.centerX.toFloat(), matchingNode.centerY.toFloat())
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Throwable) {
             Log.e(TAG, "clickText failed", e)
             false
@@ -225,6 +250,8 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
         return try {
             val service = MiraAccessibilityService.instance ?: return false
             service.clickAt(x, y)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Throwable) {
             Log.e(TAG, "clickAt failed", e)
             false
@@ -235,6 +262,8 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
         return try {
             val service = MiraAccessibilityService.instance ?: return false
             service.typeText(text)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Throwable) {
             Log.e(TAG, "typeText failed", e)
             false
@@ -245,6 +274,8 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
         return try {
             val service = MiraAccessibilityService.instance ?: return false
             service.pressKey("enter")
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Throwable) {
             Log.e(TAG, "pressEnter failed", e)
             false
@@ -255,6 +286,8 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
         return try {
             val service = MiraAccessibilityService.instance ?: return false
             service.scroll(direction)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Throwable) {
             Log.e(TAG, "scroll failed", e)
             false
@@ -265,6 +298,8 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
         return try {
             val service = MiraAccessibilityService.instance ?: return false
             service.swipe(startX, startY, endX, endY, durationMs)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Throwable) {
             Log.e(TAG, "swipe failed", e)
             false
@@ -275,6 +310,8 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
         return try {
             val service = MiraAccessibilityService.instance ?: return false
             service.pressKey("back")
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Throwable) {
             Log.e(TAG, "pressBack failed", e)
             false
@@ -285,6 +322,8 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
         return try {
             val service = MiraAccessibilityService.instance ?: return false
             service.pressKey("home")
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Throwable) {
             Log.e(TAG, "pressHome failed", e)
             false
@@ -295,7 +334,10 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
         val q = query.trim()
         if (q.isEmpty()) return null
         return try {
-            val ctx = context ?: return null
+            val ctx = context ?: run {
+                Log.e(TAG, "openApp failed: context is null")
+                return null
+            }
             val pm = ctx.packageManager
 
             // 1. Resolve known-app alias table (English & Bangla) before label search
@@ -304,8 +346,15 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
                 val aliasIntent = pm.getLaunchIntentForPackage(pkg)
                 if (aliasIntent != null) {
                     aliasIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    ctx.startActivity(aliasIntent)
-                    return pkg
+                    try {
+                        ctx.startActivity(aliasIntent)
+                        Log.i(TAG, "openApp: successfully launched alias package $pkg")
+                        return pkg
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Throwable) {
+                        Log.e(TAG, "openApp: startActivity threw for alias package $pkg", e)
+                    }
                 }
             }
 
@@ -313,8 +362,15 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
             val directIntent = pm.getLaunchIntentForPackage(q)
             if (directIntent != null) {
                 directIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                ctx.startActivity(directIntent)
-                return q
+                try {
+                    ctx.startActivity(directIntent)
+                    Log.i(TAG, "openApp: successfully launched package $q directly")
+                    return q
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    Log.e(TAG, "openApp: startActivity threw for package $q directly", e)
+                }
             }
 
             // 3. Search installed launcher activities by app label or package
@@ -343,11 +399,21 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
                 val launchIntent = pm.getLaunchIntentForPackage(pkg)
                 if (launchIntent != null) {
                     launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    ctx.startActivity(launchIntent)
-                    return pkg
+                    try {
+                        ctx.startActivity(launchIntent)
+                        Log.i(TAG, "openApp: successfully launched resolved package $pkg")
+                        return pkg
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Throwable) {
+                        Log.e(TAG, "openApp: startActivity threw for resolved package $pkg", e)
+                    }
                 }
             }
+            Log.w(TAG, "openApp: unable to find or launch any activity for query: $q")
             null
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Throwable) {
             Log.e(TAG, "openApp failed for query: $q", e)
             null

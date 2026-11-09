@@ -11,6 +11,7 @@ import io.github.ryoaonetsuki.mira.backend.KeySource
 import io.github.ryoaonetsuki.mira.data.local.entities.ChatMessageEntity
 import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
 import io.github.ryoaonetsuki.mira.network.GeminiRestClient
+import kotlinx.coroutines.withTimeout
 
 data class AutomationResult(
     val status: TaskStatus,
@@ -112,14 +113,16 @@ class MiraAutomationBridge(
         { currentGoal, screenDescription, history ->
             val key = apiKey()
             val entities = buildHistoryEntities(currentGoal, screenDescription, history)
-            val chatResult = restClient.generateChatResponse(
-                apiKey = key,
-                history = entities,
-                systemPrompt = SYSTEM_PROMPT,
-                model = "gemini-3.8-flash",
-                enableThinking = false,
-                isChatCall = false
-            )
+            val chatResult = withTimeout(TaskExecutor.DEFAULT_THINK_TIMEOUT_MS) {
+                restClient.generateChatResponse(
+                    apiKey = key,
+                    history = entities,
+                    systemPrompt = SYSTEM_PROMPT,
+                    model = "gemini-3.8-flash",
+                    enableThinking = false,
+                    isChatCall = false
+                )
+            }
             if (chatResult.isSuccess) {
                 chatResult.getOrNull()?.text ?: ""
             } else {
@@ -133,14 +136,16 @@ class MiraAutomationBridge(
         { currentGoal, screenDescription, history, screenshotBytes ->
             val key = apiKey()
             val entities = buildHistoryEntities(currentGoal, screenDescription, history)
-            val visionResult = restClient.generateVision(
-                apiKey = key,
-                history = entities,
-                imageBytes = screenshotBytes,
-                systemPrompt = SYSTEM_PROMPT,
-                model = "gemini-3.8-flash",
-                enableThinking = false
-            )
+            val visionResult = withTimeout(TaskExecutor.DEFAULT_THINK_TIMEOUT_MS) {
+                restClient.generateVision(
+                    apiKey = key,
+                    history = entities,
+                    imageBytes = screenshotBytes,
+                    systemPrompt = SYSTEM_PROMPT,
+                    model = "gemini-3.8-flash",
+                    enableThinking = false
+                )
+            }
             if (visionResult.isSuccess) {
                 visionResult.getOrNull()?.text ?: ""
             } else {
@@ -148,8 +153,12 @@ class MiraAutomationBridge(
             }
         }
 
-    private fun createDefaultExecutor(): TaskExecutor {
-        executorFactory?.let { return it() }
+    private fun createDefaultExecutor(onProgress: ((step: Int, description: String) -> Unit)? = null): TaskExecutor {
+        executorFactory?.let {
+            val exec = it()
+            if (onProgress != null) exec.onProgress = onProgress
+            return exec
+        }
         val ctx = requireNotNull(context) { "Context is required when no executorFactory is provided" }
         val automation: AutomationPort = ScreenAutomationService(ctx)
         val skills = SkillMemoryService.getInstance(ctx)
@@ -159,17 +168,21 @@ class MiraAutomationBridge(
             skills = skills,
             think = buildThinkLambda(restClient),
             thinkWithVision = buildThinkVisionLambda(restClient),
-            taskTimeoutMs = taskTimeoutMs
+            taskTimeoutMs = taskTimeoutMs,
+            onProgress = onProgress
         )
     }
 
-    suspend fun executeGoal(goal: String): AutomationResult {
+    suspend fun executeGoal(
+        goal: String,
+        onProgress: ((step: Int, description: String) -> Unit)? = null
+    ): AutomationResult {
         val executor: TaskExecutor
         synchronized(stateLock) {
             if (checkRunningAndClearStaleLocked()) {
                 return AutomationResult(TaskStatus.FAILED, buildAlreadyRunningMessageLocked(), 0)
             }
-            executor = createDefaultExecutor()
+            executor = createDefaultExecutor(onProgress)
             activeExecutor = executor
             runningGoal = goal
             runningSinceMs = clockMs()
@@ -193,13 +206,16 @@ class MiraAutomationBridge(
         }
     }
 
-    suspend fun executeSkill(skill: io.github.ryoaonetsuki.mira.automation.agent.Skill): AutomationResult {
+    suspend fun executeSkill(
+        skill: io.github.ryoaonetsuki.mira.automation.agent.Skill,
+        onProgress: ((step: Int, description: String) -> Unit)? = null
+    ): AutomationResult {
         val executor: TaskExecutor
         synchronized(stateLock) {
             if (checkRunningAndClearStaleLocked()) {
                 return AutomationResult(TaskStatus.FAILED, buildAlreadyRunningMessageLocked(), 0)
             }
-            executor = createDefaultExecutor()
+            executor = createDefaultExecutor(onProgress)
             activeExecutor = executor
             runningGoal = skill.goal
             runningSinceMs = clockMs()

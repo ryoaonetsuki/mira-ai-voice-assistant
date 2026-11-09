@@ -20,8 +20,11 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.fragment.app.FragmentActivity
 import io.github.ryoaonetsuki.mira.R
+import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
 import io.github.ryoaonetsuki.mira.data.preferences.UserPreferences
+import io.github.ryoaonetsuki.mira.ui.components.BiometricAuthHelper
 import io.github.ryoaonetsuki.mira.ui.components.MiraCard
 import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
 import kotlinx.coroutines.launch
@@ -36,6 +39,10 @@ fun SecretSettingsScreen(
     val palette = LocalMiraPalette.current
     val scope = rememberCoroutineScope()
     val userPrefs = remember { UserPreferences(context) }
+    val securePrefs = remember { SecurePreferences(context) }
+
+    val hasFaceLock = remember { securePrefs.isFaceLockEnabled() }
+    var isUnlocked by remember { mutableStateOf(!hasFaceLock) }
 
     val secretMode by userPrefs.secretModeFlow.collectAsState(initial = "Friendly")
     val isAdultConfirmed by userPrefs.isAdultConfirmedFlow.collectAsState(initial = false)
@@ -50,16 +57,38 @@ fun SecretSettingsScreen(
         instructionsInput = customInstructions
     }
 
+    LaunchedEffect(Unit) {
+        if (!isUnlocked && context is FragmentActivity) {
+            BiometricAuthHelper.promptBiometric(
+                activity = context,
+                title = "Unlock Secret Settings",
+                onSuccess = { isUnlocked = true },
+                onError = { /* fallback */ }
+            )
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
-                    Text(
-                        text = "Secret Settings",
-                        fontSize = 19.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = palette.textPrimary
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "Secret Settings",
+                            fontSize = 19.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = palette.textPrimary
+                        )
+                        if (hasFaceLock) {
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_fluent_shield_keyhole_24_regular),
+                                contentDescription = "Protected",
+                                tint = palette.primary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
@@ -75,6 +104,68 @@ fun SecretSettingsScreen(
         },
         containerColor = palette.background
     ) { padding ->
+        if (!isUnlocked) {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.padding(24.dp)
+                ) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .size(72.dp)
+                            .clip(CircleShape)
+                            .background(palette.surfaceVariant)
+                            .border(1.dp, palette.borderSubtle, CircleShape)
+                    ) {
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_fluent_shield_keyhole_24_regular),
+                            contentDescription = "Locked",
+                            tint = palette.primary,
+                            modifier = Modifier.size(36.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(18.dp))
+                    Text(
+                        text = "Secret Settings Locked",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = palette.textPrimary
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Face Lock protects your companion settings and custom instructions.",
+                        fontSize = 13.sp,
+                        color = palette.textSecondary
+                    )
+                    Spacer(modifier = Modifier.height(20.dp))
+                    Button(
+                        onClick = {
+                            if (context is FragmentActivity) {
+                                BiometricAuthHelper.promptBiometric(
+                                    activity = context,
+                                    title = "Unlock Secret Settings",
+                                    onSuccess = { isUnlocked = true },
+                                    onError = {}
+                                )
+                            }
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = palette.primary,
+                            contentColor = if (palette.isDark) palette.background else Color.White
+                        )
+                    ) {
+                        Text("Unlock with Biometrics", fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+        } else {
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
@@ -259,9 +350,10 @@ fun SecretSettingsScreen(
                 Spacer(modifier = Modifier.height(20.dp))
             }
         }
+        }
 
         // Age Gate Dialog
-        if (showAgeGateDialog) {
+        if (isUnlocked && showAgeGateDialog) {
             AlertDialog(
                 onDismissRequest = { showAgeGateDialog = false },
                 title = { Text("Age Confirmation Required", fontWeight = FontWeight.Bold) },

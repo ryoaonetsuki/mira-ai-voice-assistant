@@ -126,6 +126,7 @@ class MiraGeminiClient private constructor(
     private val setMicMuted: (Boolean) -> Unit,
     private val isMicMuted: () -> Boolean,
     private val onStopAudioPlayback: () -> Unit = {},
+    private val onSetOutputSuppressed: (Boolean) -> Unit = {},
 ) {
     data class Config(
         val apiKey: String,
@@ -188,6 +189,7 @@ class MiraGeminiClient private constructor(
 
             val events = LinkedBlockingQueue<ClientThreadEvent>()
             val isMicMutedRef = AtomicReference<(() -> Boolean)?>(null)
+            val outputGate = io.github.ryoaonetsuki.mira.voice.ModelAudioGate()
 
             fun postEvent(event: ClientThreadEvent) = events.put(event)
 
@@ -573,7 +575,8 @@ class MiraGeminiClient private constructor(
                                         listenerRef.get()?.onModelTranscript(text)
                                     }
                                     part.pcmBytes?.let { pcm ->
-                                        audioOut.write(pcm)
+                                        // Output gate: dropped while a phone action runs (single voice, no stale denial).
+                                        if (outputGate.shouldPlay()) audioOut.write(pcm)
                                     }
                                 }
                             }
@@ -640,6 +643,10 @@ class MiraGeminiClient private constructor(
                 },
                 onStopAudioPlayback = {
                     postEvent(ClientThreadEvent.StopAudioPlayback)
+                },
+                onSetOutputSuppressed = { suppressed ->
+                    if (suppressed) outputGate.suppress() else outputGate.release()
+                    postEvent(ClientThreadEvent.StopAudioPlayback)
                 }
             )
         }
@@ -652,6 +659,9 @@ class MiraGeminiClient private constructor(
         }
 
     fun stopAudioPlayback() = onStopAudioPlayback()
+
+    /** Drop (true) or resume (false) model audio output; flag is read on the audio path, so it is immediate. */
+    fun setOutputSuppressed(suppressed: Boolean) = onSetOutputSuppressed(suppressed)
 
     fun sendUserMessage(role: String, content: String) =
         onSendUserMessage(AppendedMessage(role = role, content = content))

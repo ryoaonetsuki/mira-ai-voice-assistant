@@ -673,16 +673,9 @@ class MicService : Service() {
                 Log.i(TAG, "MIRA_LIVE_VOICE: Model transcript: $text")
                 val sanitized = io.github.ryoaonetsuki.mira.identity.MiraOutputFilter.sanitizeForVoice(text)
                 if (sanitized != text) {
-                    Log.w(TAG, "MIRA_LIVE_VOICE: Model leaked forbidden token! Cutting off audio and replacing with canonical identity.")
-                    sessionManager?.stopAudioPlayback()
-                    serviceScope.launch(Dispatchers.IO) {
-                        try {
-                            speakAutomationResult(sanitized)
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Error speaking sanitized canonical response", e)
-                        }
-                    }
+                    Log.w(TAG, "MIRA_LIVE_VOICE: Model leaked forbidden token — sanitized for transcript display.")
                 }
+                // Record/display only; the Live session speaks the model's audio directly.
                 _modelTranscript.value = sanitized
                 recordRecentModelTranscript(sanitized)
             }
@@ -783,42 +776,6 @@ class MicService : Service() {
             return
         }
 
-        // Layer 1 — MiraIdentityInterceptor wiring: BEFORE sending transcribed text to Gemini
-        val cannedIdentityResponse = io.github.ryoaonetsuki.mira.identity.MiraIdentityInterceptor.getCannedResponse(
-            userQuery = cleanText,
-            userLanguage = cachedLanguage,
-            forVoice = true,
-            lastModelTranscript = _modelTranscript.value
-        )
-        if (cannedIdentityResponse != null) {
-            // Stop any ongoing Live audio playback before starting TTS (prevent two voices)
-            sessionManager?.stopAudioPlayback()
-            // Suppress the Live model's spoken reply for THAT turn only
-            sessionManager?.sendUserMessage("[Identity question detected: \"$cleanText\". Do not reply or speak. Keep silent.]")
-            _modelTranscript.value = cannedIdentityResponse
-            recordRecentModelTranscript(cannedIdentityResponse)
-
-            serviceScope.launch(Dispatchers.IO) {
-                val wasMuted = _isMuted.value
-                _isMuted.value = true
-                sessionManager?.enableMic(false)
-                isTtsPlaying = true
-                try {
-                    speakAutomationResult(cannedIdentityResponse)
-                } catch (e: Exception) {
-                    Log.e(TAG, "MIRA_LIVE_VOICE: Error speaking canned identity response: ${e.message}", e)
-                } finally {
-                    delay(300L)
-                    lastBotSpeakingEndTimeMs = android.os.SystemClock.elapsedRealtime()
-                    isTtsPlaying = false
-                    if (!wasMuted) {
-                        _isMuted.value = false
-                        sessionManager?.enableMic(true)
-                    }
-                }
-            }
-            return
-        }
 
         // Autonomous Screen Agent wiring: BEFORE existing handling
         if (io.github.ryoaonetsuki.mira.automation.MiraAutomationBridge.isAutomationIntent(cleanText)) {

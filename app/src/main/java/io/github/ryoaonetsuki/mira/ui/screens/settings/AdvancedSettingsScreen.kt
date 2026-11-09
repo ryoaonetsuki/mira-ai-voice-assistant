@@ -26,8 +26,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.fragment.app.FragmentActivity
 import io.github.ryoaonetsuki.mira.R
-import io.github.ryoaonetsuki.mira.data.local.MiraDatabase
-import io.github.ryoaonetsuki.mira.data.local.entities.SosContactEntity
 import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
 import io.github.ryoaonetsuki.mira.data.preferences.UserPreferences
 import io.github.ryoaonetsuki.mira.service.MiraAccessibilityService
@@ -47,11 +45,8 @@ fun AdvancedSettingsScreen(
     val scope = rememberCoroutineScope()
     val userPrefs = remember { UserPreferences(context) }
     val securePrefs = remember { SecurePreferences(context) }
-    val db = remember { MiraDatabase.getInstance(context) }
 
     val orbStyle by userPrefs.orbStyleFlow.collectAsState(initial = "Mira Neon")
-
-    val sosContacts by db.sosContactDao().getAllContacts().collectAsState(initial = emptyList())
 
     var isFaceLockActive by remember { mutableStateOf(securePrefs.isFaceLockEnabled()) }
 
@@ -69,10 +64,6 @@ fun AdvancedSettingsScreen(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
-
-    var showSosDialog by remember { mutableStateOf(false) }
-    var sosNameInput by remember { mutableStateOf("") }
-    var sosPhoneInput by remember { mutableStateOf("") }
 
     val orbStylesList = listOf("Mira Neon", "Cyan Core", "Pulse Wave", "Deep Violet")
 
@@ -272,174 +263,9 @@ fun AdvancedSettingsScreen(
                 }
             }
 
-            // Emergency SOS
-            item {
-                Text(
-                    text = "Emergency SOS",
-                    fontSize = 13.5.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = palette.primary,
-                    modifier = Modifier.padding(start = 2.dp)
-                )
-
-                Spacer(modifier = Modifier.height(6.dp))
-
-                MiraCard(modifier = Modifier.fillMaxWidth()) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "SOS Contacts (${sosContacts.size})",
-                                fontSize = 14.5.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = palette.textPrimary
-                            )
-                            Text(
-                                text = "Emergency contacts saved on-device for SOS alerts",
-                                fontSize = 12.sp,
-                                color = palette.textSecondary
-                            )
-                        }
-                        Surface(
-                            color = palette.primary.copy(alpha = 0.15f),
-                            shape = RoundedCornerShape(10.dp),
-                            border = BorderStroke(1.dp, palette.primary.copy(alpha = 0.35f)),
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(10.dp))
-                                .clickable { showSosDialog = true }
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                            ) {
-                                Icon(
-                                    painter = painterResource(id = R.drawable.ic_fluent_person_add_24_regular),
-                                    contentDescription = null,
-                                    tint = palette.primary,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "Add",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = palette.primary
-                                )
-                            }
-                        }
-                    }
-
-                    if (sosContacts.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(10.dp))
-                        HorizontalDivider(color = palette.borderSubtle.copy(alpha = 0.5f))
-                        Spacer(modifier = Modifier.height(6.dp))
-
-                        for (c in sosContacts) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 4.dp)
-                            ) {
-                                Icon(
-                                    painter = painterResource(id = R.drawable.ic_fluent_phone_24_regular),
-                                    contentDescription = null,
-                                    tint = palette.textSecondary,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = c.name,
-                                        fontSize = 13.5.sp,
-                                        fontWeight = FontWeight.Medium,
-                                        color = palette.textPrimary
-                                    )
-                                    Text(
-                                        text = c.phone,
-                                        fontSize = 11.5.sp,
-                                        color = palette.textSecondary
-                                    )
-                                }
-                                IconButton(
-                                    onClick = { scope.launch { db.sosContactDao().deleteContact(c) } },
-                                    modifier = Modifier.size(32.dp)
-                                ) {
-                                    Icon(
-                                        painter = painterResource(id = R.drawable.ic_fluent_delete_24_regular),
-                                        contentDescription = "Delete Contact",
-                                        tint = palette.textSecondary,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
             item {
                 Spacer(modifier = Modifier.height(20.dp))
             }
-        }
-
-        // Add SOS Dialog
-        if (showSosDialog) {
-            AlertDialog(
-                onDismissRequest = { showSosDialog = false },
-                title = {
-                    Text(
-                        text = "Add SOS Contact",
-                        fontWeight = FontWeight.Bold,
-                        color = palette.textPrimary
-                    )
-                },
-                text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        OutlinedTextField(
-                            value = sosNameInput,
-                            onValueChange = { sosNameInput = it },
-                            label = { Text("Contact Name") },
-                            placeholder = { Text("e.g. Mom, Partner") },
-                            singleLine = true,
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        OutlinedTextField(
-                            value = sosPhoneInput,
-                            onValueChange = { sosPhoneInput = it },
-                            label = { Text("Phone Number") },
-                            placeholder = { Text("+1 (555) 000-0000") },
-                            singleLine = true,
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                },
-                confirmButton = {
-                    TextButton(onClick = {
-                        if (sosNameInput.isNotBlank() && sosPhoneInput.isNotBlank()) {
-                            scope.launch {
-                                db.sosContactDao().insertContact(
-                                    SosContactEntity(name = sosNameInput.trim(), phone = sosPhoneInput.trim())
-                                )
-                                sosNameInput = ""
-                                sosPhoneInput = ""
-                                showSosDialog = false
-                            }
-                        }
-                    }) {
-                        Text("Save", fontWeight = FontWeight.Bold, color = palette.primary)
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showSosDialog = false }) {
-                        Text("Cancel", color = palette.textSecondary)
-                    }
-                },
-                containerColor = palette.surface,
-                titleContentColor = palette.textPrimary,
-                textContentColor = palette.textSecondary
-            )
         }
     }
 }

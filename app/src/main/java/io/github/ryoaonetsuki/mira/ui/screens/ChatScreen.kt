@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.database.sqlite.SQLiteConstraintException
+import android.net.Uri
 import android.os.Bundle
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
@@ -91,6 +92,9 @@ import io.github.ryoaonetsuki.mira.network.GeminiFilesClient
 import io.github.ryoaonetsuki.mira.network.GeminiRestClient
 import io.github.ryoaonetsuki.mira.network.GroundingSource
 import io.github.ryoaonetsuki.mira.network.MiraChatSearchHeuristic
+import io.github.ryoaonetsuki.mira.network.MiraImageApiClient
+import io.github.ryoaonetsuki.mira.network.MiraImageResult
+import io.github.ryoaonetsuki.mira.network.MiraImageStorage
 import io.github.ryoaonetsuki.mira.network.currentDateTimeLine
 import io.github.ryoaonetsuki.mira.network.normalizeApiKey
 import io.github.ryoaonetsuki.mira.voice.LanguageUtils
@@ -189,6 +193,7 @@ fun ChatScreen(
     val restClient = remember { GeminiRestClient() }
     val filesClient = remember { GeminiFilesClient() }
     val resolver = remember { ApiKeyResolver(context) }
+    val imageApiClient = remember { MiraImageApiClient() }
 
     var currentConversationId by remember { mutableStateOf("default_chat") }
     var inputMessage by remember { mutableStateOf(initialPrompt.orEmpty()) }
@@ -637,25 +642,6 @@ fun ChatScreen(
                     // Check image intent first
                     val imagePrompt = extractImagePrompt(text, isImageMode)
                     if (imagePrompt != null && currentStaged == null) {
-                        isGeneratingImage = true
-                        generatingImagePrompt = imagePrompt
-                        imageGenProgress = 15
-                        imageGenStage = "Sketching it out..."
-                        delay(600)
-                        imageGenProgress = 45
-                        imageGenStage = "Adding fine details..."
-                        delay(700)
-                        imageGenProgress = 72
-                        imageGenStage = "Refining lighting..."
-                        delay(700)
-                        imageGenProgress = 92
-                        imageGenStage = "Final touches..."
-                        delay(500)
-                        imageGenProgress = 100
-
-                        val encoded = java.net.URLEncoder.encode(imagePrompt, "UTF-8")
-                        val imageUrl = "https://image.pollinations.ai/prompt/$encoded?width=1024&height=1024&nologo=true&seed=${System.currentTimeMillis()}"
-
                         if (overrideText == null) {
                             safeInsertMessage(
                                 context,
@@ -667,16 +653,74 @@ fun ChatScreen(
                                 )
                             )
                         }
-                        safeInsertMessage(
-                            context,
-                            db,
-                            ChatMessageEntity(
-                                conversationId = currentConversationId,
-                                role = "model",
-                                content = "Here is your image:\n\n![$imagePrompt]($imageUrl)"
-                            )
-                        )
-                        updateConversationTitleAndMemory(db, currentConversationId, text, "Image: $imagePrompt")
+
+                        isGeneratingImage = true
+                        generatingImagePrompt = imagePrompt
+                        imageGenProgress = 15
+                        imageGenStage = "Sketching it out..."
+
+                        val progressJob = launch {
+                            delay(600)
+                            imageGenProgress = 45
+                            imageGenStage = "Adding fine details..."
+                            delay(700)
+                            imageGenProgress = 72
+                            imageGenStage = "Refining lighting..."
+                            delay(700)
+                            imageGenProgress = 92
+                            imageGenStage = "Final touches..."
+                        }
+
+                        val result = try {
+                            imageApiClient.generateImage(imagePrompt)
+                        } finally {
+                            progressJob.cancel()
+                        }
+
+                        when (result) {
+                            is MiraImageResult.Success -> {
+                                imageGenProgress = 100
+                                val savedFile = withContext(Dispatchers.IO) {
+                                    MiraImageStorage.saveImage(context, imagePrompt, result.bytes)
+                                }
+                                val fileUri = Uri.fromFile(savedFile).toString()
+                                val replyContent = if (isBangla) {
+                                    "আপনার ছবি তৈরি হয়েছে:\n\n![$imagePrompt]($fileUri)"
+                                } else {
+                                    "Here is your image:\n\n![$imagePrompt]($fileUri)"
+                                }
+                                safeInsertMessage(
+                                    context,
+                                    db,
+                                    ChatMessageEntity(
+                                        conversationId = currentConversationId,
+                                        role = "model",
+                                        content = replyContent
+                                    )
+                                )
+                                replySaved = true
+                                completedReplyText = replyContent
+                                updateConversationTitleAndMemory(db, currentConversationId, text, "Image: $imagePrompt")
+                            }
+                            is MiraImageResult.Failure -> {
+                                val friendlyError = if (isBangla) {
+                                    "দুঃখিত, এই মুহূর্তে ছবিটি তৈরি করা সম্ভব হয়নি। অনুগ্রহ করে কিছুক্ষণ পর আবার চেষ্টা করুন।"
+                                } else {
+                                    "I couldn't create that image right now. Please try again in a little while."
+                                }
+                                safeInsertMessage(
+                                    context,
+                                    db,
+                                    ChatMessageEntity(
+                                        conversationId = currentConversationId,
+                                        role = "model",
+                                        content = friendlyError
+                                    )
+                                )
+                                replySaved = true
+                                completedReplyText = friendlyError
+                            }
+                        }
                         generatingImagePrompt = null
                         isGeneratingImage = false
                         isSending = false

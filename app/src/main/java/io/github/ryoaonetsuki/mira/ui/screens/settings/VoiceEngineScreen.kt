@@ -119,11 +119,11 @@ fun VoiceEngineScreen(
                 val pcmBytes = result.getOrThrow()
                 loadingVoice = null
                 playingVoice = voiceName
-                val player = AudioPlayer { isSpeaking ->
+                val player = AudioPlayer(onSpeakingStateChanged = { isSpeaking ->
                     if (!isSpeaking && playingVoice == voiceName) {
                         playingVoice = null
                     }
-                }
+                })
                 activeAudioPlayer = player
                 player.beginPreview()
                 val rampedBytes = AudioPlayer.applyPreviewFadeRamps(pcmBytes)

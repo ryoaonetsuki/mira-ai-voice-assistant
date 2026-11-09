@@ -301,10 +301,16 @@ class MiraAccessibilityService : AccessibilityService() {
     // Gestures
     // ------------------------------------------------------------------
 
-    /** Short tap at absolute screen coordinates. */
+    /** Short tap at absolute screen coordinates, defensively clamped to display bounds (no edge inset). */
     fun clickAt(x: Float, y: Float): Boolean {
         return try {
-            val path = Path().apply { moveTo(x, y) }
+            val metrics = runCatching { resources?.displayMetrics }.getOrNull()
+            val (cx, cy) = if (metrics != null && metrics.widthPixels > 0 && metrics.heightPixels > 0) {
+                clampClickCoordinates(x, y, metrics.widthPixels, metrics.heightPixels)
+            } else {
+                Pair(x.coerceAtLeast(0f), y.coerceAtLeast(0f))
+            }
+            val path = Path().apply { moveTo(cx, cy) }
             val stroke = GestureDescription.StrokeDescription(path, 0L, 80L)
             dispatch(GestureDescription.Builder().addStroke(stroke).build())
         } catch (e: Throwable) {
@@ -313,7 +319,11 @@ class MiraAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** Linear swipe between two points over [durationMs] milliseconds. */
+    /**
+     * Linear swipe between two points over [durationMs] milliseconds.
+     * Start and end points are clamped to an inset (24dp, min 16px) from all screen edges
+     * for gesture-navigation edge zones so left/right Back or bottom Home gestures cannot steal the swipe.
+     */
     fun swipe(
         startX: Float,
         startY: Float,
@@ -322,9 +332,29 @@ class MiraAccessibilityService : AccessibilityService() {
         durationMs: Long
     ): Boolean {
         return try {
+            val metrics = runCatching { resources?.displayMetrics }.getOrNull()
+            val (sx, sy, ex, ey) = if (metrics != null && metrics.widthPixels > 0 && metrics.heightPixels > 0) {
+                clampSwipeCoordinates(
+                    startX = startX,
+                    startY = startY,
+                    endX = endX,
+                    endY = endY,
+                    displayWidth = metrics.widthPixels,
+                    displayHeight = metrics.heightPixels,
+                    density = metrics.density
+                )
+            } else {
+                val inset = MIN_SWIPE_EDGE_INSET_PX
+                SwipeCoordinates(
+                    startX = startX.coerceAtLeast(inset),
+                    startY = startY.coerceAtLeast(inset),
+                    endX = endX.coerceAtLeast(inset),
+                    endY = endY.coerceAtLeast(inset)
+                )
+            }
             val path = Path().apply {
-                moveTo(startX, startY)
-                lineTo(endX, endY)
+                moveTo(sx, sy)
+                lineTo(ex, ey)
             }
             val clamped = durationMs.coerceIn(50L, 5000L)
             val stroke = GestureDescription.StrokeDescription(path, 0L, clamped)
@@ -639,11 +669,56 @@ class MiraAccessibilityService : AccessibilityService() {
         }
     }
 
+    data class SwipeCoordinates(
+        val startX: Float,
+        val startY: Float,
+        val endX: Float,
+        val endY: Float
+    )
+
     companion object {
         private const val TAG = "MiraAccessibility"
         private const val OWN_PACKAGE = "io.github.ryoaonetsuki.mira"
         const val SCREENSHOT_DEBOUNCE_MS = 400L
         const val ERROR_TAKE_SCREENSHOT_INTERVAL_RESTRICTED = 3
+        const val SWIPE_EDGE_INSET_DP = 24f
+        const val MIN_SWIPE_EDGE_INSET_PX = 16f
+
+        fun computeSwipeEdgeInsetPx(density: Float): Float =
+            maxOf(MIN_SWIPE_EDGE_INSET_PX, SWIPE_EDGE_INSET_DP * density)
+
+        fun clampSwipeCoordinates(
+            startX: Float,
+            startY: Float,
+            endX: Float,
+            endY: Float,
+            displayWidth: Int,
+            displayHeight: Int,
+            density: Float
+        ): SwipeCoordinates {
+            val inset = computeSwipeEdgeInsetPx(density)
+            val minX = inset.coerceAtMost(displayWidth / 2f)
+            val maxX = (displayWidth.toFloat() - minX).coerceAtLeast(minX)
+            val minY = inset.coerceAtMost(displayHeight / 2f)
+            val maxY = (displayHeight.toFloat() - minY).coerceAtLeast(minY)
+            return SwipeCoordinates(
+                startX = startX.coerceIn(minX, maxX),
+                startY = startY.coerceIn(minY, maxY),
+                endX = endX.coerceIn(minX, maxX),
+                endY = endY.coerceIn(minY, maxY)
+            )
+        }
+
+        fun clampClickCoordinates(
+            x: Float,
+            y: Float,
+            displayWidth: Int,
+            displayHeight: Int
+        ): Pair<Float, Float> {
+            val maxX = (displayWidth - 1).coerceAtLeast(0).toFloat()
+            val maxY = (displayHeight - 1).coerceAtLeast(0).toFloat()
+            return Pair(x.coerceIn(0f, maxX), y.coerceIn(0f, maxY))
+        }
 
         @Volatile
         var instance: MiraAccessibilityService? = null
@@ -695,10 +770,15 @@ class MiraAccessibilityService : AccessibilityService() {
                         val y = (event["y"] as? Number)?.toInt() ?: 0
 
                         if (label.isNotEmpty()) {
+                            val params = if (x > 0 && y > 0) {
+                                mapOf("text" to label, "fallbackX" to x, "fallbackY" to y)
+                            } else {
+                                mapOf("text" to label)
+                            }
                             steps.add(
                                 TaskStep(
                                     action = TaskStep.ACTION_CLICK_TEXT,
-                                    params = mapOf("text" to label),
+                                    params = params,
                                     reasoning = "Macro click on \"$label\""
                                 )
                             )

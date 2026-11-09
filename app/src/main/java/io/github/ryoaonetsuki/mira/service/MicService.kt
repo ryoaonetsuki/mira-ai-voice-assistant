@@ -910,7 +910,9 @@ class MicService : Service() {
                     return@launch
                 }
 
-                val result = automationBridge.executeGoal(cleanText)
+                val result = automationBridge.executeGoal(cleanText) { _, desc ->
+                    _statusText.value = "Running: $cleanText ($desc)"
+                }
                 try {
                     val db = MiraDatabase.getInstance(applicationContext)
                     db.notificationDao().insertNotification(

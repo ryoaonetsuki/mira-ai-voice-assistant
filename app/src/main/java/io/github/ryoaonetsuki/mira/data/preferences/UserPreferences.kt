@@ -5,21 +5,8 @@ import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import java.io.IOException
-
-data class ChatUserConfig(
-    val webSearchOn: Boolean = true,
-    val deepThinkingOn: Boolean = false,
-    val personaName: String = "Mira",
-    val secretMode: String = "Friendly",
-    val customInstructions: String = "",
-    val userName: String = "User",
-    val assistantName: String = "Mira",
-    val userHandle: String = "@mira_creator",
-    val captionVoice: String = "Witty, bold and tech-savvy"
-)
 
 private val Context.dataStore by preferencesDataStore(name = "mira_user_prefs")
 
@@ -124,23 +111,6 @@ class UserPreferences(private val context: Context) {
     val lastConversationIdFlow: Flow<String?> = context.dataStore.data.catch { emitDefaults(it) }.map {
         it[KEY_LAST_CONVERSATION_ID]
     }
-
-    suspend fun getChatUserConfig(): ChatUserConfig = context.dataStore.data
-        .catch { emitDefaults(it) }
-        .map { prefs ->
-            ChatUserConfig(
-                webSearchOn = prefs[KEY_WEB_SEARCH_ENABLED] ?: true,
-                deepThinkingOn = prefs[KEY_DEEP_THINKING_ENABLED] ?: false,
-                personaName = prefs[KEY_PERSONA] ?: "Mira",
-                secretMode = prefs[KEY_SECRET_MODE] ?: "Friendly",
-                customInstructions = prefs[KEY_CUSTOM_INSTRUCTIONS] ?: "",
-                userName = prefs[KEY_USER_NAME] ?: "User",
-                assistantName = prefs[KEY_ASSISTANT_NAME] ?: "Mira",
-                userHandle = prefs[KEY_USER_HANDLE] ?: "@mira_creator",
-                captionVoice = prefs[KEY_CAPTION_VOICE] ?: "Witty, bold and tech-savvy"
-            )
-        }
-        .first()
 
     private suspend fun emitDefaults(throwable: Throwable) {
         if (throwable !is IOException) throw throwable

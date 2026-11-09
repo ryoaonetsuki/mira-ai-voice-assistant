@@ -174,6 +174,61 @@ class IdentityTest {
             prompt.contains("voice mode") && prompt.contains("phone control"))
     }
 
+    @Test
+    fun testSystemPromptOverride_TeachesFriendlySentenceWithAnchor_NoBareUrl_NotAnchorOnly() {
+        val spo = IdentityProfile.SYSTEM_PROMPT_OVERRIDE
+        assertTrue("Must teach friendly sentence containing GitHub anchor",
+            spo.contains("CONTAINING the markdown anchor [GitHub](${IdentityProfile.GITHUB_URL})"))
+        assertTrue("Must forbid bare URL and anchor-only",
+            spo.contains("never a bare URL and never the anchor alone without a sentence"))
+        assertTrue("Must teach Bangla shape example", spo.contains("হ্যাঁ অবশ্যই") && spo.contains("লিংক"))
+        assertTrue("Must teach English shape example", spo.contains("Yes, of course") && spo.contains("link"))
+        assertTrue("Must emphasize answering in own words", spo.contains("in your own words"))
+        assertFalse("Must NOT contain 'EXACTLY'", spo.contains("EXACTLY"))
+    }
+
+    @Test
+    fun testLivePrompt_TeachesLiveDeveloperWithEmotion_AndPoliteLinkDeclineWithChatRedirect() {
+        val prompt = LivePromptBuilder.buildLiveSystemPrompt()
+        assertTrue("Must teach developer Salman", prompt.contains("Salman"))
+        assertTrue("Must teach developer developed her with emotion",
+            prompt.contains("developed you") || prompt.contains("ডেভেলপ করেছেন"))
+        assertTrue("Must teach emotion style", prompt.contains("emotion"))
+        assertTrue("Must teach polite decline in Live with chat redirect in Bangla",
+            prompt.contains("চ্যাট অপশনে গিয়ে চাও") || prompt.contains("chat option"))
+        assertTrue("Must forbid speaking URL aloud in Live voice",
+            prompt.contains("NEVER speak any URL aloud"))
+        assertFalse("Live prompt must NOT contain 'EXACTLY'", prompt.contains("EXACTLY"))
+    }
+
+    @Test
+    fun testOutputFilter_RepairsBareUrlToAnchor_InFriendlySentence() {
+        val banglaInput = "হ্যাঁ অবশ্যই, আমার কাছে আছে — এই যে তার https://github.com/ryoaonetsuki লিংক।"
+        val banglaFiltered = MiraOutputFilter.sanitize(banglaInput)
+        assertEquals("হ্যাঁ অবশ্যই, আমার কাছে আছে — এই যে তার [GitHub](https://github.com/ryoaonetsuki) লিংক।", banglaFiltered)
+
+        val englishInput = "Yes, of course — here is his https://github.com/ryoaonetsuki link."
+        val englishFiltered = MiraOutputFilter.sanitize(englishInput)
+        assertEquals("Yes, of course — here is his [GitHub](https://github.com/ryoaonetsuki) link.", englishFiltered)
+
+        // Already anchor: remains untouched
+        val alreadyAnchor = "হ্যাঁ অবশ্যই, আমার কাছে আছে — এই যে তার [GitHub](https://github.com/ryoaonetsuki) লিংক।"
+        assertEquals(alreadyAnchor, MiraOutputFilter.sanitize(alreadyAnchor))
+    }
+
+    @Test
+    fun testSanitizeForVoice_LiveDeclineClean_UrlsStripped() {
+        val liveBanglaDecline = "লাইভে তো আমি উনার লিংক দিতে পারি না — চ্যাট অপশনে গিয়ে চাও, দিয়ে দেবে।"
+        assertEquals("Clean spoken line without URLs must pass through untouched",
+            liveBanglaDecline, MiraOutputFilter.sanitizeForVoice(liveBanglaDecline))
+
+        val voiceWithUrl = "I cannot give the link here in live mode. Please check https://github.com/ryoaonetsuki in chat."
+        val sanitized = MiraOutputFilter.sanitizeForVoice(voiceWithUrl)
+        assertFalse("Spoken text must not contain http", sanitized.contains("http", ignoreCase = true))
+        assertFalse("Spoken text must not contain github.com", sanitized.contains("github.com", ignoreCase = true))
+        assertFalse("Spoken text must not contain brackets", sanitized.contains("[") || sanitized.contains("]"))
+    }
+
     // ── e. No getCannedResponse call site: compile-time enforcement ──────────
     // getCannedResponse was deleted from MiraIdentityInterceptor; this test verifies
     // the class still compiles and that detectIsBangla (the surviving helper) works.

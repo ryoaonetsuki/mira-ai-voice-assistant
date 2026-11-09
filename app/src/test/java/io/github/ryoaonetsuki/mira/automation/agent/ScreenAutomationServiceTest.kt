@@ -232,6 +232,65 @@ class ScreenAutomationServiceTest {
         assertEquals(41, lines.size) // 1 goal line + 40 nodes
     }
 
+    @Test
+    fun getCompressedScreenDescription_banglaGoalWords_preservedAndPrioritized() {
+        val service = ScreenAutomationService()
+        val unrelatedNode = ScreenNode(
+            index = 0,
+            text = "Settings",
+            contentDescription = "System settings",
+            className = "android.widget.Button",
+            viewId = "btn_settings",
+            isClickable = true,
+            isEditable = false,
+            isScrollable = false,
+            isCheckable = false,
+            isEnabled = true,
+            left = 0, top = 0, right = 50, bottom = 50, centerX = 25, centerY = 25
+        )
+        val banglaRelevantNode = ScreenNode(
+            index = 1,
+            text = "ইউটিউব অ্যাপ",
+            contentDescription = "",
+            className = "android.widget.TextView",
+            viewId = "txt_yt",
+            isClickable = false,
+            isEditable = false,
+            isScrollable = false,
+            isCheckable = false,
+            isEnabled = true,
+            left = 0, top = 60, right = 100, bottom = 90, centerX = 50, centerY = 75
+        )
+        val output = service.getCompressedScreenDescription(
+            listOf(unrelatedNode, banglaRelevantNode),
+            "ইউটিউব খুলো"
+        )
+        val lines = output.lines()
+        assertEquals("Goal: ইউটিউব খুলো", lines[0])
+        assertTrue("Bangla goal-relevant node [1] should come before unrelated clickable node [0]", lines[1].contains("[1]"))
+        assertTrue(lines[2].contains("[0]"))
+    }
+
+    @Test
+    fun openApp_blankQuery_returnsNull_andKnownAliasesResolve() {
+        val service = ScreenAutomationService(null)
+        assertEquals(null, service.openApp(""))
+        assertEquals(null, service.openApp("   "))
+
+        assertEquals("com.google.android.youtube", ScreenAutomationService.resolveKnownAppPackage("youtube"))
+        assertEquals("com.google.android.youtube", ScreenAutomationService.resolveKnownAppPackage("ইউটিউব"))
+        assertEquals("com.google.android.youtube", ScreenAutomationService.resolveKnownAppPackage("গান"))
+        assertEquals("com.spotify.music", ScreenAutomationService.resolveKnownAppPackage("spotify"))
+        assertEquals("com.spotify.music", ScreenAutomationService.resolveKnownAppPackage("স্পটিফাই"))
+        assertEquals("com.whatsapp", ScreenAutomationService.resolveKnownAppPackage("whatsapp"))
+        assertEquals("com.whatsapp", ScreenAutomationService.resolveKnownAppPackage("হোয়াটসঅ্যাপ"))
+        assertEquals("com.android.chrome", ScreenAutomationService.resolveKnownAppPackage("ক্রোম"))
+        assertEquals("com.google.android.apps.maps", ScreenAutomationService.resolveKnownAppPackage("ম্যাপস"))
+        assertEquals("com.google.android.gm", ScreenAutomationService.resolveKnownAppPackage("জিমেইল"))
+        assertEquals("com.facebook.katana", ScreenAutomationService.resolveKnownAppPackage("ফেসবুক"))
+        assertEquals("com.android.settings", ScreenAutomationService.resolveKnownAppPackage("সেটিংস"))
+    }
+
     // =========================================================================
     // 3. ScreenNode fromMap Tests
     // =========================================================================

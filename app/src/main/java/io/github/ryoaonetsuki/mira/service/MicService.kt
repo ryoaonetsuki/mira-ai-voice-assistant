@@ -155,6 +155,7 @@ class MicService : Service() {
     private val sessionGenerationToken = java.util.concurrent.atomic.AtomicLong(0L)
     @Volatile private var lastBotSpeakingEndTimeMs: Long = 0L
     @Volatile private var isTtsPlaying: Boolean = false
+    @Volatile internal var turnDispatchedToAutomation: Boolean = false
     private val recentModelTranscripts = ArrayDeque<String>()
 
     private var cachedVoiceName: String = "Aoede"
@@ -646,7 +647,11 @@ class MicService : Service() {
             }
 
             override fun onUserTranscript(text: String) {
-                Log.i(TAG, "MIRA_LIVE_VOICE: User transcript: $text")
+                onUserTranscript(text, isFinal = true)
+            }
+
+            override fun onUserTranscript(text: String, isFinal: Boolean) {
+                Log.i(TAG, "MIRA_LIVE_VOICE: User transcript (final=$isFinal): $text")
                 val now = android.os.SystemClock.elapsedRealtime()
                 val isSpeakingOrDraining = _liveState.value == LiveState.SPEAKING ||
                     isTtsPlaying ||
@@ -666,7 +671,13 @@ class MicService : Service() {
                 if (_liveState.value != LiveState.SPEAKING && _liveState.value != LiveState.ERROR) {
                     _voiceStage.value = VoiceStage.RECOGNISING
                 }
-                handleUserVoiceTurn(text)
+                if (isFinal) {
+                    handleUserVoiceTurn(text)
+                }
+            }
+
+            override fun onTurnComplete() {
+                turnDispatchedToAutomation = false
             }
 
             override fun onModelTranscript(text: String) {
@@ -779,6 +790,11 @@ class MicService : Service() {
                 return
             }
             io.github.ryoaonetsuki.mira.voice.VoiceTurnRoute.AUTOMATION -> {
+                if (turnDispatchedToAutomation) {
+                    Log.i(TAG, "MIRA_LIVE_VOICE: Turn already dispatched to automation; skipping duplicate: $cleanText")
+                    return
+                }
+                turnDispatchedToAutomation = true
                 handleAutomationCommand(cleanText)
                 return
             }
@@ -1005,6 +1021,7 @@ class MicService : Service() {
         startVoiceSessionJob?.cancel()
         startVoiceSessionJob = null
         isTtsPlaying = false
+        turnDispatchedToAutomation = false
         connectingWatchdogJob?.cancel()
         connectingWatchdogJob = null
         connectorJob?.cancel()

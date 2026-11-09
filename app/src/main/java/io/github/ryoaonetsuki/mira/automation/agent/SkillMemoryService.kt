@@ -179,13 +179,30 @@ class SkillMemoryService(
     val skills = load()
     val index = skills.indexOfFirst { it.id == skillId }
     if (index < 0) return
+    val existing = skills[index]
+    val now = System.currentTimeMillis()
     if (success) {
-      skills[index].successCount += 1
-      skills[index].lastUsedAt = System.currentTimeMillis()
+      existing.consecutiveFailures = 0
+      existing.successCount += 1
+      existing.lastUsedAt = now
+      skills[index] = existing.copy(
+        consecutiveFailures = 0,
+        successCount = existing.successCount,
+        lastUsedAt = now
+      )
     } else {
-      // A skill that failed to replay is likely stale (app UI changed):
-      // drop it so the next run relearns from the AI.
-      skills.removeAt(index)
+      // Do not delete a macro on a single transient failure (e.g. feed changed, slow network).
+      // Remove only after MAX_CONSECUTIVE_FAILURES (3) consecutive failures.
+      existing.consecutiveFailures += 1
+      existing.lastFailedAt = now
+      if (existing.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+        skills.removeAt(index)
+      } else {
+        skills[index] = existing.copy(
+          consecutiveFailures = existing.consecutiveFailures,
+          lastFailedAt = now
+        )
+      }
     }
     persist()
   }
@@ -203,6 +220,8 @@ class SkillMemoryService(
       goal = trimmed,
       steps = existing.steps,
       successCount = existing.successCount,
+      consecutiveFailures = existing.consecutiveFailures,
+      lastFailedAt = existing.lastFailedAt,
       lastUsedAt = existing.lastUsedAt,
       createdAt = existing.createdAt,
       normalizedGoal = Skill.normalize(trimmed)
@@ -244,6 +263,7 @@ class SkillMemoryService(
     const val STORAGE_KEY: String = "skill_memory_v1"
     const val MATCH_THRESHOLD: Double = 0.75
     const val MAX_SKILLS: Int = 100
+    const val MAX_CONSECUTIVE_FAILURES: Int = 3
 
     @Volatile
     private var instance: SkillMemoryService? = null

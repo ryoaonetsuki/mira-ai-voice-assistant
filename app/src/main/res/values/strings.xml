@@ -55,9 +55,6 @@
     <string name="vision_close">Close</string>
     <string name="vision_copy">Copy</string>
     <string name="vision_copied">Copied to clipboard</string>
-    <string name="vision_speaking">Speaking…</string>
-    <string name="vision_stop_speaking">Stop Speaking</string>
-    <string name="vision_speak_again">Speak Again</string>
     <string name="vision_ask_another">Ask Another</string>
     <string name="vision_retry">Try Again</string>
 </resources>

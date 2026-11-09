@@ -99,6 +99,10 @@ class MiraGeminiLiveTransport(
         fun onSessionResumptionUpdate(handle: String, resumable: Boolean) {}
         fun onGoAway(timeLeft: String) {}
         fun onUserTranscript(text: String) {}
+        fun onUserTranscript(text: String, isFinal: Boolean) {
+            onUserTranscript(text)
+        }
+        fun onTurnComplete() {}
         fun onModelTranscript(text: String) {}
         fun onSetupComplete() {}
         fun onSessionEnded(reason: String, t: Throwable?) {}
@@ -398,16 +402,26 @@ class MiraGeminiLiveTransport(
                         }
 
                         override fun onUserTranscript(text: String) {
+                            onUserTranscript(text, true)
+                        }
+
+                        override fun onUserTranscript(text: String, isFinal: Boolean) {
                             thread.runOnThread {
                                 transportContext.callbacks.onUserTranscript(
                                     Transcript(
                                         text = text,
-                                        `final` = true,
+                                        `final` = isFinal,
                                         timestamp = System.currentTimeMillis().toString(),
                                         userId = "local"
                                     )
                                 )
-                                sessionListener?.onUserTranscript(text)
+                                sessionListener?.onUserTranscript(text, isFinal)
+                            }
+                        }
+
+                        override fun onTurnComplete() {
+                            thread.runOnThread {
+                                sessionListener?.onTurnComplete()
                             }
                         }
 

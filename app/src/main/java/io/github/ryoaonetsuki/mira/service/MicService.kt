@@ -751,125 +751,38 @@ class MicService : Service() {
     private fun handleUserVoiceTurn(text: String) {
         val cleanText = text.trim()
         val words = cleanText.split("\\s+".toRegex()).filter { it.isNotBlank() }
-        val lower = text.trim().lowercase(Locale.ROOT)
-        val stopTokens = lower.split("\\s+".toRegex()).filter { it.isNotBlank() }
-        val stopWords = setOf("stop", "thamo", "থামো")
-        val isStop = stopTokens.any { it in stopWords }
 
-        // Emergency agent voice stop
-        if (isStop && automationBridge.isRunning) {
-            automationBridge.cancel()
-            serviceScope.launch(Dispatchers.IO) {
-                try {
-                    val db = MiraDatabase.getInstance(applicationContext)
-                    db.notificationDao().insertNotification(
-                        NotificationEntity(
-                            title = "Automation Stopped",
-                            message = "Screen automation stopped via voice command: $text",
-                            type = "automation"
-                        )
-                    )
-                } catch (e: Exception) {
-                    Log.w(TAG, "MIRA_LIVE_VOICE: Could not record notification: ${e.message}")
-                }
-            }
-            return
-        }
-
-
-        // Autonomous Screen Agent wiring: BEFORE existing handling
-        if (io.github.ryoaonetsuki.mira.automation.MiraAutomationBridge.isAutomationIntent(cleanText)) {
-            // Suppress the Live model's spoken reply for THAT turn only
-            sessionManager?.sendUserMessage("[Automation command detected: \"$cleanText\". Do not reply or speak. Keep silent.]")
-
-            val serviceEnabled = MiraAccessibilityService.isEnabled(applicationContext)
-            if (!serviceEnabled) {
-                val isBangla = io.github.ryoaonetsuki.mira.identity.MiraIdentityInterceptor.detectIsBangla(
-                    cleanText,
-                    cachedLanguage
-                )
-                val disabledMessage = if (isBangla) {
-                    "ফোন নিয়ন্ত্রণের জন্য Mira অ্যাক্সেসিবিলিটি সার্ভিস চালু করতে হবে।"
-                } else {
-                    "Please enable Mira screen control in accessibility settings to control the phone."
-                }
-                sessionManager?.stopAudioPlayback()
-                _modelTranscript.value = disabledMessage
-                recordRecentModelTranscript(disabledMessage)
-
-                serviceScope.launch(Dispatchers.IO) {
-                    val wasMuted = _isMuted.value
-                    _isMuted.value = true
-                    sessionManager?.enableMic(false)
-                    isTtsPlaying = true
-                    try {
-                        // Guide user with one tap to accessibility settings
-                        try {
-                            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
-                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            }
-                            applicationContext.startActivity(intent)
-                        } catch (e: Exception) {
-                            Log.w(TAG, "MIRA_LIVE_VOICE: Could not open accessibility settings: ${e.message}")
-                        }
-
-                        // Speak explanation aloud via existing TTS path
-                        speakAutomationResult(disabledMessage)
-                    } catch (e: Exception) {
-                        Log.e(TAG, "MIRA_LIVE_VOICE: Error speaking accessibility disabled guidance: ${e.message}", e)
-                    } finally {
-                        delay(300L)
-                        lastBotSpeakingEndTimeMs = android.os.SystemClock.elapsedRealtime()
-                        isTtsPlaying = false
-                        if (!wasMuted) {
-                            _isMuted.value = false
-                            sessionManager?.enableMic(true)
-                        }
-                    }
-                }
+        // One routing decision (pure, unit-tested): echo / stop / phone command / Live answers by itself.
+        val recentSpeech = synchronized(recentModelTranscripts) { recentModelTranscripts.toList() } +
+            listOfNotNull(_modelTranscript.value.takeIf { it.isNotBlank() })
+        when (io.github.ryoaonetsuki.mira.voice.VoiceTurnRouter.route(cleanText, recentSpeech, automationBridge.isRunning)) {
+            io.github.ryoaonetsuki.mira.voice.VoiceTurnRoute.IGNORE_ECHO -> {
+                Log.i(TAG, "MIRA_LIVE_VOICE: Ignoring turn (empty or echo of own speech): $cleanText")
                 return
             }
-
-            serviceScope.launch(Dispatchers.IO) {
-                val wasMuted = _isMuted.value
-                _isMuted.value = true
-                sessionManager?.enableMic(false)
-                isTtsPlaying = true
-                try {
-                    val result = automationBridge.executeGoal(cleanText)
-
-                    // Record notification like existing macro notifications
+            io.github.ryoaonetsuki.mira.voice.VoiceTurnRoute.STOP_AUTOMATION -> {
+                automationBridge.cancel()
+                serviceScope.launch(Dispatchers.IO) {
                     try {
                         val db = MiraDatabase.getInstance(applicationContext)
                         db.notificationDao().insertNotification(
                             NotificationEntity(
-                                title = if (result.status == io.github.ryoaonetsuki.mira.automation.agent.TaskStatus.SUCCESS)
-                                    "Task Completed" else "Task Failed",
-                                message = result.message,
-                                type = "macro"
+                                title = "Automation Stopped",
+                                message = "Screen automation stopped via voice command: $text",
+                                type = "automation"
                             )
                         )
                     } catch (e: Exception) {
-                        Log.w(TAG, "MIRA_LIVE_VOICE: Could not record automation notification: ${e.message}")
-                    }
-
-                    // Speak result message via existing TTS path
-                    sessionManager?.stopAudioPlayback()
-                    recordRecentModelTranscript(result.message)
-                    speakAutomationResult(result.message)
-                } catch (e: Exception) {
-                    Log.e(TAG, "MIRA_LIVE_VOICE: Error executing voice automation: ${e.message}", e)
-                } finally {
-                    delay(300L)
-                    lastBotSpeakingEndTimeMs = android.os.SystemClock.elapsedRealtime()
-                    isTtsPlaying = false
-                    if (!wasMuted) {
-                        _isMuted.value = false
-                        sessionManager?.enableMic(true)
+                        Log.w(TAG, "MIRA_LIVE_VOICE: Could not record notification: ${e.message}")
                     }
                 }
+                return
             }
-            return
+            io.github.ryoaonetsuki.mira.voice.VoiceTurnRoute.AUTOMATION -> {
+                handleAutomationCommand(cleanText)
+                return
+            }
+            io.github.ryoaonetsuki.mira.voice.VoiceTurnRoute.LIVE_ANSWERS -> Unit
         }
 
         // Debounce connector command execution
@@ -938,6 +851,107 @@ class MicService : Service() {
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * Explicit user phone command (the only way an automation goal starts). ONE voice: Live's audio is
+     * gated off while the action runs (reliable flag, not a text "keep silent"), then the outcome is
+     * handed to Live as context so IT announces it in its own words. Gemini TTS is used only when
+     * no Live session is connected at all.
+     */
+    private fun handleAutomationCommand(cleanText: String) {
+        val session = sessionManager
+        val token = sessionGenerationToken.get()
+        session?.setOutputSuppressed(true)
+        val serviceEnabled = MiraAccessibilityService.isEnabled(applicationContext)
+        serviceScope.launch(Dispatchers.IO) {
+            val wasMuted = _isMuted.value
+            _isMuted.value = true
+            sessionManager?.enableMic(false)
+            isTtsPlaying = true
+            try {
+                val isBangla = io.github.ryoaonetsuki.mira.identity.MiraIdentityInterceptor.detectIsBangla(cleanText, cachedLanguage)
+                if (!serviceEnabled) {
+                    val disabledMessage = if (isBangla) {
+                        "ফোন নিয়ন্ত্রণের জন্য Mira অ্যাক্সেসিবিলিটি সার্ভিস চালু করতে হবে।"
+                    } else {
+                        "Please enable Mira screen control in accessibility settings to control the phone."
+                    }
+                    _modelTranscript.value = disabledMessage
+                    try {
+                        val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        applicationContext.startActivity(intent)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "MIRA_LIVE_VOICE: Could not open accessibility settings: ${e.message}")
+                    }
+                    announceOutcome(
+                        token,
+                        io.github.ryoaonetsuki.mira.voice.VoiceTurnRouter.buildAccessibilityNote(cachedLanguage),
+                        disabledMessage
+                    )
+                    return@launch
+                }
+
+                val result = automationBridge.executeGoal(cleanText)
+                try {
+                    val db = MiraDatabase.getInstance(applicationContext)
+                    db.notificationDao().insertNotification(
+                        NotificationEntity(
+                            title = if (result.status == io.github.ryoaonetsuki.mira.automation.agent.TaskStatus.SUCCESS)
+                                "Task Completed" else "Task Failed",
+                            message = result.message,
+                            type = "macro"
+                        )
+                    )
+                } catch (e: Exception) {
+                    Log.w(TAG, "MIRA_LIVE_VOICE: Could not record automation notification: ${e.message}")
+                }
+                announceOutcome(
+                    token,
+                    io.github.ryoaonetsuki.mira.voice.VoiceTurnRouter.buildResultNote(
+                        result.message,
+                        cachedLanguage,
+                        result.status == io.github.ryoaonetsuki.mira.automation.agent.TaskStatus.SUCCESS
+                    ),
+                    result.message
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "MIRA_LIVE_VOICE: Error executing voice automation: ${e.message}", e)
+            } finally {
+                // Always release the gate, even on failure/cancel, so Live is never left muted.
+                session?.setOutputSuppressed(false)
+                delay(300L)
+                lastBotSpeakingEndTimeMs = android.os.SystemClock.elapsedRealtime()
+                isTtsPlaying = false
+                if (!wasMuted) {
+                    _isMuted.value = false
+                    sessionManager?.enableMic(true)
+                }
+            }
+        }
+    }
+
+    /**
+     * Announce the outcome of a user-requested action through the single Live voice. Skipped if the
+     * session that issued the command is gone (no stale/foreign announcements).
+     */
+    private suspend fun announceOutcome(token: Long, liveNote: String, fallbackText: String) {
+        if (!io.github.ryoaonetsuki.mira.voice.VoiceTurnRouter.mayAnnounceAutomationResult(goalFromUserCommand = true)) return
+        if (sessionGenerationToken.get() != token) {
+            Log.i(TAG, "MIRA_LIVE_VOICE: Session changed while action ran; not announcing")
+            return
+        }
+        val liveConnected = sessionManager?.state?.value == SessionManagerState.CONNECTED
+        if (liveConnected) {
+            sessionManager?.setOutputSuppressed(false)
+            sessionManager?.sendUserMessage(liveNote)
+        } else if (io.github.ryoaonetsuki.mira.voice.VoiceTurnRouter.mayUseFallbackTts(liveConnected = false, userInitiated = true)) {
+            // No Live session at all: Gemini TTS is the only voice, not a second one.
+            recordRecentModelTranscript(fallbackText)
+            speakAutomationResult(fallbackText)
         }
     }
 

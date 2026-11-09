@@ -1,5 +1,7 @@
 package io.github.ryoaonetsuki.mira.network
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
@@ -257,7 +259,7 @@ class GeminiRestClientTest {
 
         val restClient = GeminiRestClient()
         var caughtCancellation = false
-        val job = kotlinx.coroutines.launch(kotlinx.coroutines.Dispatchers.IO) {
+        val job = launch(Dispatchers.IO) {
             try {
                 restClient.executeGenerateContentSingleAttempt(
                     apiKey = "AIzaSyTestKey123",

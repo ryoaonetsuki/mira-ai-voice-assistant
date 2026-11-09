@@ -1,7 +1,11 @@
 package io.github.ryoaonetsuki.mira.ui.screens
 
+import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Environment
+import android.os.PowerManager
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -23,6 +27,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import io.github.ryoaonetsuki.mira.R
 import io.github.ryoaonetsuki.mira.backend.RemoteAppConfig
 import io.github.ryoaonetsuki.mira.backend.SupabaseClient
@@ -133,14 +138,20 @@ fun SplashScreen(
             return@LaunchedEffect
         }
 
-        // Before navigating to Home, verify File Management permission (required setup step)
+        // Before navigating to Home, verify mandatory setup permissions (File Access, Mic, Battery Unrestricted)
         val hasFileAccess = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             Environment.isExternalStorageManager()
         } else {
             true
         }
+        val hasMicPermission = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+        val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+        val isIgnoringBatteryOptimizations = powerManager.isIgnoringBatteryOptimizations(context.packageName)
 
-        if (!hasFileAccess) {
+        if (!hasFileAccess || !hasMicPermission || !isIgnoringBatteryOptimizations) {
             onNavigate("setup?startStep=2")
         } else {
             onNavigate(Screen.Home.route)

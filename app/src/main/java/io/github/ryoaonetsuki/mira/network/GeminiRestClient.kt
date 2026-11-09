@@ -259,164 +259,6 @@ data class ChatAttachment(
     val fileName: String? = null
 )
 
-object MiraChatSearchHeuristic {
-    // English keywords
-    private val ENGLISH_TRIGGERS = setOf(
-        "news", "latest", "today", "yesterday", "tomorrow", "tonight",
-        "current", "currently", "price", "prices", "score", "scores",
-        "result", "results", "standing", "standings", "released", "release",
-        "update", "updates", "version", "weather", "forecast", "stock",
-        "stocks", "market", "winner", "schedule", "rate", "exchange",
-        "crypto", "bitcoin", "election", "poll", "search", "lookup",
-        "match", "won", "happened"
-    )
-
-    // English multi-word phrases
-    private val ENGLISH_PHRASES = listOf(
-        "who won", "what happened", "release date", "exchange rate",
-        "dollar rate", "look up", "right now", "live score", "current price",
-        "latest news", "today's news"
-    )
-
-    // Bengali triggers (exact words/stems or phrases)
-    private val BENGALI_TRIGGERS = listOf(
-        "আজ", "আজকে", "গতকাল", "আগামীকাল", "এখনকার",
-        "খবর", "সংবাদ", "সর্বশেষ", "বর্তমান", "দাম", "দর", "মূল্য",
-        "স্কোর", "ফলাফল", "রেজাল্ট", "কে জিতল", "কে জিতেছে",
-        "কি হয়েছে", "কী হয়েছে", "ঘটনা কী", "আবহাওয়া", "পূর্বাভাস",
-        "শেয়ার বাজার", "স্টক", "আপডেট", "নতুন", "ভার্সন", "সংস্করণ",
-        "রিলিজ", "মুক্তি", "ম্যাচ", "খেলা", "টাকার রেট", "ডলার রেট",
-        "খুঁজে দেখো", "খুঁজে বের করো", "সার্চ করো", "সার্চ", "তথ্য"
-    )
-
-    // Patterns for years (e.g. 2024, 2025, 2026, 2027... and Bengali digits ২০২৪, ২০২৫, ২০২৬)
-    private val YEAR_REGEX = Regex("(?:\\b(?:19\\d\\d|20[2-9]\\d)\\b|[১-৯][০-৯]{3})")
-
-    // Patterns for dates (e.g. 05/11/2026, 2026-11-06, etc.)
-    private val DATE_REGEX = Regex("(?:\\b\\d{1,2}[./-]\\d{1,2}(?:[./-]\\d{2,4})?\\b|\\b\\d{4}[./-]\\d{1,2}[./-]\\d{1,2}\\b)")
-
-    // Date & Time triggers (case-insensitive, substring match)
-    private val DATE_TIME_TRIGGERS = listOf(
-        // English words/phrases
-        "what day is it", "what time is it", "what's the date", "today's date",
-        "current date", "current time", "what date", "what day", "what time",
-        "which day", "date", "day", "time",
-        // Bengali script
-        "কয় তারিখ", "তারিখ", "কয়টা", "কটা", "সময়", "আজকে", "আজ", "বার",
-        // Roman Bangla
-        "koy tarikh", "kototarikh", "kota baje", "ki bar", "kon bar",
-        "tarikh", "tariq", "ajker", "ajke", "koyta", "baje", "akhon", "ekhon", "somoy"
-    )
-
-    fun isDateTimeQuestion(text: String): Boolean {
-        if (text.isBlank()) return false
-        val lower = text.lowercase()
-        return DATE_TIME_TRIGGERS.any { lower.contains(it) }
-    }
-
-    fun isTimeSensitive(text: String): Boolean {
-        if (text.isBlank()) return false
-        if (isDateTimeQuestion(text)) return true
-        val lower = text.lowercase()
-
-        // 1. Check Year pattern
-        if (YEAR_REGEX.containsMatchIn(text)) return true
-
-        // 2. Check Date pattern
-        if (DATE_REGEX.containsMatchIn(text)) return true
-
-        // 3. Check Bengali triggers
-        for (bTrigger in BENGALI_TRIGGERS) {
-            if (lower.contains(bTrigger)) return true
-        }
-
-        // 4. Check English phrases
-        for (phrase in ENGLISH_PHRASES) {
-            if (lower.contains(phrase)) return true
-        }
-
-        // 5. Check English word triggers
-        val tokens = lower.split(Regex("[\\s,?.!;:'\"()]+"))
-        for (token in tokens) {
-            if (ENGLISH_TRIGGERS.contains(token)) return true
-        }
-
-        return false
-    }
-
-    private val BUILD_TRIGGERS = listOf(
-        "website", "web app", "webapp", "portfolio", "landing page", "script",
-        "build", "create", "make", "design", "code", "app",
-        "বানাও", "বানিয়ে", "তৈরি", "ওয়েবসাইট",
-        "banao", "baniye", "banai", "toiri", "website"
-    )
-
-    fun isBuildRequest(text: String): Boolean {
-        if (text.isBlank()) return false
-        val lower = text.lowercase()
-        return BUILD_TRIGGERS.any { lower.contains(it) }
-    }
-
-    private val INTERROGATIVE_TRIGGERS = listOf(
-        "what", "who", "when", "where", "why", "how to", "how", "which",
-        "is", "are", "can", "should", "best", "versus", "vs", "compare", "recommend",
-        "কি", "কী", "কে", "কখন", "কোথায়", "কেন", "কিভাবে", "কোন", "সেরা",
-        "kivabe", "kokhon", "kothay", "kokon", "kemon", "keno", "sera", "best", "ki", "ke", "kon"
-    )
-
-    fun isChatSearchWorthy(text: String): Boolean {
-        if (text.isBlank()) return false
-        if (isTimeSensitive(text)) return true
-        if (isBuildRequest(text)) return true
-        val lower = text.lowercase()
-        val words = lower.split(Regex("[\\s,?.!;:'\"()]+"))
-        if (words.any { it in INTERROGATIVE_TRIGGERS }) return true
-        return INTERROGATIVE_TRIGGERS.any { lower.contains(it) }
-    }
-
-    val ACKNOWLEDGEMENT_PHRASES: Map<String, String>
-        get() = SearchAcknowledgement.PHRASES
-
-    fun getAcknowledgementPhrase(language: String): String =
-        SearchAcknowledgement.getPhrase(language)
-
-    private val EXPLICIT_SEARCH_PHRASES = listOf(
-        "search koro", "khoje dekho", "khuje dekho",
-        "khoje bolo", "khuje bolo", "look up", "google it",
-        "খুঁজে দেখো", "খুঁজে বের করো", "খুঁজে বল", "খুঁজে বলো",
-        "সার্চ করো", "সার্চ কর"
-    )
-
-    private val EXPLICIT_SEARCH_TOKENS = setOf(
-        "search", "google", "lookup", "khoje", "khuje",
-        "খুঁজে", "সার্চ", "খোঁজ", "খোজ"
-    )
-
-    fun isSearchRequest(text: String): Boolean {
-        if (text.isBlank()) return false
-        if (isTimeSensitive(text)) return true
-
-        val lower = text.lowercase(Locale.ROOT)
-        for (phrase in EXPLICIT_SEARCH_PHRASES) {
-            if (lower.contains(phrase)) return true
-        }
-
-        if (lower.contains("খুঁজে") || lower.contains("সার্চ") || lower.contains("খোঁজ") || lower.contains("খোজ")) {
-            return true
-        }
-
-        val tokens = lower.split(Regex("[\\s,?.!;:'\"()]+"))
-        for (token in tokens) {
-            if (token in EXPLICIT_SEARCH_TOKENS) return true
-            if (token.startsWith("search") || token.startsWith("googl") ||
-                token.startsWith("khoj") || token.startsWith("khuj")) {
-                return true
-            }
-        }
-
-        return false
-    }
-}
 
 class GeminiRestClient(
     private val client: OkHttpClient = OkHttpClient.Builder()
@@ -754,11 +596,11 @@ class GeminiRestClient(
         enableGrounding: Boolean?,
         enableThinking: Boolean
     ): PreparedChatInput = withContext(Dispatchers.IO) {
+        val tSearchStart = android.os.SystemClock.elapsedRealtime()
         val lastUserMessage = history.lastOrNull { it.role == "user" }?.content ?: ""
         val isBuild = MiraChatSearchHeuristic.isBuildRequest(lastUserMessage)
         val shouldSearch = enableGrounding ?: if (isChatCall) {
-            MiraChatSearchHeuristic.isChatSearchWorthy(lastUserMessage) ||
-                (enableThinking && MiraChatSearchHeuristic.isSearchRequest(lastUserMessage))
+            MiraChatSearchHeuristic.isChatSearchWorthy(lastUserMessage)
         } else {
             MiraChatSearchHeuristic.isSearchRequest(lastUserMessage)
         }
@@ -821,6 +663,12 @@ class GeminiRestClient(
                 }
                 allSources.addAll(searchResults.map { GroundingSource(title = it.title, url = it.url) })
             }
+        }
+
+        if (allSources.isNotEmpty()) {
+            Log.d(TAG_LATENCY, "pre-model web search done: count=${allSources.size} in ${android.os.SystemClock.elapsedRealtime() - tSearchStart}ms")
+        } else {
+            Log.d(TAG_LATENCY, "pre-model web search skipped: ${android.os.SystemClock.elapsedRealtime() - tSearchStart}ms")
         }
 
         PreparedChatInput(
@@ -1020,10 +868,14 @@ class GeminiRestClient(
 
                 root.put("contents", contents)
 
-                if (enableThinking) {
+                val effectiveEnableThinking = shouldEnableThinking(
+                    enableThinking,
+                    prepared.effectiveHistory.lastOrNull { it.role == "user" }?.content ?: ""
+                )
+                if (effectiveEnableThinking) {
                     val genConfig = JSONObject()
                     val thinkingConfig = JSONObject()
-                    thinkingConfig.put("thinkingBudget", 8192)
+                    thinkingConfig.put("thinkingBudget", MAX_THINKING_BUDGET)
                     genConfig.put("thinkingConfig", thinkingConfig)
                     root.put("generationConfig", genConfig)
                 }
@@ -1093,6 +945,9 @@ class GeminiRestClient(
                                             if (chunk.isNotEmpty()) {
                                                 modelTokensEmitted++
                                                 tokensEmittedTotal++
+                                                if (modelTokensEmitted == 1) {
+                                                    Log.d(TAG_LATENCY, "first streamed token received from $m")
+                                                }
                                                 emit(chunk)
                                             }
                                         }
@@ -1106,6 +961,7 @@ class GeminiRestClient(
                 }
 
                 if (modelTokensEmitted > 0) {
+                    Log.d(TAG_LATENCY, "stream complete: $modelTokensEmitted tokens emitted by $m")
                     val finalSources = (prepared.sources + streamSources).distinctBy { it.url }.take(4)
                     if (finalSources.isNotEmpty()) {
                         onSourcesReceived?.invoke(finalSources)
@@ -1149,7 +1005,7 @@ class GeminiRestClient(
         enableThinking: Boolean = false,
         attachments: List<ChatAttachment> = emptyList()
     ): Result<GroundedChatResult> = withContext(Dispatchers.IO) {
-        val retryDelaysMs = listOf(2000L, 5000L, 10000L)
+        val retryDelaysMs = FALLBACK_RETRY_DELAYS_MS
         var lastResult: Result<GroundedChatResult> = Result.failure(Exception("Not started"))
 
         for (attempt in 0..retryDelaysMs.size) {
@@ -1281,10 +1137,14 @@ class GeminiRestClient(
                 root.put("tools", tools)
             }
 
-            if (enableThinking) {
+            val effectiveThinking = shouldEnableThinking(
+                enableThinking,
+                history.lastOrNull { it.role == "user" }?.content ?: ""
+            )
+            if (effectiveThinking) {
                 val genConfig = JSONObject()
                 val thinkingConfig = JSONObject()
-                thinkingConfig.put("thinkingBudget", 8192)
+                thinkingConfig.put("thinkingBudget", MAX_THINKING_BUDGET)
                 genConfig.put("thinkingConfig", thinkingConfig)
                 root.put("generationConfig", genConfig)
             }
@@ -1370,5 +1230,12 @@ class GeminiRestClient(
     companion object {
         private const val TAG = "MiraGeminiRestClient"
         private const val TAG_CHAT = "MiraChat"
+        const val TAG_LATENCY = "MIRA_CHAT_LATENCY"
+        const val MAX_THINKING_BUDGET = MiraChatSearchHeuristic.MAX_THINKING_BUDGET
+        val FALLBACK_RETRY_DELAYS_MS = listOf(2000L)
+
+        fun shouldEnableThinking(enableThinking: Boolean, userMessage: String): Boolean {
+            return MiraChatSearchHeuristic.shouldEnableThinking(enableThinking, userMessage)
+        }
     }
 }

@@ -174,9 +174,35 @@ class MiraAutomationBridge(
             "মেসেজ", "ফোন", "জিমেইল", "স্পটিফাই", "ফেসবুক", "সেটিংস", "অ্যাপ"
         )
 
+        /** Capability-question markers ("korte paro", "can you", "পারো"): asks IF she can, does not command. */
+        private val CAPABILITY_QUESTION = listOf(
+            Regex("""\b(paro|paren|parbe|parbo|parben|pare|parish)\b""", RegexOption.IGNORE_CASE),
+            Regex("""\b(can|could|will|would)\s+(you|u|mira)\b""", RegexOption.IGNORE_CASE),
+            Regex("""\b(do|are)\s+you\s+(able|capable|control|operate)""", RegexOption.IGNORE_CASE),
+            Regex("""\b(is\s+it\s+possible|able\s+to)\b""", RegexOption.IGNORE_CASE),
+            Regex("পারো|পারে|পারবে|পারেন|পারবা")
+        )
+
+        /** Concrete action verbs; a capability question containing one is still a (polite) command. */
+        private val STRONG_ACTION = listOf(
+            Regex("""\b(open|launch|start|play|message|text|call|search|find|show|turn\s+on|turn\s+off|set|take\s+a\s+photo)\b""", RegexOption.IGNORE_CASE),
+            Regex("""\b(kholo|khulo|chalao|chalaw|pathao|pathaw|bajao|bajaw|dekhao|dekhaw)\b""", RegexOption.IGNORE_CASE),
+            Regex("খুলো|খোলো|চালাও|পাঠাও|কল|খুঁজো")
+        )
+
+        /** True for "can you control my phone"-style questions that carry no concrete action. */
+        fun isCapabilityQuestion(text: String): Boolean {
+            val lower = text.trim().lowercase()
+            if (lower.isEmpty()) return false
+            if (CAPABILITY_QUESTION.none { it.containsMatchIn(lower) }) return false
+            return STRONG_ACTION.none { it.containsMatchIn(lower) }
+        }
+
         fun isAutomationIntent(text: String): Boolean {
             val trimmed = text.trim()
             if (trimmed.isEmpty()) return false
+            // A question about whether she CAN control the phone is answered by the Live model, never run as a goal.
+            if (isCapabilityQuestion(trimmed)) return false
             val lower = trimmed.lowercase()
 
             // 1. Explicit pattern matches ("play <song> on youtube", "message <name> on whatsapp", "phone control")

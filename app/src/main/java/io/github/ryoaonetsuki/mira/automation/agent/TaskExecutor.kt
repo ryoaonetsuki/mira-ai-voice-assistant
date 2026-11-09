@@ -4,6 +4,7 @@ package io.github.ryoaonetsuki.mira.automation.agent
 
 import android.util.Log
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 
 enum class TaskStatus {
     SUCCESS,
@@ -28,6 +29,18 @@ interface AutomationPort {
     fun formatNodes(nodes: List<ScreenNode>): String
     fun getCompressedScreenDescription(nodes: List<ScreenNode>, goal: String): String
     fun clickText(text: String, nodes: List<ScreenNode>): Boolean
+    fun clickText(
+        text: String,
+        nodes: List<ScreenNode>,
+        fallbackX: Int?,
+        fallbackY: Int?
+    ): Boolean {
+        if (clickText(text, nodes)) return true
+        if (fallbackX != null && fallbackY != null && fallbackX > 0 && fallbackY > 0) {
+            return clickAt(fallbackX.toFloat(), fallbackY.toFloat())
+        }
+        return false
+    }
     fun clickAt(x: Float, y: Float): Boolean
     fun typeText(text: String): Boolean
     fun pressEnter(): Boolean
@@ -142,7 +155,8 @@ class TaskExecutor(
     private val maxSteps: Int = 15,
     private val stepDelayMs: Long = 600,
     private val onProgress: ((step: Int, description: String) -> Unit)? = null,
-    private val thinkWithVision: (suspend (goal: String, screenDescription: String, history: List<Pair<String, String>>, screenshotJpeg: ByteArray) -> String)? = null
+    private val thinkWithVision: (suspend (goal: String, screenDescription: String, history: List<Pair<String, String>>, screenshotJpeg: ByteArray) -> String)? = null,
+    private val taskTimeoutMs: Long = DEFAULT_TASK_TIMEOUT_MS
 ) {
     private val settleDelayMs: Long = if (stepDelayMs == 0L) 0L else 700L
     private val openAppSettleDelayMs: Long = if (stepDelayMs == 0L) 0L else 1200L
@@ -169,43 +183,59 @@ class TaskExecutor(
         recovery.reset()
 
         try {
-            // 1. Accessibility gate
-            if (!automation.isServiceEnabled()) {
+            val timedResult = withTimeoutOrNull(taskTimeoutMs) {
+                executeGoalInternal(goal)
+            }
+            if (timedResult == null) {
+                _cancelRequested = true
+                logWarn("Task '$goal' timed out after ${taskTimeoutMs}ms")
                 return TaskResult(
                     status = TaskStatus.FAILED,
-                    message = "Accessibility service is off — enable Mira Screen Control in Settings > Accessibility",
+                    message = "Task timed out after 120s",
                     stepsUsed = 0
                 )
             }
-
-            // 2. Skill-memory fast path (Jarvis task_executor.dart:308-333 behaviour)
-            val matchedSkill = skills.findMatch(goal)
-            if (matchedSkill != null) {
-                onProgress?.invoke(0, "Found memorized skill (${matchedSkill.steps.size} steps). Replaying…")
-                val replaySuccess = replaySkill(matchedSkill)
-                if (_cancelRequested) {
-                    return TaskResult(TaskStatus.CANCELLED, "Task cancelled by user", matchedSkill.steps.size)
-                }
-                if (replaySuccess) {
-                    skills.markReplayOutcome(matchedSkill.id, true)
-                    return TaskResult(
-                        status = TaskStatus.SUCCESS,
-                        message = "Task completed via memorized skill",
-                        stepsUsed = matchedSkill.steps.size
-                    )
-                }
-                // Stale skill failed — delete stale skill and fall through to live AI loop
-                skills.markReplayOutcome(matchedSkill.id, false)
-                logInfo("Saved skill failed — falling back to AI loop")
-                onProgress?.invoke(0, "Saved skill failed — falling back to AI loop")
-            }
-
-            // 3. AI loop
-            return runAiLoop(goal)
+            return timedResult
         } finally {
             _isRunning = false
             _cancelRequested = false
         }
+    }
+
+    private suspend fun executeGoalInternal(goal: String): TaskResult {
+        // 1. Accessibility gate
+        if (!automation.isServiceEnabled()) {
+            return TaskResult(
+                status = TaskStatus.FAILED,
+                message = "Accessibility service is off — enable Mira Screen Control in Settings > Accessibility",
+                stepsUsed = 0
+            )
+        }
+
+        // 2. Skill-memory fast path (Jarvis task_executor.dart:308-333 behaviour)
+        val matchedSkill = skills.findMatch(goal)
+        if (matchedSkill != null) {
+            onProgress?.invoke(0, "Found memorized skill (${matchedSkill.steps.size} steps). Replaying…")
+            val replaySuccess = replaySkill(matchedSkill)
+            if (_cancelRequested) {
+                return TaskResult(TaskStatus.CANCELLED, "Task cancelled by user", matchedSkill.steps.size)
+            }
+            if (replaySuccess) {
+                skills.markReplayOutcome(matchedSkill.id, true)
+                return TaskResult(
+                    status = TaskStatus.SUCCESS,
+                    message = "Task completed via memorized skill",
+                    stepsUsed = matchedSkill.steps.size
+                )
+            }
+            // Replay failed — record failed outcome (kept until 3 consecutive failures) and fall through to live AI loop
+            skills.markReplayOutcome(matchedSkill.id, false)
+            logInfo("Saved skill failed — falling back to AI loop")
+            onProgress?.invoke(0, "Saved skill failed — falling back to AI loop")
+        }
+
+        // 3. AI loop
+        return runAiLoop(goal)
     }
 
     suspend fun replaySkillDirect(skill: Skill): TaskResult {
@@ -217,46 +247,87 @@ class TaskExecutor(
         recovery.reset()
 
         try {
-            if (!automation.isServiceEnabled()) {
+            val timedResult = withTimeoutOrNull(taskTimeoutMs) {
+                replaySkillDirectInternal(skill)
+            }
+            if (timedResult == null) {
+                _cancelRequested = true
+                logWarn("Skill replay '${skill.goal}' timed out after ${taskTimeoutMs}ms")
                 return TaskResult(
                     status = TaskStatus.FAILED,
-                    message = "Accessibility service is off — enable Mira Screen Control in Settings > Accessibility",
+                    message = "Task timed out after 120s",
                     stepsUsed = 0
                 )
             }
-
-            if (skill.steps.isEmpty()) {
-                return TaskResult(
-                    status = TaskStatus.FAILED,
-                    message = "Skill '${skill.goal}' has no recorded steps. Please re-record the macro.",
-                    stepsUsed = 0
-                )
-            }
-
-            onProgress?.invoke(0, "Replaying macro '${skill.goal}' (${skill.steps.size} steps)…")
-            val ok = replaySkill(skill)
-            if (_cancelRequested) {
-                return TaskResult(TaskStatus.CANCELLED, "Task cancelled by user", skill.steps.size)
-            }
-            return if (ok) {
-                skills.markReplayOutcome(skill.id, true)
-                TaskResult(
-                    status = TaskStatus.SUCCESS,
-                    message = "Task completed via memorized skill",
-                    stepsUsed = skill.steps.size
-                )
-            } else {
-                skills.markReplayOutcome(skill.id, false)
-                TaskResult(
-                    status = TaskStatus.FAILED,
-                    message = "Skill replay failed during execution. Please re-record the macro.",
-                    stepsUsed = 0
-                )
-            }
+            return timedResult
         } finally {
             _isRunning = false
             _cancelRequested = false
         }
+    }
+
+    private suspend fun replaySkillDirectInternal(skill: Skill): TaskResult {
+        if (!automation.isServiceEnabled()) {
+            return TaskResult(
+                status = TaskStatus.FAILED,
+                message = "Accessibility service is off — enable Mira Screen Control in Settings > Accessibility",
+                stepsUsed = 0
+            )
+        }
+
+        if (skill.steps.isEmpty()) {
+            return TaskResult(
+                status = TaskStatus.FAILED,
+                message = "Skill '${skill.goal}' has no recorded steps. Please re-record the macro.",
+                stepsUsed = 0
+            )
+        }
+
+        onProgress?.invoke(0, "Replaying macro '${skill.goal}' (${skill.steps.size} steps)…")
+        val ok = replaySkill(skill)
+        if (_cancelRequested) {
+            return TaskResult(TaskStatus.CANCELLED, "Task cancelled by user", skill.steps.size)
+        }
+        if (ok) {
+            skills.markReplayOutcome(skill.id, true)
+            return TaskResult(
+                status = TaskStatus.SUCCESS,
+                message = "Task completed via memorized skill",
+                stepsUsed = skill.steps.size
+            )
+        }
+
+        if (think != null || thinkWithVision != null) {
+            logInfo("Saved skill failed — falling back to AI loop")
+            onProgress?.invoke(0, "Saved skill failed — falling back to AI loop")
+            val aiResult = runAiLoop(skill.goal)
+            return when (aiResult.status) {
+                TaskStatus.SUCCESS -> {
+                    skills.markReplayOutcome(skill.id, true)
+                    TaskResult(
+                        status = TaskStatus.SUCCESS,
+                        message = "Skill replay failed; completed via AI fallback in ${aiResult.stepsUsed} step(s).",
+                        stepsUsed = aiResult.stepsUsed
+                    )
+                }
+                TaskStatus.CANCELLED -> aiResult
+                TaskStatus.FAILED -> {
+                    skills.markReplayOutcome(skill.id, false)
+                    TaskResult(
+                        status = TaskStatus.FAILED,
+                        message = "Skill replay failed and AI fallback could not complete the goal: ${aiResult.message}",
+                        stepsUsed = aiResult.stepsUsed
+                    )
+                }
+            }
+        }
+
+        skills.markReplayOutcome(skill.id, false)
+        return TaskResult(
+            status = TaskStatus.FAILED,
+            message = "Skill replay failed during execution. Please re-record the macro.",
+            stepsUsed = 0
+        )
     }
 
     suspend fun replaySkill(skill: Skill): Boolean {
@@ -264,19 +335,21 @@ class TaskExecutor(
             logWarn("Cannot replay skill '${skill.goal}': no steps recorded")
             return false
         }
+        val totalSteps = skill.steps.size
         var stepCount = 0
+        var skippedCount = 0
         for (step in skill.steps) {
             if (_cancelRequested) return false
             stepCount++
             onProgress?.invoke(stepCount, "Replaying: ${step.action}")
 
-            val preNodes = try {
+            var preNodes = try {
                 automation.getScreenElements()
             } catch (_: Throwable) {
                 emptyList()
             }
-            val prePackage = automation.getCurrentPackage().orEmpty()
-            val preSignature = computeNodeSignature(preNodes)
+            var prePackage = automation.getCurrentPackage().orEmpty()
+            var preSignature = computeNodeSignature(preNodes)
 
             val blocked = AutomationSafety.isBlocked(step, prePackage.ifEmpty { null })
             if (blocked != null) {
@@ -284,28 +357,88 @@ class TaskExecutor(
                 return false
             }
 
-            val ok = _performAction(step, preNodes)
-            if (!ok && step.action != TaskStep.ACTION_WAIT) {
-                logWarn("Replayed step failed: ${step.action}")
-                return false
+            if (step.action == TaskStep.ACTION_WAIT || step.action == TaskStep.ACTION_DONE) {
+                _performAction(step, preNodes)
+                delay(stepDelayMs)
+                continue
             }
 
-            if (step.action != TaskStep.ACTION_WAIT && step.action != TaskStep.ACTION_DONE) {
-                delay(if (step.action == TaskStep.ACTION_OPEN_APP) openAppSettleDelayMs else settleDelayMs)
-                val postNodes = try {
+            // (i) Dispatch with one retry after re-dumping the screen
+            var ok = _performAction(step, preNodes)
+            if (!ok) {
+                logWarn("Replayed step $stepCount/$totalSteps (${step.action}) dispatch failed on attempt 1 — re-dumping screen and retrying once")
+                delay(stepDelayMs)
+                if (_cancelRequested) return false
+                preNodes = try {
                     automation.getScreenElements()
                 } catch (_: Throwable) {
                     emptyList()
                 }
-                val postPackage = automation.getCurrentPackage().orEmpty()
-                val postSignature = computeNodeSignature(postNodes)
-                if (!verifyEffect(step, prePackage, preSignature, postPackage, postSignature)) {
-                    logWarn("Replayed step had no verified effect on screen: ${step.action}")
+                prePackage = automation.getCurrentPackage().orEmpty()
+                preSignature = computeNodeSignature(preNodes)
+                val retryBlocked = AutomationSafety.isBlocked(step, prePackage.ifEmpty { null })
+                if (retryBlocked != null) {
+                    logWarn("Replayed step blocked for safety on retry: $retryBlocked")
                     return false
                 }
-            } else {
-                delay(stepDelayMs)
+                ok = _performAction(step, preNodes)
             }
+            if (!ok) {
+                logWarn("Replayed step $stepCount/$totalSteps (${step.action}) dispatch failed after retry — aborting replay")
+                return false
+            }
+
+            // (ii) Verify effect; if no effect, retry once, then skip non-critical or fail critical
+            val waitMs = if (step.action == TaskStep.ACTION_OPEN_APP) openAppSettleDelayMs else settleDelayMs
+            delay(waitMs)
+            var postNodes = try {
+                automation.getScreenElements()
+            } catch (_: Throwable) {
+                emptyList()
+            }
+            var postPackage = automation.getCurrentPackage().orEmpty()
+            var postSignature = computeNodeSignature(postNodes)
+            var effectVerified = verifyEffect(step, prePackage, preSignature, postPackage, postSignature)
+
+            if (!effectVerified) {
+                logWarn("Replayed step $stepCount/$totalSteps (${step.action}) had no verified effect — re-dumping screen and retrying once")
+                if (_cancelRequested) return false
+                preNodes = postNodes
+                prePackage = postPackage
+                preSignature = postSignature
+                val retryBlocked = AutomationSafety.isBlocked(step, prePackage.ifEmpty { null })
+                if (retryBlocked != null) {
+                    logWarn("Replayed step blocked for safety on effect retry: $retryBlocked")
+                    return false
+                }
+                val retryDispatched = _performAction(step, preNodes)
+                if (retryDispatched) {
+                    delay(waitMs)
+                    postNodes = try {
+                        automation.getScreenElements()
+                    } catch (_: Throwable) {
+                        emptyList()
+                    }
+                    postPackage = automation.getCurrentPackage().orEmpty()
+                    postSignature = computeNodeSignature(postNodes)
+                    effectVerified = verifyEffect(step, prePackage, preSignature, postPackage, postSignature)
+                }
+            }
+
+            if (!effectVerified) {
+                if (isCriticalReplayStep(step.action)) {
+                    logWarn("Replayed critical step $stepCount/$totalSteps (${step.action}) had no verified effect after retry — aborting replay")
+                    return false
+                }
+                skippedCount++
+                logWarn("Replayed non-critical step $stepCount/$totalSteps (${step.action}) had no verified effect after retry — skipping ($skippedCount/$totalSteps skipped)")
+            }
+        }
+
+        // (iii) If skipped steps are more than half of all steps, replay overall fails
+        if (skippedCount * 2 > totalSteps) {
+            logWarn("Replay failed: skipped $skippedCount of $totalSteps steps (>50%) for '${skill.goal}'")
+            return false
         }
         return stepCount > 0
     }
@@ -529,7 +662,9 @@ class TaskExecutor(
             when (step.action) {
                 TaskStep.ACTION_CLICK_TEXT -> {
                     val text = step.stringParam("text") ?: ""
-                    automation.clickText(text, nodes)
+                    val fallbackX = step.intParam("fallbackX") ?: step.intParam("x")
+                    val fallbackY = step.intParam("fallbackY") ?: step.intParam("y")
+                    automation.clickText(text, nodes, fallbackX, fallbackY)
                 }
                 TaskStep.ACTION_CLICK_AT -> {
                     val x = step.intParam("x") ?: return false
@@ -601,6 +736,10 @@ class TaskExecutor(
 
     companion object {
         private const val TAG = "TaskExecutor"
+        const val DEFAULT_TASK_TIMEOUT_MS: Long = 120_000L
+
+        fun isCriticalReplayStep(action: String): Boolean =
+            action == TaskStep.ACTION_OPEN_APP || action == TaskStep.ACTION_TYPE_TEXT
 
         fun computeNodeSignature(nodes: List<ScreenNode>): Int =
             nodes.joinToString("|") {

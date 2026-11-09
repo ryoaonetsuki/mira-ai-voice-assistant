@@ -37,6 +37,10 @@ interface SessionManagerListener {
     fun onStateChanged(state: SessionManagerState) {}
     fun onAudioLevel(level: Float) {}
     fun onUserTranscript(text: String) {}
+    fun onUserTranscript(text: String, isFinal: Boolean) {
+        onUserTranscript(text)
+    }
+    fun onTurnComplete() {}
     fun onModelTranscript(text: String) {}
     fun onBotSpeakingChanged(isSpeaking: Boolean) {}
     fun onUserSpeakingChanged(isSpeaking: Boolean) {}
@@ -400,7 +404,17 @@ class GeminiSessionManager(
 
             override fun onUserTranscript(text: String) {
                 if (epoch != currentEpoch.get()) return
-                listener.onUserTranscript(text)
+                listener.onUserTranscript(text, true)
+            }
+
+            override fun onUserTranscript(text: String, isFinal: Boolean) {
+                if (epoch != currentEpoch.get()) return
+                listener.onUserTranscript(text, isFinal)
+            }
+
+            override fun onTurnComplete() {
+                if (epoch != currentEpoch.get()) return
+                listener.onTurnComplete()
             }
 
             override fun onModelTranscript(text: String) {

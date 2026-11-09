@@ -76,15 +76,21 @@ class ImageTurnRoutingTest {
     @Test
     fun testNonImageRequests_DoNotCallImageClient() = runBlocking {
         val fakeClient = FakeMiraImageApiClient()
-        val nonImageInputs = listOf(
+        val offModeInputs = listOf(
             "Hello, what can you do?",
             "Write a Python script to sort files",
             "What is the weather today?",
             "Create a landing page for my bakery",
-            "Explain how neural networks work"
+            "Explain how neural networks work",
+            "generate an image of a neon cat",
+            "draw a sunset over the mountains",
+            "create a picture of an astronaut puppy",
+            "/image futuristic flying taxi",
+            "sunset over the ocean photo",
+            "একটি ড্রাগনের ছবি আঁকো"
         )
 
-        for (input in nonImageInputs) {
+        for (input in offModeInputs) {
             val outcome = simulateChatRouting(
                 text = input,
                 isImageMode = false,
@@ -94,10 +100,10 @@ class ImageTurnRoutingTest {
                 saveLocalImage = { _, _ -> "file:///mock.jpg" }
             )
 
-            assertTrue("Expected TextChat for input: '$input'", outcome is ChatTurnOutcome.TextChat)
+            assertTrue("Expected TextChat when isImageMode=false for input: '$input'", outcome is ChatTurnOutcome.TextChat)
         }
 
-        assertEquals("Image client must NEVER be called for non-image prompts", 0, fakeClient.callCount.get())
+        assertEquals("Image client must NEVER be called when isImageMode is OFF", 0, fakeClient.callCount.get())
     }
 
     @Test
@@ -107,9 +113,9 @@ class ImageTurnRoutingTest {
         )
 
         val imageInputs = listOf(
-            "generate an image of a neon cat" to "a neon cat",
-            "draw a sunset over the mountains" to "sunset over the mountains",
-            "create a picture of an astronaut puppy" to "an astronaut puppy",
+            "generate an image of a neon cat" to "generate an image of a neon cat",
+            "draw a sunset over the mountains" to "draw a sunset over the mountains",
+            "create a picture of an astronaut puppy" to "create a picture of an astronaut puppy",
             "/image futuristic flying taxi" to "futuristic flying taxi"
         )
 
@@ -117,17 +123,18 @@ class ImageTurnRoutingTest {
             fakeClient.callCount.set(0)
             val outcome = simulateChatRouting(
                 text = input,
-                isImageMode = false,
+                isImageMode = true,
                 hasStagedAttachment = false,
                 isBangla = false,
                 client = fakeClient,
                 saveLocalImage = { p, _ -> "file:///data/user/0/mira/generated_images/${p.take(5)}.jpg" }
             )
 
-            assertEquals("Must call image client once for input: '$input'", 1, fakeClient.callCount.get())
+            assertEquals("Must call image client once when isImageMode=true for input: '$input'", 1, fakeClient.callCount.get())
+            assertEquals("Full prompt must be sent to model", expectedPrompt, fakeClient.lastPromptReceived)
             assertTrue(outcome is ChatTurnOutcome.ImageMessage)
             val imageOutcome = outcome as ChatTurnOutcome.ImageMessage
-            assertTrue("Message must contain markdown image tag", imageOutcome.content.contains("![$expectedPrompt]"))
+            assertTrue("Message must contain markdown image tag with full prompt", imageOutcome.content.contains("![$expectedPrompt]"))
             assertTrue("Message must point to local file:/// URI", imageOutcome.content.contains("(file:///data/user/0/mira/generated_images/"))
             assertFalse("Must never contain pollinations URL", imageOutcome.content.contains("pollinations.ai"))
         }
@@ -155,10 +162,10 @@ class ImageTurnRoutingTest {
     fun testStagedAttachment_BypassesImageGeneration() = runBlocking {
         val fakeClient = FakeMiraImageApiClient()
 
-        // When a file is attached, image extraction should not hijack file question
+        // When a file is attached, image extraction should not hijack file question even if isImageMode is on
         val outcome = simulateChatRouting(
             text = "draw a chart from this data",
-            isImageMode = false,
+            isImageMode = true,
             hasStagedAttachment = true,
             isBangla = false,
             client = fakeClient,
@@ -177,7 +184,7 @@ class ImageTurnRoutingTest {
 
         val outcomeEnglish = simulateChatRouting(
             text = "generate an image of a cyber dragon",
-            isImageMode = false,
+            isImageMode = true,
             hasStagedAttachment = false,
             isBangla = false,
             client = fakeClient,
@@ -193,7 +200,7 @@ class ImageTurnRoutingTest {
         // Test Bangla failure message
         val outcomeBangla = simulateChatRouting(
             text = "একটি ড্রাগনের ছবি আঁকো",
-            isImageMode = false,
+            isImageMode = true,
             hasStagedAttachment = false,
             isBangla = true,
             client = fakeClient,

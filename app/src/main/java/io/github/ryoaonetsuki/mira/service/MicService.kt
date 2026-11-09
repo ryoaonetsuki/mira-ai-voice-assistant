@@ -761,6 +761,10 @@ class MicService : Service() {
 
     private fun handleUserVoiceTurn(text: String) {
         val cleanText = text.trim()
+        if (cleanText.isEmpty() || isEchoOfModelSpeech(cleanText)) {
+            Log.i(TAG, "MIRA_LIVE_VOICE: Ignoring turn (empty or echo of own speech): $cleanText")
+            return
+        }
         val words = cleanText.split("\\s+".toRegex()).filter { it.isNotBlank() }
 
         // One routing decision (pure, unit-tested): echo / stop / phone command / Live answers by itself.
@@ -873,13 +877,15 @@ class MicService : Service() {
     /**
      * Explicit user phone command (the only way an automation goal starts). ONE voice: Live's audio is
      * gated off while the action runs (reliable flag, not a text "keep silent"), then the outcome is
-     * handed to Live as context so IT announces it in its own words. Gemini TTS is used only when
-     * no Live session is connected at all.
+     * handed to Live as context so IT announces it in its own words. When Live is not connected,
+     * the outcome is delivered as written status/transcript text and notification — never TTS.
      */
     private fun handleAutomationCommand(cleanText: String) {
         val session = sessionManager
         val token = sessionGenerationToken.get()
         session?.setOutputSuppressed(true)
+        _statusText.value = "Running: $cleanText..."
+        _modelTranscript.value = "Running: $cleanText..."
         val serviceEnabled = MiraAccessibilityService.isEnabled(applicationContext)
         serviceScope.launch(Dispatchers.IO) {
             val wasMuted = _isMuted.value
@@ -938,6 +944,7 @@ class MicService : Service() {
                 Log.e(TAG, "MIRA_LIVE_VOICE: Error executing voice automation: ${e.message}", e)
             } finally {
                 // Always release the gate, even on failure/cancel, so Live is never left muted.
+                _statusText.value = ""
                 session?.setOutputSuppressed(false)
                 delay(300L)
                 lastBotSpeakingEndTimeMs = android.os.SystemClock.elapsedRealtime()
@@ -952,7 +959,8 @@ class MicService : Service() {
 
     /**
      * Announce the outcome of a user-requested action through the single Live voice. Skipped if the
-     * session that issued the command is gone (no stale/foreign announcements).
+     * session that issued the command is gone (no stale/foreign announcements). When Live is not
+     * connected, deliver the result as written text only (never TTS).
      */
     private suspend fun announceOutcome(token: Long, liveNote: String, fallbackText: String) {
         if (!io.github.ryoaonetsuki.mira.voice.VoiceTurnRouter.mayAnnounceAutomationResult(goalFromUserCommand = true)) return
@@ -964,48 +972,9 @@ class MicService : Service() {
         if (liveConnected) {
             sessionManager?.setOutputSuppressed(false)
             sessionManager?.sendUserMessage(liveNote)
-        } else if (io.github.ryoaonetsuki.mira.voice.VoiceTurnRouter.mayUseFallbackTts(liveConnected = false, userInitiated = true)) {
-            // No Live session at all: Gemini TTS is the only voice, not a second one.
+        } else if (fallbackText.isNotBlank()) {
+            _modelTranscript.value = fallbackText
             recordRecentModelTranscript(fallbackText)
-            speakAutomationResult(fallbackText)
-        }
-    }
-
-    private suspend fun speakAutomationResult(message: String) {
-        if (message.isBlank()) return
-        try {
-            val resolver = io.github.ryoaonetsuki.mira.backend.ApiKeyResolver(applicationContext)
-            val securePrefs = SecurePreferences(applicationContext)
-            val keySource = resolver.resolveKey()
-            val rawApiKey = (keySource as? io.github.ryoaonetsuki.mira.backend.KeySource.UserKey)?.key
-                ?: (securePrefs.getGeminiApiKey() ?: "")
-            val useServer = keySource is io.github.ryoaonetsuki.mira.backend.KeySource.ServerKey
-            val ttsClient = io.github.ryoaonetsuki.mira.network.GeminiTtsClient(applicationContext)
-            val result = ttsClient.speakText(
-                apiKey = rawApiKey,
-                text = message,
-                voiceName = cachedVoiceName,
-                useServerProxy = useServer
-            )
-            if (result.isSuccess) {
-                val pcmBytes = result.getOrThrow()
-                val player = AudioPlayer(onSpeakingStateChanged = { isSpeaking ->
-                    handlePlaybackSpeakingChanged(isSpeaking)
-                })
-                player.beginPreview()
-                val rampedBytes = AudioPlayer.applyPreviewFadeRamps(pcmBytes)
-                val chunkSize = 4096
-                var offset = 0
-                while (offset < rampedBytes.size) {
-                    val length = minOf(chunkSize, rampedBytes.size - offset)
-                    player.playAudioChunk(rampedBytes.copyOfRange(offset, offset + length))
-                    offset += length
-                    delay(10)
-                }
-                player.endPreviewCleanly()
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "MIRA_LIVE_VOICE: Failed to speak automation result via TTS: ${e.message}")
         }
     }
 
@@ -1018,6 +987,8 @@ class MicService : Service() {
 
     private fun stopLiveVoiceSessionInternal() {
         sessionGenerationToken.incrementAndGet()
+        automationBridge.cancel()
+        _statusText.value = ""
         startVoiceSessionJob?.cancel()
         startVoiceSessionJob = null
         isTtsPlaying = false
@@ -1148,6 +1119,9 @@ class MicService : Service() {
 
         private val _modelTranscript = MutableStateFlow("")
         val modelTranscript: StateFlow<String> = _modelTranscript.asStateFlow()
+
+        private val _statusText = MutableStateFlow("")
+        val statusText: StateFlow<String> = _statusText.asStateFlow()
 
         private val _errorMessage = MutableStateFlow<String?>(null)
         val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()

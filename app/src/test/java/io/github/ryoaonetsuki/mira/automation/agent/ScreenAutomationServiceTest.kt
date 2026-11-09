@@ -362,4 +362,106 @@ class ScreenAutomationServiceTest {
         assertEquals(0, node.centerX)
         assertEquals(0, node.centerY)
     }
+
+    // =========================================================================
+    // 4. Round 25 Fix Turn C — C3 (clickText fallback) & C5 (gesture-nav clamping)
+    // =========================================================================
+
+    @Test
+    fun clickText_withFallbackCoordinates_usesClickAtWhenTextNotOnScreen() {
+        val clickedCoords = mutableListOf<Pair<Float, Float>>()
+        val service = object : ScreenAutomationService(null) {
+            override fun clickAt(x: Float, y: Float): Boolean {
+                clickedCoords.add(Pair(x, y))
+                return true
+            }
+        }
+        val nodes = listOf(
+            ScreenNode(
+                index = 0,
+                text = "Trending Video Today",
+                contentDescription = "",
+                className = "android.widget.TextView",
+                viewId = "video_title",
+                isClickable = true,
+                isEditable = false,
+                isScrollable = false,
+                isCheckable = false,
+                isEnabled = true,
+                left = 0, top = 100, right = 1080, bottom = 300,
+                centerX = 540, centerY = 200
+            )
+        )
+
+        // 1. When text is found on screen, clicks the matched node's center (540, 200)
+        assertTrue(service.clickText("Trending Video", nodes, fallbackX = 900, fallbackY = 1800))
+        assertEquals(Pair(540f, 200f), clickedCoords.last())
+
+        // 2. When stale recorded video title is gone, falls back to recorded (fallbackX, fallbackY)
+        assertTrue(service.clickText("Stale Yesterday Video Title", nodes, fallbackX = 540, fallbackY = 960))
+        assertEquals(Pair(540f, 960f), clickedCoords.last())
+
+        // 3. When text is gone and no fallback coordinates exist, returns false
+        assertFalse(service.clickText("Stale Yesterday Video Title", nodes, fallbackX = null, fallbackY = null))
+    }
+
+    @Test
+    fun gestureNavHardening_C5_swipeClampedToEdgeInset_andClickAtClampedToBoundsOnly() {
+        // 1080x2400 @ 3.0x density -> 24dp = 72px inset
+        val inset3x = io.github.ryoaonetsuki.mira.service.MiraAccessibilityService.computeSwipeEdgeInsetPx(3.0f)
+        assertEquals(72f, inset3x, 0.001f)
+
+        // Low density (0.5x -> 12px) still enforces minimum 16px inset
+        val insetLow = io.github.ryoaonetsuki.mira.service.MiraAccessibilityService.computeSwipeEdgeInsetPx(0.5f)
+        assertEquals(16f, insetLow, 0.001f)
+
+        // Edge-started swipe (left edge x=2 -> right edge x=1078, top y=5 -> bottom y=2395) is clamped inside [72..1008, 72..2328]
+        val clampedSwipe = io.github.ryoaonetsuki.mira.service.MiraAccessibilityService.clampSwipeCoordinates(
+            startX = 2f,
+            startY = 5f,
+            endX = 1078f,
+            endY = 2395f,
+            displayWidth = 1080,
+            displayHeight = 2400,
+            density = 3.0f
+        )
+        assertEquals(72f, clampedSwipe.startX, 0.001f)
+        assertEquals(72f, clampedSwipe.startY, 0.001f)
+        assertEquals(1008f, clampedSwipe.endX, 0.001f)
+        assertEquals(2328f, clampedSwipe.endY, 0.001f)
+
+        // Interior swipe is untouched
+        val interiorSwipe = io.github.ryoaonetsuki.mira.service.MiraAccessibilityService.clampSwipeCoordinates(
+            startX = 540f,
+            startY = 1600f,
+            endX = 540f,
+            endY = 800f,
+            displayWidth = 1080,
+            displayHeight = 2400,
+            density = 3.0f
+        )
+        assertEquals(540f, interiorSwipe.startX, 0.001f)
+        assertEquals(1600f, interiorSwipe.startY, 0.001f)
+        assertEquals(540f, interiorSwipe.endX, 0.001f)
+        assertEquals(800f, interiorSwipe.endY, 0.001f)
+
+        // clickAt: clamps out-of-bounds coordinates to [0..width-1, 0..height-1] WITHOUT edge inset
+        val bottomTabTap = io.github.ryoaonetsuki.mira.service.MiraAccessibilityService.clampClickCoordinates(
+            x = 12f,
+            y = 2385f,
+            displayWidth = 1080,
+            displayHeight = 2400
+        )
+        assertEquals("Bottom-tab and edge taps must NOT be inset", 12f, bottomTabTap.first, 0.001f)
+        assertEquals("Bottom-tab tap near bottom edge must NOT be inset", 2385f, bottomTabTap.second, 0.001f)
+
+        val outOfBoundsTap = io.github.ryoaonetsuki.mira.service.MiraAccessibilityService.clampClickCoordinates(
+            x = -25f,
+            y = 3000f,
+            displayWidth = 1080,
+            displayHeight = 2400
+        )
+        assertEquals(0f, outOfBoundsTap.first, 0.001f)
+        assertEquals(2399f, outOfBoundsTap.second, 0.001f)
+    }
 }

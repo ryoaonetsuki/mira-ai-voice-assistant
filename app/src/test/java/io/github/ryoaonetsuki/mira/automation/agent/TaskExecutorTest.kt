@@ -1102,4 +1102,129 @@ class TaskExecutorTest {
         assertNull(bridge.runningGoal)
         hungJob.join()
     }
+
+    // =========================================================================
+    // Round 25 Fix Turn E — Stuck Task Diagnosis & Enforceable Timeouts
+    // =========================================================================
+
+    @Test
+    fun testE1_ThinkCallRespectsInjectedDeadline_FailsFastWithDiagnosis() = runBlocking {
+        val port = FakeAutomationPort(serviceEnabled = true)
+        val skills = SkillMemoryService(InMemorySkillStore())
+
+        val executor = TaskExecutor(
+            automation = port,
+            skills = skills,
+            think = { _, _, _ ->
+                kotlinx.coroutines.delay(500L) // Exceeds 60ms think timeout
+                """{"action": "done", "params": {}, "is_complete": true}"""
+            },
+            stepDelayMs = 0L,
+            thinkTimeoutMs = 60L,
+            taskTimeoutMs = 10_000L
+        )
+
+        val result = executor.executeGoal("test think deadline")
+        assertEquals(TaskStatus.FAILED, result.status)
+        assertTrue(
+            "Expected message to name AI reply timeout but was: ${result.message}",
+            result.message.contains("Timed out while waiting for the AI reply") &&
+                result.message.contains("think call exceeded")
+        )
+        assertEquals(1, result.stepsUsed)
+        assertNotNull(executor.lastDiagnosis)
+        assertTrue(executor.lastDiagnosis!!.contains("Timed out while waiting for the AI reply"))
+    }
+
+    @Test
+    fun testE2_TaskTimeout_FailsFastWithPhaseSpecificDiagnosis() = runBlocking {
+        val port = FakeAutomationPort(serviceEnabled = true)
+        val skills = SkillMemoryService(InMemorySkillStore())
+
+        val executor = TaskExecutor(
+            automation = port,
+            skills = skills,
+            think = { _, _, _ ->
+                kotlinx.coroutines.delay(2000L) // Will be aborted by taskTimeoutMs = 120ms
+                """{"action": "done", "params": {}, "is_complete": true}"""
+            },
+            stepDelayMs = 0L,
+            thinkTimeoutMs = 10_000L,
+            taskTimeoutMs = 120L
+        )
+
+        val result = executor.executeGoal("test task timeout diagnosis")
+        assertEquals(TaskStatus.FAILED, result.status)
+        assertTrue(
+            "Expected message to name thinking phase or AI reply timeout but was: ${result.message}",
+            result.message.contains("thinking") || result.message.contains("AI reply")
+        )
+        assertEquals(1, result.stepsUsed)
+    }
+
+    @Test
+    fun testE3_MacroReplayFailure_CarriesSpecificStepAndPhaseDiagnosis() = runBlocking {
+        // App launch never changes package and does not match target -> effect verification fails
+        val port = FakeAutomationPort(
+            serviceEnabled = true,
+            currentPkg = "io.github.ryoaonetsuki.mira",
+            simulateEffect = false
+        )
+        val skills = SkillMemoryService(InMemorySkillStore())
+
+        val skill = Skill(
+            id = "macro-1",
+            goal = "open youtube",
+            steps = listOf(
+                TaskStep(
+                    action = TaskStep.ACTION_OPEN_APP,
+                    params = mapOf("app" to "com.google.android.youtube"),
+                    reasoning = "open youtube"
+                )
+            )
+        )
+
+        val executor = TaskExecutor(
+            automation = port,
+            skills = skills,
+            stepDelayMs = 0L,
+            taskTimeoutMs = 5_000L
+        )
+
+        val result = executor.replaySkillDirect(skill)
+        assertEquals(TaskStatus.FAILED, result.status)
+        assertTrue(
+            "Expected failure diagnosis to name macro replay step 1 and app launch failure but was: ${result.message}",
+            result.message.contains("Macro replay step 1 failed") &&
+                result.message.contains("failed to open com.google.android.youtube")
+        )
+        assertEquals(1, result.stepsUsed)
+    }
+
+    @Test
+    fun testE4_StuckPhaseProgressWarning_EmitsPeriodicDiagnosis() = runBlocking {
+        val port = FakeAutomationPort(serviceEnabled = true)
+        val skills = SkillMemoryService(InMemorySkillStore())
+        val progressMessages = mutableListOf<String>()
+
+        val executor = TaskExecutor(
+            automation = port,
+            skills = skills,
+            think = { _, _, _ ->
+                kotlinx.coroutines.delay(1200L) // Runs longer than 1s warning threshold
+                """{"action": "open_app", "params": {"app": "youtube"}, "is_complete": true}"""
+            },
+            stepDelayMs = 0L,
+            thinkTimeoutMs = 5000L,
+            taskTimeoutMs = 10_000L,
+            phaseWarningThresholdSec = 1L // 1s threshold for unit test
+        )
+        executor.onProgress = { _, desc ->
+            progressMessages.add(desc)
+        }
+
+        executor.executeGoal("test progress warning")
+        val hasStillWarning = progressMessages.any { it.contains("Still thinking…") }
+        assertTrue("Expected progress callback to emit 'Still thinking…' warning", hasStillWarning)
+    }
 }

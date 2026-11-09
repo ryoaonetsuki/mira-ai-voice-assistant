@@ -81,14 +81,35 @@ class ChatStreamingPipelineTest {
 
     @Test
     fun testExtractImagePrompt_RoutesPromptsAndIgnoresGeneralChat() {
-        assertEquals("a cute kitten in the snow", extractImagePrompt("generate image of a cute kitten in the snow"))
-        assertEquals("a red sports car", extractImagePrompt("create an image of a red sports car"))
-        assertEquals("mountain landscape", extractImagePrompt("/image mountain landscape"))
-        assertEquals("sunset over the ocean", extractImagePrompt("sunset over the ocean photo"))
+        // When isImageMode is OFF (default), NEVER trigger image generation regardless of wording
+        assertNull(extractImagePrompt("generate image of a cute kitten in the snow"))
+        assertNull(extractImagePrompt("create an image of a red sports car", isImageMode = false))
+        assertNull(extractImagePrompt("/image mountain landscape", isImageMode = false))
+        assertNull(extractImagePrompt("sunset over the ocean photo", isImageMode = false))
+        assertNull(extractImagePrompt("একটি বিড়ালের ছবি আঁকো", isImageMode = false))
+        assertNull(extractImagePrompt("tell me a story about a kitten", isImageMode = false))
+        assertNull(extractImagePrompt("who founded Google?", isImageMode = false))
+        assertNull(extractImagePrompt("how do I make a cake?", isImageMode = false))
 
-        assertNull(extractImagePrompt("tell me a story about a kitten"))
-        assertNull(extractImagePrompt("who founded Google?"))
-        assertNull(extractImagePrompt("how do I make a cake?"))
+        // When isImageMode is ON, preserve the user's FULL prompt text (strip only leading /image)
+        assertEquals(
+            "generate image of a cute kitten in the snow",
+            extractImagePrompt("generate image of a cute kitten in the snow", isImageMode = true)
+        )
+        assertEquals(
+            "create an image of a red sports car",
+            extractImagePrompt("create an image of a red sports car", isImageMode = true)
+        )
+        assertEquals(
+            "mountain landscape",
+            extractImagePrompt("/image mountain landscape", isImageMode = true)
+        )
+        assertEquals(
+            "sunset over the ocean photo",
+            extractImagePrompt("sunset over the ocean photo", isImageMode = true)
+        )
+        assertNull(extractImagePrompt("   ", isImageMode = true))
+        assertNull(extractImagePrompt("/image   ", isImageMode = true))
     }
 
     @Test

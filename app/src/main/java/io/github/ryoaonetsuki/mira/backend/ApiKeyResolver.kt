@@ -28,13 +28,10 @@ class ApiKeyResolver(private val context: Context) {
         .build()
 
     val edgeFunctionUrl: String
-        get() {
-            val base = try { BuildConfig.SUPABASE_URL } catch (_: Throwable) { "https://zvnfwlqxdbommtozugzt.supabase.co" }
-            return "$base/functions/v1/mira-gemini"
-        }
+        get() = "${SupabaseClient.resolveBaseUrl()}/functions/v1/mira-gemini"
 
     val anonKey: String
-        get() = try { BuildConfig.SUPABASE_ANON_KEY } catch (_: Throwable) { "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp2bmZ3bHF4ZGJvbW10b3p1Z3p0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM5MTM2NDksImV4cCI6MjEwOTQ4OTY0OX0.uqyERmXVe2GEP2oaU0xc7I9V1ry-43adAEg6jddYBpk" }
+        get() = SupabaseClient.resolveAnonKey()
 
     suspend fun resolveKey(): KeySource = withContext(Dispatchers.IO) {
         // 1. User's own key in settings (BYOK override)

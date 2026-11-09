@@ -1,6 +1,8 @@
 package io.github.ryoaonetsuki.mira.automation.agent
 
 import io.github.ryoaonetsuki.mira.automation.MiraAutomationBridge
+import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -17,6 +19,8 @@ class TaskExecutorTest {
         var currentPkg: String? = "io.github.ryoaonetsuki.mira",
         var actionSuccess: Boolean = true,
         var simulateEffect: Boolean = true,
+        var requireNodeMatchForClickText: Boolean = false,
+        var noEffectClickTexts: Set<String> = emptySet(),
         var screenshotBytes: ByteArray? = byteArrayOf(1, 2, 3),
         val actionsPerformed: MutableList<String> = mutableListOf(),
         var screenNodes: List<ScreenNode> = listOf(
@@ -76,8 +80,17 @@ class TaskExecutorTest {
 
         override fun clickText(text: String, nodes: List<ScreenNode>): Boolean {
             if (!actionSuccess) return false
+            if (requireNodeMatchForClickText) {
+                val found = nodes.any {
+                    it.text.contains(text, ignoreCase = true) ||
+                        it.contentDescription.contains(text, ignoreCase = true)
+                }
+                if (!found) return false
+            }
             actionsPerformed.add("clickText:$text")
-            mutateScreenState("clicked:$text")
+            if (text !in noEffectClickTexts) {
+                mutateScreenState("clicked:$text")
+            }
             return true
         }
 
@@ -819,5 +832,274 @@ class TaskExecutorTest {
         val result = executor.executeGoal("open youtube")
         assertEquals(TaskStatus.SUCCESS, result.status)
         assertTrue("thinkWithVision must be invoked when >50% clickable nodes lack labels", visionCalled)
+    }
+
+    // =========================================================================
+    // 7. Round 25 Fix Turn C — C1, C2, C3, C4 Tests
+    // =========================================================================
+
+    @Test
+    fun testC2_ReplaySkillDirect_FallsBackToAiLoopWhenThinkPresent_AndMarksOutcomeCorrectly() = runBlocking {
+        // Replay fails (actionSuccess = false initially, then flipped to true during AI fallback)
+        val fakePort = FakeAutomationPort(serviceEnabled = true, actionSuccess = false)
+        val skills = SkillMemoryService(InMemorySkillStore())
+        val savedSkill = skills.saveOrUpdate(
+            goal = "open youtube",
+            steps = listOf(TaskStep(action = "click_text", params = mapOf("text" to "StaleVideoTitle")))
+        )
+
+        var thinkTurn = 0
+        val executor = TaskExecutor(
+            automation = fakePort,
+            skills = skills,
+            think = { _, _, _ ->
+                thinkTurn++
+                fakePort.actionSuccess = true
+                if (thinkTurn == 1) {
+                    """{"action": "open_app", "params": {"app": "youtube"}}"""
+                } else {
+                    """{"action": "done", "is_complete": true}"""
+                }
+            },
+            stepDelayMs = 0
+        )
+
+        val result = executor.replaySkillDirect(savedSkill)
+        assertEquals(TaskStatus.SUCCESS, result.status)
+        assertTrue("Message must state it completed via AI fallback", result.message.contains("AI fallback"))
+        assertTrue(thinkTurn >= 2)
+
+        // Skill must still exist, consecutiveFailures == 0, successCount == 1, and steps refreshed
+        val updatedSkill = skills.findMatch("open youtube")
+        assertNotNull(updatedSkill)
+        assertEquals(0, updatedSkill?.consecutiveFailures)
+        assertEquals(1, updatedSkill?.successCount)
+        assertEquals(TaskStep.ACTION_OPEN_APP, updatedSkill?.steps?.first()?.action)
+    }
+
+    @Test
+    fun testC2_ReplaySkillDirect_BothReplayAndAiFallbackFail_MarksFailureWithoutDeletingOnFirstFailure() = runBlocking {
+        val fakePort = FakeAutomationPort(serviceEnabled = true, actionSuccess = false)
+        val skills = SkillMemoryService(InMemorySkillStore())
+        val savedSkill = skills.saveOrUpdate(
+            goal = "open youtube",
+            steps = listOf(TaskStep(action = "click_text", params = mapOf("text" to "StaleVideoTitle")))
+        )
+
+        val executor = TaskExecutor(
+            automation = fakePort,
+            skills = skills,
+            think = { _, _, _ ->
+                """{"action": "click_text", "params": {"text": "StillFailing"}}"""
+            },
+            maxSteps = 2,
+            stepDelayMs = 0
+        )
+
+        val result = executor.replaySkillDirect(savedSkill)
+        assertEquals(TaskStatus.FAILED, result.status)
+        assertTrue(result.message.contains("AI fallback"))
+
+        // C1 + C2: Skill is NOT deleted after 1 failure; consecutiveFailures is incremented to 1
+        val retained = skills.findMatch("open youtube")
+        assertNotNull("Skill must not be deleted on a single failed replay+fallback", retained)
+        assertEquals(1, retained?.consecutiveFailures)
+    }
+
+    @Test
+    fun testC3_ReplaySkill_RetriesThenSkipsNonCriticalNoEffect_AndContinues() = runBlocking {
+        // 3 steps:
+        // Step 1: open_app youtube (critical -> has effect)
+        // Step 2: click_text StaleFeedItem (non-critical -> dispatches ok, but NO effect on screen)
+        // Step 3: click_text Library (non-critical -> has effect)
+        // 1 of 3 skipped (<= 50%) -> overall replay SUCCEEDS!
+        val fakePort = FakeAutomationPort(
+            serviceEnabled = true,
+            noEffectClickTexts = setOf("StaleFeedItem")
+        )
+
+        val skills = SkillMemoryService(InMemorySkillStore())
+        val skill = Skill(
+            goal = "yt macro",
+            steps = listOf(
+                TaskStep(action = TaskStep.ACTION_OPEN_APP, params = mapOf("app" to "youtube")),
+                TaskStep(action = TaskStep.ACTION_CLICK_TEXT, params = mapOf("text" to "StaleFeedItem")),
+                TaskStep(action = TaskStep.ACTION_CLICK_TEXT, params = mapOf("text" to "Library"))
+            )
+        )
+        val executor = TaskExecutor(automation = fakePort, skills = skills, stepDelayMs = 0)
+
+        val ok = executor.replaySkill(skill)
+        assertTrue("Replay must succeed when 1 of 3 non-critical steps has no effect and is skipped", ok)
+        // StaleFeedItem was tried twice (initial + 1 retry), Library once -> total 3 clickText calls
+        val clickCalls = fakePort.actionsPerformed.filter { it.startsWith("clickText:") }
+        assertEquals(listOf("clickText:StaleFeedItem", "clickText:StaleFeedItem", "clickText:Library"), clickCalls)
+    }
+
+    @Test
+    fun testC3_ReplaySkill_CriticalOpenAppNoEffect_Fails() = runBlocking {
+        // open_app dispatches non-null but package never changes and remains Mira -> verifyEffect false -> critical step fails
+        val fakePort = FakeAutomationPort(
+            serviceEnabled = true,
+            currentPkg = "io.github.ryoaonetsuki.mira",
+            simulateEffect = false
+        )
+        val skills = SkillMemoryService(InMemorySkillStore())
+        val skill = Skill(
+            goal = "yt macro",
+            steps = listOf(
+                TaskStep(action = TaskStep.ACTION_OPEN_APP, params = mapOf("app" to "youtube")),
+                TaskStep(action = TaskStep.ACTION_CLICK_TEXT, params = mapOf("text" to "Library"))
+            )
+        )
+        val executor = TaskExecutor(automation = fakePort, skills = skills, stepDelayMs = 0)
+
+        val ok = executor.replaySkill(skill)
+        assertFalse("Critical open_app step with no effect after retry must fail replay", ok)
+    }
+
+    @Test
+    fun testC3_ReplaySkill_MoreThanHalfSkipped_Fails() = runBlocking {
+        // 3 steps: 1 critical open_app succeeds, 2 non-critical click_text have no effect -> 2/3 (>50%) skipped -> FAILS
+        val fakePort = FakeAutomationPort(
+            serviceEnabled = true,
+            noEffectClickTexts = setOf("Stale1", "Stale2")
+        )
+
+        val skills = SkillMemoryService(InMemorySkillStore())
+        val skill = Skill(
+            goal = "yt macro",
+            steps = listOf(
+                TaskStep(action = TaskStep.ACTION_OPEN_APP, params = mapOf("app" to "youtube")),
+                TaskStep(action = TaskStep.ACTION_CLICK_TEXT, params = mapOf("text" to "Stale1")),
+                TaskStep(action = TaskStep.ACTION_CLICK_TEXT, params = mapOf("text" to "Stale2"))
+            )
+        )
+        val executor = TaskExecutor(automation = fakePort, skills = skills, stepDelayMs = 0)
+
+        val ok = executor.replaySkill(skill)
+        assertFalse("Replay must fail when >50% of steps (2 of 3) are skipped due to no effect", ok)
+    }
+
+    @Test
+    fun testC3_ClickTextFallbackToRecordedCoordinatesWhenTextGone() = runBlocking {
+        // Recorder convertEventsToSteps preserves fallbackX and fallbackY on click_text steps
+        val recordedSteps = io.github.ryoaonetsuki.mira.service.MiraAccessibilityService.convertEventsToSteps(
+            listOf(
+                mapOf(
+                    "type" to "click",
+                    "label" to "Old Video Title",
+                    "x" to 540,
+                    "y" to 820,
+                    "package" to "com.google.android.youtube"
+                )
+            )
+        )
+        assertEquals(2, recordedSteps.size) // open_app + click_text
+        val clickStep = recordedSteps[1]
+        assertEquals(TaskStep.ACTION_CLICK_TEXT, clickStep.action)
+        assertEquals("Old Video Title", clickStep.stringParam("text"))
+        assertEquals(540, clickStep.intParam("fallbackX"))
+        assertEquals(820, clickStep.intParam("fallbackY"))
+
+        // Replay when "Old Video Title" is NOT in screenNodes -> falls back to clickAt(540, 820)
+        val fakePort = FakeAutomationPort(
+            serviceEnabled = true,
+            requireNodeMatchForClickText = true
+        )
+        val skills = SkillMemoryService(InMemorySkillStore())
+        val skill = Skill(goal = "yt", steps = recordedSteps)
+        val executor = TaskExecutor(automation = fakePort, skills = skills, stepDelayMs = 0)
+
+        val result = executor.replaySkillDirect(skill)
+        assertEquals(TaskStatus.SUCCESS, result.status)
+        assertTrue(
+            "Must fall back to clickAt(540.0, 820.0) when label is missing on screen",
+            fakePort.actionsPerformed.contains("clickAt:540.0,820.0")
+        )
+    }
+
+    @Test
+    fun testC4_TaskTimeout_ReturnsFailedAndFreesSlot() = runBlocking {
+        val fakePort = FakeAutomationPort(serviceEnabled = true)
+        val skills = SkillMemoryService(InMemorySkillStore())
+
+        val executor = TaskExecutor(
+            automation = fakePort,
+            skills = skills,
+            think = { _, _, _ ->
+                kotlinx.coroutines.delay(500L)
+                """{"action": "done", "is_complete": true}"""
+            },
+            stepDelayMs = 0,
+            taskTimeoutMs = 40L
+        )
+
+        val result = executor.executeGoal("slow hanging task")
+        assertEquals(TaskStatus.FAILED, result.status)
+        assertEquals("Task timed out after 120s", result.message)
+        assertFalse("Executor _isRunning must be reset after timeout", executor.isRunning)
+    }
+
+    @Test
+    fun testC4_BridgeStaleGuardAndConcurrentCallProtection() = runBlocking {
+        var fakeNow = 1_000L
+        var activeRuns = 0
+        var maxConcurrentRuns = 0
+
+        val bridge = MiraAutomationBridge(
+            context = null,
+            taskTimeoutMs = 1_000L,
+            clockMs = { fakeNow },
+            executorFactory = {
+                val fakePort = FakeAutomationPort(serviceEnabled = true)
+                val skills = SkillMemoryService(InMemorySkillStore())
+                TaskExecutor(
+                    automation = fakePort,
+                    skills = skills,
+                    think = { _, _, _ ->
+                        activeRuns++
+                        if (activeRuns > maxConcurrentRuns) maxConcurrentRuns = activeRuns
+                        try {
+                            kotlinx.coroutines.delay(80L)
+                        } finally {
+                            activeRuns--
+                        }
+                        """{"action": "open_app", "params": {"app": "youtube"}, "is_complete": true}"""
+                    },
+                    stepDelayMs = 0,
+                    taskTimeoutMs = 5_000L
+                )
+            }
+        )
+
+        // 1. Concurrent executeGoal calls -> only one runs, the other is rejected with runningGoal info
+        val d1 = async { bridge.executeGoal("play lofi on youtube") }
+        kotlinx.coroutines.delay(15L)
+        assertTrue(bridge.isRunning)
+        assertEquals("play lofi on youtube", bridge.runningGoal)
+        val d2 = async { bridge.executeGoal("open spotify") }
+
+        val r1 = d1.await()
+        val r2 = d2.await()
+        assertEquals(1, maxConcurrentRuns)
+        assertEquals(TaskStatus.SUCCESS, r1.status)
+        assertEquals(TaskStatus.FAILED, r2.status)
+        assertTrue(r2.message.contains("Another task is already running"))
+        assertTrue("Rejection message must include the running goal", r2.message.contains("play lofi on youtube"))
+        assertFalse(bridge.isRunning)
+
+        // 2. Stale-guard: when a task exceeds taskTimeoutMs without completing, isRunning cancels it and frees the slot
+        val hungJob = launch {
+            bridge.executeGoal("stuck task")
+        }
+        kotlinx.coroutines.delay(15L)
+        assertTrue(bridge.isRunning)
+
+        // Advance clock past the 1000ms bridge timeout
+        fakeNow += 2_500L
+        assertFalse("Stale-guard must report isRunning == false once taskTimeoutMs is exceeded", bridge.isRunning)
+        assertNull(bridge.runningGoal)
+        hungJob.join()
     }
 }

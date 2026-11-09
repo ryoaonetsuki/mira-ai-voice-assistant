@@ -1366,7 +1366,15 @@ class GeminiRestClient(
 
                     override fun onFailure(call: Call, e: IOException) {
                         if (cont.isCancelled) return
-                        cont.resumeWithException(e)
+                        // OkHttp delivers an interceptor-thrown CancellationException
+                        // wrapped as the cause of an IOException — unwrap it so
+                        // cancellation is never downgraded to an ordinary failure.
+                        val cancellation = findCancellationCause(e)
+                        if (cancellation != null) {
+                            cont.resumeWithException(cancellation)
+                        } else {
+                            cont.resumeWithException(e)
+                        }
                     }
                 })
             }
@@ -1411,8 +1419,22 @@ class GeminiRestClient(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            // Defence in depth: a CancellationException buried in the cause
+            // chain (e.g. wrapped by OkHttp) must still propagate as cancellation.
+            val cancellation = findCancellationCause(e)
+            if (cancellation != null) throw cancellation
             Result.failure(e)
         }
+    }
+
+    /** Walks the cause chain looking for a [CancellationException], if any. */
+    private fun findCancellationCause(e: Throwable?): CancellationException? {
+        var cause: Throwable? = e
+        while (cause != null) {
+            if (cause is CancellationException) return cause
+            cause = cause.cause
+        }
+        return null
     }
 
     suspend fun generateCode(apiKey: String, prompt: String, useServerProxy: Boolean = false): Result<String> = withContext(Dispatchers.IO) {

@@ -3,6 +3,7 @@ package io.github.ryoaonetsuki.mira.ui.screens
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -80,6 +81,7 @@ fun HomeScreen(
     val micAmp by MicService.micAmplitude.collectAsState()
     val orbStyle by userPrefs.orbStyleFlow.collectAsState(initial = "Mira Neon")
     val errorMessage by MicService.errorMessage.collectAsState()
+    val serviceStatusText by MicService.statusText.collectAsState()
 
     var weatherData by remember { mutableStateOf(WeatherData("24°C", "60%", "Clear")) }
 
@@ -236,11 +238,13 @@ fun HomeScreen(
             Spacer(modifier = Modifier.height(14.dp))
 
             // SMALL status line UNDER the orb only ('Connecting...' / 'Listening...' / 'Speaking...' / idle 'Tap the voice button to start')
-            val statusText = when (liveState) {
-                LiveState.CONNECTING -> "Connecting..."
-                LiveState.LISTENING -> "Listening..."
-                LiveState.SPEAKING -> "Speaking..."
-                LiveState.IDLE, LiveState.ERROR -> "Tap the voice button to start"
+            val statusText = serviceStatusText.ifBlank {
+                when (liveState) {
+                    LiveState.CONNECTING -> "Connecting..."
+                    LiveState.LISTENING -> "Listening..."
+                    LiveState.SPEAKING -> "Speaking..."
+                    LiveState.IDLE, LiveState.ERROR -> "Tap the voice button to start"
+                }
             }
             Crossfade(
                 targetState = statusText,
@@ -282,11 +286,27 @@ private fun HomeBottomNavBar(
     palette: io.github.ryoaonetsuki.mira.ui.theme.MiraPalette,
     onNavigate: (String) -> Unit
 ) {
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { _ ->
+        MicService.startService(context)
+    }
+
+    val startMicServiceWithNotificationCheck = {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            MicService.startService(context)
+        }
+    }
+
     val micPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) {
-            MicService.startService(context)
+            startMicServiceWithNotificationCheck()
         } else {
             Toast.makeText(
                 context,
@@ -358,7 +378,7 @@ private fun HomeBottomNavBar(
                                     Manifest.permission.RECORD_AUDIO
                                 ) == PackageManager.PERMISSION_GRANTED
                                 if (hasMicPermission) {
-                                    MicService.startService(context)
+                                    startMicServiceWithNotificationCheck()
                                 } else {
                                     micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                                 }

@@ -36,6 +36,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import io.github.ryoaonetsuki.mira.R
 import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
@@ -184,6 +185,36 @@ fun SetupScreen(
         mutableStateOf(MiraAccessibilityService.isEnabled(context))
     }
 
+    var hasNotificationPermission by remember {
+        mutableStateOf(
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+            } else true
+        )
+    }
+
+    var isNotificationListenerEnabled by remember {
+        mutableStateOf(
+            NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
+        )
+    }
+
+    val checkStandardIntegrations: () -> Boolean = {
+        listOf(
+            Manifest.permission.CAMERA,
+            Manifest.permission.READ_CONTACTS,
+            Manifest.permission.CALL_PHONE,
+            Manifest.permission.SEND_SMS,
+            Manifest.permission.ACCESS_FINE_LOCATION
+        ).all { perm ->
+            ContextCompat.checkSelfPermission(context, perm) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    var areStandardIntegrationsGranted by remember {
+        mutableStateOf(checkStandardIntegrations())
+    }
+
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
@@ -194,6 +225,11 @@ fun SetupScreen(
                     Environment.isExternalStorageManager()
                 } else true
                 isAccessibilityEnabled = MiraAccessibilityService.isEnabled(context)
+                hasNotificationPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+                } else true
+                isNotificationListenerEnabled = NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
+                areStandardIntegrationsGranted = checkStandardIntegrations()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -208,10 +244,17 @@ fun SetupScreen(
         hasMicPermission = granted
     }
 
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        hasNotificationPermission = granted
+    }
+
     val multiPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) {
         hasMicPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        areStandardIntegrationsGranted = checkStandardIntegrations()
     }
 
     Column(
@@ -561,12 +604,10 @@ fun SetupScreen(
                         title = "Notifications",
                         subtitle = "Display foreground session and background updates",
                         iconRes = R.drawable.ic_fluent_alert_24_regular,
-                        isGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
-                        } else true,
+                        isGranted = hasNotificationPermission,
                         onClick = {
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                micPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                             }
                         }
                     )
@@ -578,7 +619,7 @@ fun SetupScreen(
                         title = "Notification Access (WhatsApp)",
                         subtitle = "Allows reading WhatsApp messages for auto-reply",
                         iconRes = R.drawable.ic_fluent_chat_24_regular,
-                        isGranted = false,
+                        isGranted = isNotificationListenerEnabled,
                         onClick = {
                             val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
                             context.startActivity(intent)
@@ -586,13 +627,14 @@ fun SetupScreen(
                     )
                 }
 
-                // Optional: Accessibility
+                // Required 4: Accessibility
                 item {
                     PermissionRow(
-                        title = "Accessibility Service (Screen Control)",
+                        title = "Accessibility Service (Required for App/Screen Automation)",
                         subtitle = "Allows Mira to operate the screen for autonomous tasks and skills",
                         iconRes = R.drawable.ic_fluent_person_24_regular,
                         isGranted = isAccessibilityEnabled,
+                        isRequired = true,
                         onClick = {
                             val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
                             context.startActivity(intent)
@@ -623,7 +665,7 @@ fun SetupScreen(
                         title = "Standard Integrations",
                         subtitle = "Camera, Contacts, Phone calls, SMS, Location",
                         iconRes = R.drawable.ic_fluent_settings_24_regular,
-                        isGranted = false,
+                        isGranted = areStandardIntegrationsGranted,
                         onClick = {
                             val perms = mutableListOf(
                                 Manifest.permission.CAMERA,
@@ -650,9 +692,13 @@ fun SetupScreen(
                 hasFileAccess = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                     Environment.isExternalStorageManager()
                 } else true
+                isAccessibilityEnabled = MiraAccessibilityService.isEnabled(context)
+                isNotificationListenerEnabled = NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
+                areStandardIntegrationsGranted = checkStandardIntegrations()
             }
 
-            val isReady = hasMicPermission && isBatteryIgnoringOptimizations && hasFileAccess
+            val allPermissionsGranted = hasMicPermission && isBatteryIgnoringOptimizations && hasFileAccess && isAccessibilityEnabled
+            val isReady = allPermissionsGranted
             MiraButton(
                 text = "Finish & Start Talking",
                 enabled = isReady,
@@ -666,6 +712,7 @@ fun SetupScreen(
                 if (!hasMicPermission) add("Microphone")
                 if (!isBatteryIgnoringOptimizations) add("Battery")
                 if (!hasFileAccess) add("File Management")
+                if (!isAccessibilityEnabled) add("Accessibility Service")
             }
             if (missingList.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(6.dp))

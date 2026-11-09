@@ -20,6 +20,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.ryoaonetsuki.mira.BuildConfig
 import io.github.ryoaonetsuki.mira.R
 import io.github.ryoaonetsuki.mira.network.GitHubReleaseClient
 import io.github.ryoaonetsuki.mira.network.ReleaseInfo
@@ -27,6 +28,29 @@ import io.github.ryoaonetsuki.mira.ui.components.MiraButton
 import io.github.ryoaonetsuki.mira.ui.components.MiraCard
 import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
 import kotlinx.coroutines.launch
+
+internal fun parseSemVerTuple(raw: String): List<Int>? {
+    val cleaned = raw.trim().removePrefix("v").removePrefix("V").substringBefore("-")
+    if (cleaned.isBlank()) return null
+    val parts = cleaned.split(".")
+    if (parts.isEmpty()) return null
+    val ints = parts.map { it.toIntOrNull() ?: return null }
+    return listOf(
+        ints.getOrElse(0) { 0 },
+        ints.getOrElse(1) { 0 },
+        ints.getOrElse(2) { 0 }
+    )
+}
+
+internal fun isRemoteVersionNewer(installedVersion: String, remoteTag: String): Boolean {
+    val installed = parseSemVerTuple(installedVersion) ?: return false
+    val remote = parseSemVerTuple(remoteTag) ?: return false
+    for (i in 0..2) {
+        if (remote[i] > installed[i]) return true
+        if (remote[i] < installed[i]) return false
+    }
+    return false
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -42,8 +66,8 @@ fun UpdateScreen(
     var releaseInfo by remember { mutableStateOf<ReleaseInfo?>(null) }
     var checkError by remember { mutableStateOf<String?>(null) }
 
-    val installedVersion = "1.0.0"
-    val installedBuild = "1"
+    val installedVersion = BuildConfig.VERSION_NAME
+    val installedBuild = BuildConfig.VERSION_CODE.toString()
 
     fun checkForUpdates() {
         isChecking = true
@@ -190,7 +214,7 @@ fun UpdateScreen(
                 }
             } else if (releaseInfo != null) {
                 val rel = releaseInfo!!
-                val isNewer = rel.tagName.contains("v") && !rel.tagName.contains(installedVersion)
+                val isNewer = isRemoteVersionNewer(installedVersion, rel.tagName)
 
                 // Version Info Card
                 item {

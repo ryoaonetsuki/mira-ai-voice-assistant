@@ -16,6 +16,8 @@ data class Skill(
   val goal: String,
   val steps: List<TaskStep>,
   var successCount: Int = 0,
+  var consecutiveFailures: Int = 0,
+  var lastFailedAt: Long = 0L,
   var lastUsedAt: Long = System.currentTimeMillis(),
   val createdAt: Long = System.currentTimeMillis(),
   val normalizedGoal: String = normalize(goal)
@@ -31,6 +33,8 @@ data class Skill(
     }
     json.put("steps", stepsArray)
     json.put("successCount", successCount)
+    json.put("consecutiveFailures", consecutiveFailures)
+    json.put("lastFailedAt", lastFailedAt)
     json.put("lastUsedAt", Instant.ofEpochMilli(lastUsedAt).toString())
     json.put("createdAt", Instant.ofEpochMilli(createdAt).toString())
     return json
@@ -95,6 +99,8 @@ data class Skill(
         is String -> sc.toIntOrNull() ?: 0
         else -> 0
       }
+      val consecutiveFailures = json.optInt("consecutiveFailures", 0).coerceAtLeast(0)
+      val lastFailedAt = json.optLong("lastFailedAt", 0L).coerceAtLeast(0L)
       val lastUsedAt = parseTimestamp(json.opt("lastUsedAt"))
       val createdAt = parseTimestamp(json.opt("createdAt"))
 
@@ -103,6 +109,8 @@ data class Skill(
         goal = goal,
         steps = stepsList,
         successCount = successCount,
+        consecutiveFailures = consecutiveFailures,
+        lastFailedAt = lastFailedAt,
         lastUsedAt = lastUsedAt,
         createdAt = createdAt
       )

@@ -2943,42 +2943,18 @@ fun parseMarkdownSegments(raw: String): List<MarkdownSegment> {
 }
 
 /**
- * Returns the image prompt if the user's message asks for an image, else null.
- * Matches natural phrasings like 'generate a cat image', 'cat picture', 'draw a sunset',
- * or any input if isImageMode is active.
+ * Returns the user's full message text as the image prompt when [isImageMode] is active,
+ * or null when [isImageMode] is off.
  */
 fun extractImagePrompt(text: String, isImageMode: Boolean = false): String? {
     val trimmed = text.trim()
-    if (trimmed.isEmpty()) return null
-    if (isImageMode) {
-        return trimmed.removePrefix("/image").trim(' ', ':')
+    if (trimmed.isEmpty() || !isImageMode) return null
+    val cleaned = if (trimmed.lowercase().startsWith("/image")) {
+        trimmed.substring(6).trim(' ', ':')
+    } else {
+        trimmed
     }
-    if (trimmed.lowercase().startsWith("/image")) {
-        val prompt = trimmed.substring(6).trim(' ', ':')
-        return prompt.ifBlank { null }
-    }
-    // Cap input length to prevent catastrophic regex backtracking on multi-KB text
-    if (trimmed.length > 500) return null
-    val imageRegex = Regex(
-        "(?i)\\b(?:generate|create|make|draw|paint|render|show me|give me)?\\s*(?:an?|the)?\\s*(?:image|picture|photo|photograph|drawing|illustration|artwork|wallpaper|portrait|sketch)\\s+(?:of|showing|with|for)?\\s*(.+)|" +
-        "(?i)(?:generate|create|make|draw|paint)\\s+(?:an?|the)?\\s*(.+?)\\s+(?:image|picture|photo|drawing|illustration|sketch)\\b|" +
-        "(?i)\\b(?:picture|image|photo)\\s+of\\s+(.+)|" +
-        "(?i)\\bdraw\\s+(?:an?|the)?\\s*(.+)|" +
-        "(?i)\\b(?:একটি\\s*)?(.+?)(?:এর)?\\s*(?:ছবি|চিত্র)\\s*(?:আঁকো|তৈরি\\s*কর|বানাও|দাও)"
-    )
-    val match = imageRegex.find(trimmed)
-    if (match != null) {
-        val prompt = match.groupValues.drop(1).firstOrNull { it.isNotBlank() }?.trim(' ', ':', '-', '—')
-        if (!prompt.isNullOrBlank()) {
-            return prompt
-        }
-    }
-    val directRegex = Regex("(?i)^(.+?)\\s+(image|picture|photo|drawing|illustration)$")
-    val directMatch = directRegex.find(trimmed)
-    if (directMatch != null) {
-        return directMatch.groupValues[1].trim()
-    }
-    return null
+    return cleaned.ifBlank { null }
 }
 
 @Composable

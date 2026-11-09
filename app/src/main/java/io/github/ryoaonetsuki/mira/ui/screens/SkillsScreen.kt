@@ -605,6 +605,14 @@ fun SkillsScreen(
                                     fontSize = 12.sp,
                                     color = palette.textSecondary
                                 )
+                                if (skill.consecutiveFailures > 0) {
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = "Needs attention • May need re-recording (${skill.consecutiveFailures}/3 failed)",
+                                        fontSize = 11.sp,
+                                        color = Color(0xFFF59E0B)
+                                    )
+                                }
                             }
 
                             Spacer(modifier = Modifier.width(8.dp))

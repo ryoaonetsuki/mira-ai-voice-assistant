@@ -164,14 +164,7 @@ class MicService : Service() {
     private lateinit var resumptionStore: SessionResumptionStore
 
     private val automationBridge by lazy {
-        io.github.ryoaonetsuki.mira.automation.MiraAutomationBridge(applicationContext) {
-            val securePrefs = SecurePreferences(applicationContext)
-            val resolver = io.github.ryoaonetsuki.mira.backend.ApiKeyResolver(applicationContext)
-            when (val keySource = resolver.resolveKey()) {
-                is io.github.ryoaonetsuki.mira.backend.KeySource.UserKey -> keySource.key
-                else -> securePrefs.getGeminiApiKey() ?: ""
-            }
-        }
+        io.github.ryoaonetsuki.mira.automation.MiraAutomationBridge.getInstance(applicationContext)
     }
 
     private val notificationController by lazy {
@@ -944,6 +937,7 @@ class MicService : Service() {
                 Log.e(TAG, "MIRA_LIVE_VOICE: Error executing voice automation: ${e.message}", e)
             } finally {
                 // Always release the gate, even on failure/cancel, so Live is never left muted.
+                turnDispatchedToAutomation = false
                 _statusText.value = ""
                 session?.setOutputSuppressed(false)
                 delay(300L)

@@ -973,9 +973,9 @@ class MicService : Service() {
             )
             if (result.isSuccess) {
                 val pcmBytes = result.getOrThrow()
-                val player = AudioPlayer { isSpeaking ->
+                val player = AudioPlayer(onSpeakingStateChanged = { isSpeaking ->
                     handlePlaybackSpeakingChanged(isSpeaking)
-                }
+                })
                 player.beginPreview()
                 val rampedBytes = AudioPlayer.applyPreviewFadeRamps(pcmBytes)
                 val chunkSize = 4096

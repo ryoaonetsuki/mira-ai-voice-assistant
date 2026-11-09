@@ -1,6 +1,5 @@
 package io.github.ryoaonetsuki.mira.voice.pipecat
 
-import io.github.ryoaonetsuki.mira.identity.MiraIdentityInterceptor
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -9,7 +8,8 @@ import org.junit.Test
  * 1. Single voice session slot invariant (MAX_CONCURRENT_SESSIONS == 1).
  * 2. Un-cancellable start race / zombie session prevention via generation tokens (VoiceSessionGuard).
  * 3. Echo detection and suppression in VoiceEchoDetector.
- * 4. Identity canned answer suppression when mic captures model's own speech echo.
+ * 4. Echo transcripts produce no false turn; genuine questions reach the Live model
+ *    (the canned-answer interceptor is gone since the Round 25 rework).
  */
 class SingleVoiceSessionTest {
 
@@ -139,26 +139,19 @@ class SingleVoiceSessionTest {
     }
 
     @Test
-    fun testIdentityInterceptor_SuppressesCannedResponseOnOwnEcho() {
+    fun testEchoProducesNoFalseTurn_GenuineQuestionsReachLiveModel() {
+        // Round 25 rework: the canned-answer interceptor is gone. The voice path must
+        // still never act on an echo of the model's own speech, and genuine identity
+        // questions must not be classified as echo (they reach the Live model).
         val modelSpeech = "আমার নাম মিরা, আমি একটা AI এজেন্ট।"
 
-        // If the transcript picked up is an echo of model's own words, interceptor must return null
-        val echoResponse = MiraIdentityInterceptor.getCannedResponse(
-            userQuery = "আমার নাম মিরা",
-            userLanguage = "Bangla (Bengali)",
-            forVoice = true,
-            lastModelTranscript = modelSpeech
+        assertTrue(
+            "Echo of model speech must be classified as echo (no false turn)",
+            VoiceEchoDetector.matchesEcho("আমার নাম মিরা", modelSpeech)
         )
-        assertNull("Echo of model speech must NOT trigger canned identity response", echoResponse)
-
-        // If user asks a genuine identity question that differs from model speech, canned response is returned
-        val genuineResponse = MiraIdentityInterceptor.getCannedResponse(
-            userQuery = "তুমি কে?",
-            userLanguage = "Bangla (Bengali)",
-            forVoice = true,
-            lastModelTranscript = "এখানে আজকের আবহাওয়া সম্পর্কে তথ্য দেওয়া হয়েছে।"
+        assertFalse(
+            "Genuine identity question must NOT be classified as echo",
+            VoiceEchoDetector.matchesEcho("তুমি কে?", modelSpeech)
         )
-        assertNotNull("Genuine identity question must return canned response", genuineResponse)
-        assertEquals(io.github.ryoaonetsuki.mira.identity.IdentityProfile.IDENTITY_BANGLA, genuineResponse)
     }
 }

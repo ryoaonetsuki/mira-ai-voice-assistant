@@ -165,4 +165,22 @@ class LivePromptBuilderRegressionTest {
         // Phone control fact must be in Live prompt (voice interceptor removed)
         assertTrue("Live prompt must teach phone control fact", prompt.contains("phone control"))
     }
+
+    @Test
+    fun testPromptTeachesPhoneControlYes_identityFacts_andNoExactlyRecitation() {
+        val prompt = LivePromptBuilder.buildLiveSystemPrompt(
+            language = "Bangla",
+            personaType = PersonaType.MIRA,
+            dateLine = "",
+            searchAckPhrase = ""
+        )
+        assertTrue(prompt.contains("you CAN control the user's phone"))
+        assertTrue(prompt.contains("answer YES in your own friendly words"))
+        assertTrue(prompt.contains("Never deny phone control"))
+        assertTrue(prompt.contains("not a command"))
+        assertTrue(prompt.contains("Salman Biswas"))
+        assertTrue(prompt.contains("ON-DEMAND ONLY"))
+        assertTrue(prompt.contains("stay silent and wait for the user to speak first"))
+        assertFalse("No EXACTLY recitation", prompt.uppercase().contains("EXACTLY"))
+    }
 }

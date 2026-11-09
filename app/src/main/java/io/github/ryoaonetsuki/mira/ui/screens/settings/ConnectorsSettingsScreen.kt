@@ -41,6 +41,128 @@ data class ConnectorConfig(
     val iconRes: Int = R.drawable.ic_fluent_link_24_regular
 )
 
+val ALL_CONNECTORS: List<ConnectorConfig> = listOf(
+    ConnectorConfig(
+        id = "github",
+        name = "GitHub",
+        hint = "Personal Access Token (ghp_...)",
+        description = "Read repos, view commits, and manage repositories",
+        whatMiraCanDo = "List your top repositories with private/public visibility",
+        setupSteps = "Create a Personal Access Token (classic) on GitHub with 'repo' scope at github.com/settings/tokens, then paste it here.",
+        iconRes = R.drawable.ic_fluent_code_24_regular
+    ),
+    ConnectorConfig(
+        id = "gitlab",
+        name = "GitLab",
+        hint = "Personal Access Token (glpat-...)",
+        description = "Access projects and code repositories on GitLab",
+        whatMiraCanDo = "List your GitLab projects with visibility status",
+        setupSteps = "In GitLab User Settings -> Access Tokens, create a personal access token with 'read_api' scope and paste it here.",
+        iconRes = R.drawable.ic_fluent_laptop_24_regular
+    ),
+    ConnectorConfig(
+        id = "todoist",
+        name = "Todoist",
+        hint = "API Token",
+        description = "Sync tasks, daily habits, and reminders",
+        whatMiraCanDo = "List pending tasks and create new tasks directly",
+        setupSteps = "In Todoist, go to Settings -> Integrations -> Developer and copy your API token.",
+        iconRes = R.drawable.ic_fluent_task_list_square_ltr_24_regular
+    ),
+    ConnectorConfig(
+        id = "notion",
+        name = "Notion",
+        hint = "Internal Integration Secret (secret_...)",
+        description = "Search workspace notes and databases",
+        whatMiraCanDo = "Search pages and databases across your Notion workspace",
+        setupSteps = "Create an internal integration at notion.so/my-integrations and share your workspace pages with that integration.",
+        iconRes = R.drawable.ic_fluent_document_search_24_regular
+    ),
+    ConnectorConfig(
+        id = "linear",
+        name = "Linear",
+        hint = "Personal API Key (lin_api_...)",
+        description = "Track engineering issues and projects",
+        whatMiraCanDo = "List issues assigned to you with their status",
+        setupSteps = "In Linear, go to Settings -> Account -> Security & Access -> Personal API Keys and paste your key.",
+        iconRes = R.drawable.ic_fluent_target_arrow_24_regular
+    ),
+    ConnectorConfig(
+        id = "vercel",
+        name = "Vercel",
+        hint = "Personal Access Token",
+        description = "Monitor deployments and project statuses",
+        whatMiraCanDo = "List active projects and deployment statuses",
+        setupSteps = "In Vercel Account Settings -> Tokens, generate a Personal Access Token and paste it here.",
+        iconRes = R.drawable.ic_fluent_globe_24_regular
+    ),
+    ConnectorConfig(
+        id = "drive",
+        name = "Google Drive",
+        hint = "OAuth Access Token (ya29...)",
+        description = "Read documents and inspect stored files",
+        whatMiraCanDo = "List recent files and document types from your Drive",
+        setupSteps = "Open Google OAuth Playground (https://developers.google.com/oauthplayground). Under Drive API v3, select 'https://www.googleapis.com/auth/drive.readonly'. Authorize and exchange code for tokens, then paste the Access Token here.",
+        iconRes = R.drawable.ic_fluent_folder_open_24_regular
+    ),
+    ConnectorConfig(
+        id = "youtube",
+        name = "YouTube",
+        hint = "YouTube Data API Key",
+        description = "Search video content, channels, and playlists",
+        whatMiraCanDo = "Search YouTube videos with channel and title information",
+        setupSteps = "In Google Cloud Console, enable 'YouTube Data API v3', create an API key under Credentials, and paste it here.",
+        iconRes = R.drawable.ic_fluent_play_24_regular
+    ),
+    ConnectorConfig(
+        id = "telegram",
+        name = "Telegram",
+        hint = "BotFather Bot Token (123456:ABC-DEF...)",
+        description = "Send instant messages and alerts via your bot",
+        whatMiraCanDo = "Send messages and notifications to your detected Telegram chat",
+        setupSteps = "Create a bot using @BotFather on Telegram, paste token here, send a message to your bot in Telegram, then tap 'Detect chat'.",
+        iconRes = R.drawable.ic_fluent_send_24_regular
+    ),
+    ConnectorConfig(
+        id = "maps",
+        name = "Google Maps / Places",
+        hint = "Places API Key",
+        description = "Search locations, venues, and addresses",
+        whatMiraCanDo = "Find places and lookup formatted addresses",
+        setupSteps = "In Google Cloud Console, enable 'Places API', create an API key under Credentials, and paste it here.",
+        iconRes = R.drawable.ic_fluent_options_24_regular
+    ),
+    ConnectorConfig(
+        id = "yahoo_finance",
+        name = "Yahoo Finance",
+        hint = "No key needed",
+        description = "Live stock prices and market quotes",
+        whatMiraCanDo = "Get real-time quotes, prices, and daily ranges for ticker symbols",
+        setupSteps = "No API key needed. Public financial data endpoint.",
+        requiresToken = false,
+        iconRes = R.drawable.ic_fluent_sound_wave_circle_24_regular
+    ),
+    ConnectorConfig(
+        id = "open_meteo",
+        name = "Open-Meteo",
+        hint = "No key needed",
+        description = "Global weather forecasts and conditions",
+        whatMiraCanDo = "Report current temperature, weather conditions, wind, and humidity",
+        setupSteps = "No API key needed. Free open-source weather API.",
+        requiresToken = false,
+        iconRes = R.drawable.ic_fluent_weather_sunny_24_regular
+    ),
+    ConnectorConfig(
+        id = "gmail",
+        name = "Gmail",
+        hint = "OAuth Access Token (ya29...)",
+        description = "Read inbox messages and send emails",
+        whatMiraCanDo = "Check recent inbox emails and send new messages",
+        setupSteps = "Open Google OAuth Playground (https://developers.google.com/oauthplayground). Select scope 'https://mail.google.com/'. Authorize and exchange code for tokens, then paste the Access Token here.",
+        iconRes = R.drawable.ic_fluent_mail_24_regular
+    )
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ConnectorsSettingsScreen(
@@ -52,129 +174,7 @@ fun ConnectorsSettingsScreen(
     val securePrefs = remember { SecurePreferences(context) }
     val client = remember { ConnectorClient() }
 
-    val connectors = remember {
-        listOf(
-            ConnectorConfig(
-                id = "github",
-                name = "GitHub",
-                hint = "Personal Access Token (ghp_...)",
-                description = "Read repos, view commits, and manage repositories",
-                whatMiraCanDo = "List your top repositories with private/public visibility",
-                setupSteps = "Create a Personal Access Token (classic) on GitHub with 'repo' scope at github.com/settings/tokens, then paste it here.",
-                iconRes = R.drawable.ic_fluent_code_24_regular
-            ),
-            ConnectorConfig(
-                id = "gitlab",
-                name = "GitLab",
-                hint = "Personal Access Token (glpat-...)",
-                description = "Access projects and code repositories on GitLab",
-                whatMiraCanDo = "List your GitLab projects with visibility status",
-                setupSteps = "In GitLab User Settings -> Access Tokens, create a personal access token with 'read_api' scope and paste it here.",
-                iconRes = R.drawable.ic_fluent_laptop_24_regular
-            ),
-            ConnectorConfig(
-                id = "todoist",
-                name = "Todoist",
-                hint = "API Token",
-                description = "Sync tasks, daily habits, and reminders",
-                whatMiraCanDo = "List pending tasks and create new tasks directly",
-                setupSteps = "In Todoist, go to Settings -> Integrations -> Developer and copy your API token.",
-                iconRes = R.drawable.ic_fluent_task_list_square_ltr_24_regular
-            ),
-            ConnectorConfig(
-                id = "notion",
-                name = "Notion",
-                hint = "Internal Integration Secret (secret_...)",
-                description = "Search workspace notes and databases",
-                whatMiraCanDo = "Search pages and databases across your Notion workspace",
-                setupSteps = "Create an internal integration at notion.so/my-integrations and share your workspace pages with that integration.",
-                iconRes = R.drawable.ic_fluent_document_search_24_regular
-            ),
-            ConnectorConfig(
-                id = "linear",
-                name = "Linear",
-                hint = "Personal API Key (lin_api_...)",
-                description = "Track engineering issues and projects",
-                whatMiraCanDo = "List issues assigned to you with their status",
-                setupSteps = "In Linear, go to Settings -> Account -> Security & Access -> Personal API Keys and paste your key.",
-                iconRes = R.drawable.ic_fluent_target_arrow_24_regular
-            ),
-            ConnectorConfig(
-                id = "vercel",
-                name = "Vercel",
-                hint = "Personal Access Token",
-                description = "Monitor deployments and project statuses",
-                whatMiraCanDo = "List active projects and deployment statuses",
-                setupSteps = "In Vercel Account Settings -> Tokens, generate a Personal Access Token and paste it here.",
-                iconRes = R.drawable.ic_fluent_globe_24_regular
-            ),
-            ConnectorConfig(
-                id = "drive",
-                name = "Google Drive",
-                hint = "OAuth Access Token (ya29...)",
-                description = "Read documents and inspect stored files",
-                whatMiraCanDo = "List recent files and document types from your Drive",
-                setupSteps = "Open Google OAuth Playground (https://developers.google.com/oauthplayground). Under Drive API v3, select 'https://www.googleapis.com/auth/drive.readonly'. Authorize and exchange code for tokens, then paste the Access Token here.",
-                iconRes = R.drawable.ic_fluent_folder_open_24_regular
-            ),
-            ConnectorConfig(
-                id = "youtube",
-                name = "YouTube",
-                hint = "YouTube Data API Key",
-                description = "Search video content, channels, and playlists",
-                whatMiraCanDo = "Search YouTube videos with channel and title information",
-                setupSteps = "In Google Cloud Console, enable 'YouTube Data API v3', create an API key under Credentials, and paste it here.",
-                iconRes = R.drawable.ic_fluent_play_24_regular
-            ),
-            ConnectorConfig(
-                id = "telegram",
-                name = "Telegram",
-                hint = "BotFather Bot Token (123456:ABC-DEF...)",
-                description = "Send instant messages and alerts via your bot",
-                whatMiraCanDo = "Send messages and notifications to your detected Telegram chat",
-                setupSteps = "Create a bot using @BotFather on Telegram, paste token here, send a message to your bot in Telegram, then tap 'Detect chat'.",
-                iconRes = R.drawable.ic_fluent_send_24_regular
-            ),
-            ConnectorConfig(
-                id = "maps",
-                name = "Google Maps / Places",
-                hint = "Places API Key",
-                description = "Search locations, venues, and addresses",
-                whatMiraCanDo = "Find places and lookup formatted addresses",
-                setupSteps = "In Google Cloud Console, enable 'Places API', create an API key under Credentials, and paste it here.",
-                iconRes = R.drawable.ic_fluent_options_24_regular
-            ),
-            ConnectorConfig(
-                id = "yahoo_finance",
-                name = "Yahoo Finance",
-                hint = "No key needed",
-                description = "Live stock prices and market quotes",
-                whatMiraCanDo = "Get real-time quotes, prices, and daily ranges for ticker symbols",
-                setupSteps = "No API key needed. Public financial data endpoint.",
-                requiresToken = false,
-                iconRes = R.drawable.ic_fluent_sound_wave_circle_24_regular
-            ),
-            ConnectorConfig(
-                id = "open_meteo",
-                name = "Open-Meteo",
-                hint = "No key needed",
-                description = "Global weather forecasts and conditions",
-                whatMiraCanDo = "Report current temperature, weather conditions, wind, and humidity",
-                setupSteps = "No API key needed. Free open-source weather API.",
-                requiresToken = false,
-                iconRes = R.drawable.ic_fluent_weather_sunny_24_regular
-            ),
-            ConnectorConfig(
-                id = "gmail",
-                name = "Gmail",
-                hint = "OAuth Access Token (ya29...)",
-                description = "Read inbox messages and send emails",
-                whatMiraCanDo = "Check recent inbox emails and send new messages",
-                setupSteps = "Open Google OAuth Playground (https://developers.google.com/oauthplayground). Select scope 'https://mail.google.com/'. Authorize and exchange code for tokens, then paste the Access Token here.",
-                iconRes = R.drawable.ic_fluent_mail_24_regular
-            )
-        )
-    }
+    val connectors = remember { ALL_CONNECTORS }
 
     var searchQuery by remember { mutableStateOf("") }
     var activeDialogConnector by remember { mutableStateOf<ConnectorConfig?>(null) }

@@ -527,8 +527,11 @@ class TaskExecutorTest {
 
         val result = executor.replaySkillDirect(skill)
         assertEquals(TaskStatus.FAILED, result.status)
-        assertEquals(0, result.stepsUsed)
-        assertTrue("Message must explain replay failure", result.message.contains("failed during execution"))
+        assertEquals(1, result.stepsUsed)
+        assertTrue(
+            "Message must name the failed replay step and reason",
+            result.message.contains("Macro replay step 1 failed")
+        )
     }
 
     @Test
@@ -1037,7 +1040,11 @@ class TaskExecutorTest {
 
         val result = executor.executeGoal("slow hanging task")
         assertEquals(TaskStatus.FAILED, result.status)
-        assertEquals("Task timed out after 120s", result.message)
+        assertTrue(
+            "Timeout message must name the phase and step instead of a generic timeout",
+            result.message.contains("Timed out while waiting for the AI reply") &&
+                result.message.contains("step 1")
+        )
         assertFalse("Executor _isRunning must be reset after timeout", executor.isRunning)
     }
 

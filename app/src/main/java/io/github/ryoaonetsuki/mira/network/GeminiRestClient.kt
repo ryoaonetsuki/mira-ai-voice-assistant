@@ -830,6 +830,35 @@ class GeminiRestClient(
         )
     }
 
+    suspend fun generateVision(
+        apiKey: String,
+        history: List<ChatMessageEntity>,
+        imageBytes: ByteArray,
+        mimeType: String = "image/jpeg",
+        systemPrompt: String = "",
+        model: String = "gemini-3.8-flash",
+        useServerProxy: Boolean = false,
+        enableThinking: Boolean = false
+    ): Result<GroundedChatResult> {
+        val base64Data = java.util.Base64.getEncoder().encodeToString(imageBytes)
+        val attachment = ChatAttachment(
+            mimeType = mimeType,
+            base64Data = base64Data,
+            fileName = "screenshot.jpg"
+        )
+        return generateChatResponse(
+            apiKey = apiKey,
+            history = history,
+            systemPrompt = systemPrompt,
+            model = model,
+            useServerProxy = useServerProxy,
+            enableGrounding = false,
+            enableThinking = enableThinking,
+            isChatCall = false,
+            attachments = listOf(attachment)
+        )
+    }
+
     suspend fun generateChatResponse(
         apiKey: String,
         history: List<ChatMessageEntity>,

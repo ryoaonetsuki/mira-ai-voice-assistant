@@ -190,9 +190,9 @@ fun ScanScreen(
                 )
                 if (ttsResult.isSuccess) {
                     val pcmBytes = ttsResult.getOrThrow()
-                    val player = AudioPlayer { isSpeaking ->
+                    val player = AudioPlayer(onSpeakingStateChanged = { isSpeaking ->
                         isSpeakingVisionAnswer = isSpeaking
-                    }
+                    })
                     currentAudioPlayer = player
                     player.beginPreview()
                     val rampedBytes = AudioPlayer.applyPreviewFadeRamps(pcmBytes)

@@ -2,17 +2,24 @@ package io.github.ryoaonetsuki.mira.network
 
 import android.util.Log
 import io.github.ryoaonetsuki.mira.data.local.entities.ChatMessageEntity
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
@@ -911,6 +918,9 @@ class GeminiRestClient(
                 return@withContext Result.success(GroundedChatResult(text = res?.text ?: "", sources = mergedSources))
             }
             val err = result.exceptionOrNull() ?: Exception("Unknown error")
+            if (err is CancellationException) {
+                throw err
+            }
             Log.w(TAG, "Model $m failed: ${err.message}. Trying next...")
             lastError = Exception("$m: ${err.message}")
             if (isAuthError(null, err.message)) {
@@ -1196,6 +1206,9 @@ class GeminiRestClient(
 
             lastResult = result
             val err = result.exceptionOrNull()
+            if (err is CancellationException) {
+                throw err
+            }
             val errMsg = err?.message ?: "Unknown error"
             val isTransient = isTransientError(null, errMsg) || isNetworkError(err)
 
@@ -1211,7 +1224,7 @@ class GeminiRestClient(
         lastResult
     }
 
-    private fun executeGenerateContentSingleAttempt(
+    internal suspend fun executeGenerateContentSingleAttempt(
         apiKey: String,
         history: List<ChatMessageEntity>,
         systemPrompt: String,
@@ -1339,9 +1352,28 @@ class GeminiRestClient(
                 Request.Builder().url(url).header("x-goog-api-key", apiKey).post(root.toString().toRequestBody(jsonMediaType)).build()
             }
 
-            httpClient.newCall(request).execute().use { response ->
-                val body = response.body?.string() ?: ""
-                if (response.isSuccessful) {
+            val response = suspendCancellableCoroutine<Response> { cont ->
+                val call = httpClient.newCall(request)
+                cont.invokeOnCancellation {
+                    try {
+                        call.cancel()
+                    } catch (_: Throwable) {}
+                }
+                call.enqueue(object : Callback {
+                    override fun onResponse(call: Call, response: Response) {
+                        cont.resume(response)
+                    }
+
+                    override fun onFailure(call: Call, e: IOException) {
+                        if (cont.isCancelled) return
+                        cont.resumeWithException(e)
+                    }
+                })
+            }
+
+            response.use { resp ->
+                val body = resp.body?.string() ?: ""
+                if (resp.isSuccessful) {
                     val json = JSONObject(body)
                     val candidates = json.optJSONArray("candidates")
                     if (candidates != null && candidates.length() > 0) {
@@ -1369,13 +1401,15 @@ class GeminiRestClient(
                     val errorMsg = try {
                         val errObj = JSONObject(body).optJSONObject("error")
                         val msg = errObj?.optString("message") ?: body.take(200)
-                        "HTTP ${response.code}: $msg"
+                        "HTTP ${resp.code}: $msg"
                     } catch (e: Exception) {
-                        "HTTP ${response.code}"
+                        "HTTP ${resp.code}"
                     }
                     Result.failure(Exception(errorMsg))
                 }
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Result.failure(e)
         }

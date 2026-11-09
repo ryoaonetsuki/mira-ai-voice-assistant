@@ -75,6 +75,8 @@ class ScreenAutomationService(private val context: Context? = null) : Automation
         }
     }
 
+    override fun getScreenElements(): List<ScreenNode> = dumpScreen()
+
     override fun formatNodes(nodes: List<ScreenNode>): String {
         val eligible = nodes.filter { node ->
             node.text.isNotBlank() ||
@@ -94,7 +96,7 @@ class ScreenAutomationService(private val context: Context? = null) : Automation
         }
 
         val goalWords = goal.lowercase()
-            .split(Regex("[^a-zA-Z0-9]+"))
+            .split(Regex("[^\\p{L}\\p{N}]+"))
             .filter { it.isNotBlank() }
             .toSet()
 
@@ -123,7 +125,7 @@ class ScreenAutomationService(private val context: Context? = null) : Automation
     private fun sharesWordWithGoal(node: ScreenNode, goalWords: Set<String>): Boolean {
         if (goalWords.isEmpty()) return false
         val nodeWords = (node.text + " " + node.contentDescription).lowercase()
-            .split(Regex("[^a-zA-Z0-9]+"))
+            .split(Regex("[^\\p{L}\\p{N}]+"))
             .filter { it.isNotBlank() }
             .toSet()
         return goalWords.any { it in nodeWords }
@@ -274,31 +276,50 @@ class ScreenAutomationService(private val context: Context? = null) : Automation
     }
 
     override fun openApp(query: String): String? {
+        val q = query.trim()
+        if (q.isEmpty()) return null
         return try {
             val ctx = context ?: return null
             val pm = ctx.packageManager
 
-            // 1. Try resolving query as package name directly
-            val directIntent = pm.getLaunchIntentForPackage(query)
+            // 1. Resolve known-app alias table (English & Bangla) before label search
+            val aliasCandidates = resolveKnownAppPackages(q)
+            for (pkg in aliasCandidates) {
+                val aliasIntent = pm.getLaunchIntentForPackage(pkg)
+                if (aliasIntent != null) {
+                    aliasIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    ctx.startActivity(aliasIntent)
+                    return pkg
+                }
+            }
+
+            // 2. Try resolving query as package name directly
+            val directIntent = pm.getLaunchIntentForPackage(q)
             if (directIntent != null) {
                 directIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 ctx.startActivity(directIntent)
-                return query
+                return q
             }
 
-            // 2. Search installed launcher activities by app label or package
+            // 3. Search installed launcher activities by app label or package
+            val searchTerms = listOfNotNull(q, resolveEnglishLabelFallback(q)).distinct()
             val mainIntent = Intent(Intent.ACTION_MAIN, null).apply {
                 addCategory(Intent.CATEGORY_LAUNCHER)
             }
             val resolveInfos = pm.queryIntentActivities(mainIntent, 0)
-            val target = resolveInfos.firstOrNull { ri ->
-                val label = ri.loadLabel(pm).toString()
-                label.equals(query, ignoreCase = true)
-            } ?: resolveInfos.firstOrNull { ri ->
-                val label = ri.loadLabel(pm).toString()
-                label.contains(query, ignoreCase = true)
-            } ?: resolveInfos.firstOrNull { ri ->
-                ri.activityInfo.packageName.contains(query, ignoreCase = true)
+            var target: android.content.pm.ResolveInfo? = null
+            for (term in searchTerms) {
+                if (term.isEmpty()) continue
+                target = resolveInfos.firstOrNull { ri ->
+                    val label = ri.loadLabel(pm).toString()
+                    label.equals(term, ignoreCase = true)
+                } ?: resolveInfos.firstOrNull { ri ->
+                    val label = ri.loadLabel(pm).toString()
+                    label.contains(term, ignoreCase = true)
+                } ?: resolveInfos.firstOrNull { ri ->
+                    ri.activityInfo.packageName.contains(term, ignoreCase = true)
+                }
+                if (target != null) break
             }
 
             if (target != null) {
@@ -312,20 +333,132 @@ class ScreenAutomationService(private val context: Context? = null) : Automation
             }
             null
         } catch (e: Throwable) {
-            Log.e(TAG, "openApp failed for query: $query", e)
+            Log.e(TAG, "openApp failed for query: $q", e)
             null
         }
     }
 
     override fun getCurrentPackage(): String? {
         return try {
-            MiraAccessibilityService.instance?.rootInActiveWindow?.packageName?.toString()
+            val service = MiraAccessibilityService.instance ?: return null
+            service.getActivePackageName() ?: service.rootInActiveWindow?.packageName?.toString()
         } catch (_: Throwable) {
+            null
+        }
+    }
+
+    override suspend fun takeScreenshotJpeg(maxWidthPx: Int): ByteArray? {
+        return try {
+            val service = MiraAccessibilityService.instance ?: return null
+            service.takeScreenshotJpeg(maxWidthPx = maxWidthPx)
+        } catch (e: Throwable) {
+            Log.w(TAG, "takeScreenshotJpeg failed: ${e.message}")
             null
         }
     }
 
     companion object {
         private const val TAG = "ScreenAutomation"
+
+        private val KNOWN_APP_ALIASES: Map<String, List<String>> = mapOf(
+            "youtube" to listOf("com.google.android.youtube"),
+            "ইউটিউব" to listOf("com.google.android.youtube"),
+            "গান" to listOf("com.google.android.youtube", "com.spotify.music"),
+            "মিউজিক" to listOf("com.google.android.youtube", "com.spotify.music"),
+            "spotify" to listOf("com.spotify.music"),
+            "স্পটিফাই" to listOf("com.spotify.music"),
+            "whatsapp" to listOf("com.whatsapp", "com.whatsapp.w4b"),
+            "হোয়াটসঅ্যাপ" to listOf("com.whatsapp", "com.whatsapp.w4b"),
+            "chrome" to listOf("com.android.chrome"),
+            "ক্রোম" to listOf("com.android.chrome"),
+            "maps" to listOf("com.google.android.apps.maps"),
+            "google maps" to listOf("com.google.android.apps.maps"),
+            "ম্যাপস" to listOf("com.google.android.apps.maps"),
+            "gmail" to listOf("com.google.android.gm"),
+            "জিমেইল" to listOf("com.google.android.gm"),
+            "facebook" to listOf("com.facebook.katana", "com.facebook.lite"),
+            "ফেসবুক" to listOf("com.facebook.katana", "com.facebook.lite"),
+            "settings" to listOf("com.android.settings"),
+            "সেটিংস" to listOf("com.android.settings"),
+            "camera" to listOf(
+                "com.android.camera",
+                "com.android.camera2",
+                "com.google.android.GoogleCamera",
+                "com.sec.android.app.camera",
+                "com.oplus.camera"
+            ),
+            "ক্যামেরা" to listOf(
+                "com.android.camera",
+                "com.android.camera2",
+                "com.google.android.GoogleCamera",
+                "com.sec.android.app.camera",
+                "com.oplus.camera"
+            ),
+            "messages" to listOf(
+                "com.google.android.apps.messaging",
+                "com.samsung.android.messaging",
+                "com.android.mms"
+            ),
+            "মেসেজ" to listOf(
+                "com.google.android.apps.messaging",
+                "com.samsung.android.messaging",
+                "com.android.mms"
+            ),
+            "phone" to listOf(
+                "com.google.android.dialer",
+                "com.samsung.android.dialer",
+                "com.android.dialer"
+            ),
+            "ফোন" to listOf(
+                "com.google.android.dialer",
+                "com.samsung.android.dialer",
+                "com.android.dialer"
+            ),
+            "কল" to listOf(
+                "com.google.android.dialer",
+                "com.samsung.android.dialer",
+                "com.android.dialer"
+            )
+        )
+
+        private val BANGLA_TO_ENGLISH_LABEL: Map<String, String> = mapOf(
+            "ইউটিউব" to "YouTube",
+            "গান" to "YouTube",
+            "মিউজিক" to "Music",
+            "স্পটিফাই" to "Spotify",
+            "হোয়াটসঅ্যাপ" to "WhatsApp",
+            "ক্রোম" to "Chrome",
+            "ম্যাপস" to "Maps",
+            "জিমেইল" to "Gmail",
+            "ফেসবুক" to "Facebook",
+            "সেটিংস" to "Settings",
+            "ক্যামেরা" to "Camera",
+            "মেসেজ" to "Messages",
+            "ফোন" to "Phone",
+            "কল" to "Phone"
+        )
+
+        fun resolveKnownAppPackages(query: String): List<String> {
+            val q = query.trim().lowercase()
+            if (q.isEmpty()) return emptyList()
+            KNOWN_APP_ALIASES[q]?.let { return it }
+            for ((alias, pkgs) in KNOWN_APP_ALIASES) {
+                if (q.contains(alias)) return pkgs
+            }
+            return emptyList()
+        }
+
+        fun resolveKnownAppPackage(query: String): String? =
+            resolveKnownAppPackages(query).firstOrNull()
+
+        fun resolveEnglishLabelFallback(query: String): String? {
+            val q = query.trim().lowercase()
+            if (q.isEmpty()) return null
+            BANGLA_TO_ENGLISH_LABEL[q]?.let { return it }
+            for ((bangla, eng) in BANGLA_TO_ENGLISH_LABEL) {
+                if (q.contains(bangla)) return eng
+            }
+            return null
+        }
     }
 }

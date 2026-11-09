@@ -73,18 +73,14 @@ import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
 import io.github.ryoaonetsuki.mira.data.preferences.UserPreferences
 import io.github.ryoaonetsuki.mira.network.ChatAttachment
 import io.github.ryoaonetsuki.mira.network.GeminiRestClient
-import io.github.ryoaonetsuki.mira.network.GeminiTtsClient
 import io.github.ryoaonetsuki.mira.network.normalizeApiKey
 import io.github.ryoaonetsuki.mira.ui.components.MiraButton
 import io.github.ryoaonetsuki.mira.ui.components.MiraCard
 import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
 import io.github.ryoaonetsuki.mira.ui.theme.MiraMotion
 import io.github.ryoaonetsuki.mira.vision.VisionPromptHelper
-import io.github.ryoaonetsuki.mira.voice.AudioPlayer
 import io.github.ryoaonetsuki.mira.voice.LanguageUtils
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -117,7 +113,6 @@ fun ScanScreen(
     val securePrefs = remember { SecurePreferences(context) }
     val resolver = remember { ApiKeyResolver(context) }
     val restClient = remember { GeminiRestClient() }
-    val ttsClient = remember { GeminiTtsClient(context) }
 
     val language by userPrefs.languageFlow.collectAsState(initial = "Bangla (Bengali)")
     val isBangla = remember(language) { LanguageUtils.isBangla(language) }
@@ -141,85 +136,16 @@ fun ScanScreen(
     var scannedFormat by remember { mutableStateOf<String?>(null) }
     var isScanning by remember { mutableStateOf(true) }
 
-    // Vision "See + Answer" state
+    // Vision "See + Answer" state (TEXT ONLY)
     var livePromptText by remember { mutableStateOf("") }
     var isVisionAnalyzing by remember { mutableStateOf(false) }
     var visionResultText by remember { mutableStateOf<String?>(null) }
     var visionErrorMessage by remember { mutableStateOf<String?>(null) }
-    var isSpeakingVisionAnswer by remember { mutableStateOf(false) }
-    var audioPlayerJob by remember { mutableStateOf<Job?>(null) }
-    var currentAudioPlayer by remember { mutableStateOf<AudioPlayer?>(null) }
-
-    DisposableEffect(Unit) {
-        onDispose {
-            audioPlayerJob?.cancel()
-            currentAudioPlayer?.let { player ->
-                try {
-                    player.stopPreviewCleanly()
-                } catch (_: Exception) {}
-            }
-        }
-    }
-
-    fun stopSpeaking() {
-        audioPlayerJob?.cancel()
-        audioPlayerJob = null
-        currentAudioPlayer?.let { player ->
-            try {
-                player.stopPreviewCleanly()
-            } catch (_: Exception) {}
-        }
-        currentAudioPlayer = null
-        isSpeakingVisionAnswer = false
-    }
-
-    fun speakAnswer(text: String) {
-        stopSpeaking()
-        if (text.isBlank()) return
-        audioPlayerJob = scope.launch(Dispatchers.IO) {
-            try {
-                val keySource = resolver.resolveKey()
-                val rawKey = (keySource as? KeySource.UserKey)?.key ?: (securePrefs.getGeminiApiKey() ?: "")
-                val useServer = keySource is KeySource.ServerKey
-                val voiceName = userPrefs.voiceNameFlow.first()
-                val ttsResult = ttsClient.speakText(
-                    apiKey = rawKey,
-                    text = text,
-                    voiceName = voiceName,
-                    useServerProxy = useServer
-                )
-                if (ttsResult.isSuccess) {
-                    val pcmBytes = ttsResult.getOrThrow()
-                    val player = AudioPlayer(onSpeakingStateChanged = { isSpeaking ->
-                        isSpeakingVisionAnswer = isSpeaking
-                    })
-                    currentAudioPlayer = player
-                    player.beginPreview()
-                    val rampedBytes = AudioPlayer.applyPreviewFadeRamps(pcmBytes)
-                    val chunkSize = 4096
-                    var offset = 0
-                    isSpeakingVisionAnswer = true
-                    while (offset < rampedBytes.size && isSpeakingVisionAnswer) {
-                        val length = minOf(chunkSize, rampedBytes.size - offset)
-                        player.playAudioChunk(rampedBytes.copyOfRange(offset, offset + length))
-                        offset += length
-                        delay(10)
-                    }
-                    player.endPreviewCleanly()
-                }
-            } catch (e: Exception) {
-                android.util.Log.w("ScanScreen", "Vision TTS playback error: ${e.message}")
-            } finally {
-                isSpeakingVisionAnswer = false
-            }
-        }
-    }
 
     fun analyzeFrame(file: File, query: String?) {
         isVisionAnalyzing = true
         visionResultText = null
         visionErrorMessage = null
-        stopSpeaking()
 
         scope.launch(Dispatchers.IO) {
             var base64Attachment: ChatAttachment? = null
@@ -321,7 +247,6 @@ fun ScanScreen(
                     val rawText = result.getOrNull()?.text?.trim().orEmpty()
                     val text = io.github.ryoaonetsuki.mira.identity.MiraOutputFilter.sanitize(rawText)
                     visionResultText = text
-                    speakAnswer(text)
                 } else {
                     val err = result.exceptionOrNull()
                     visionErrorMessage = err?.message ?: "Mira could not analyze the image. Please try again."
@@ -335,7 +260,6 @@ fun ScanScreen(
         isVisionAnalyzing = true
         visionResultText = null
         visionErrorMessage = null
-        stopSpeaking()
 
         val photoFile = File(
             context.cacheDir,
@@ -917,37 +841,10 @@ fun ScanScreen(
                                             fontWeight = FontWeight.Bold,
                                             color = palette.textPrimary
                                         )
-                                        if (isSpeakingVisionAnswer) {
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            Surface(
-                                                shape = RoundedCornerShape(12.dp),
-                                                color = palette.primary.copy(alpha = 0.15f)
-                                            ) {
-                                                Row(
-                                                    verticalAlignment = Alignment.CenterVertically,
-                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                                                ) {
-                                                    Icon(
-                                                        painter = painterResource(R.drawable.ic_fluent_speaker_2_24_regular),
-                                                        contentDescription = null,
-                                                        tint = palette.primary,
-                                                        modifier = Modifier.size(13.dp)
-                                                    )
-                                                    Spacer(modifier = Modifier.width(4.dp))
-                                                    Text(
-                                                        text = stringResource(R.string.vision_speaking),
-                                                        fontSize = 11.sp,
-                                                        fontWeight = FontWeight.Medium,
-                                                        color = palette.primary
-                                                    )
-                                                }
-                                            }
-                                        }
                                     }
 
                                     IconButton(
                                         onClick = {
-                                            stopSpeaking()
                                             visionResultText = null
                                         },
                                         modifier = Modifier.size(32.dp)
@@ -980,7 +877,7 @@ fun ScanScreen(
 
                                 Spacer(modifier = Modifier.height(14.dp))
 
-                                // Action Buttons Row: Copy, Stop Speaking / Speak Again, Ask Another
+                                // Action Buttons Row: Copy, Ask Another
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1012,43 +909,11 @@ fun ScanScreen(
                                         )
                                     }
 
-                                    // Speak / Stop button
-                                    OutlinedButton(
-                                        onClick = {
-                                            if (isSpeakingVisionAnswer) {
-                                                stopSpeaking()
-                                            } else {
-                                                speakAnswer(visionResultText.orEmpty())
-                                            }
-                                        },
-                                        shape = RoundedCornerShape(12.dp),
-                                        border = BorderStroke(1.dp, palette.borderSubtle),
-                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                                        modifier = Modifier.height(38.dp)
-                                    ) {
-                                        Icon(
-                                            painter = painterResource(
-                                                if (isSpeakingVisionAnswer) R.drawable.ic_fluent_stop_24_filled
-                                                else R.drawable.ic_fluent_speaker_2_24_regular
-                                            ),
-                                            contentDescription = null,
-                                            modifier = Modifier.size(15.dp),
-                                            tint = palette.primary
-                                        )
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text(
-                                            text = if (isSpeakingVisionAnswer) stringResource(R.string.vision_stop_speaking) else stringResource(R.string.vision_speak_again),
-                                            fontSize = 12.sp,
-                                            color = palette.textPrimary
-                                        )
-                                    }
-
                                     Spacer(modifier = Modifier.weight(1f))
 
                                     // Ask Another button
                                     Button(
                                         onClick = {
-                                            stopSpeaking()
                                             visionResultText = null
                                         },
                                         shape = RoundedCornerShape(12.dp),

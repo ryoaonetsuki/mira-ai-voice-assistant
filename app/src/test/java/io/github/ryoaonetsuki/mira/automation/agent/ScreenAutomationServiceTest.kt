@@ -464,4 +464,69 @@ class ScreenAutomationServiceTest {
         assertEquals(0f, outOfBoundsTap.first, 0.001f)
         assertEquals(2399f, outOfBoundsTap.second, 0.001f)
     }
+
+    // =========================================================================
+    // 5. Round 25 Fix Turn E — Bounded dumpScreen Traversal
+    // =========================================================================
+
+    private data class TestTreeNode(
+        val id: Int,
+        val isEligible: Boolean = true,
+        val children: MutableList<TestTreeNode> = mutableListOf()
+    )
+
+    @Test
+    fun dumpScreenTraversal_nodeCap_capsAtMaxNodes() {
+        // Build a tree with 1200 nodes (1 root with 1199 children)
+        val root = TestTreeNode(id = 0)
+        for (i in 1..1200) {
+            root.children.add(TestTreeNode(id = i))
+        }
+
+        val collected = mutableListOf<TestTreeNode>()
+        val count = io.github.ryoaonetsuki.mira.service.MiraAccessibilityService.traverseTreeBounded(
+            root = root,
+            startIndex = 0,
+            out = collected,
+            maxNodes = 800,
+            timeBudgetMs = 100_000L,
+            startTimeMs = 0L,
+            clockMs = { 0L },
+            isEligible = { it.isEligible },
+            getChildren = { it.children }
+        )
+
+        assertEquals("Collected nodes must be capped at maxNodes (800)", 800, collected.size)
+        assertEquals("Returned count index must match collected size", 800, count)
+    }
+
+    @Test
+    fun dumpScreenTraversal_timeBudget_stopsEarlyWhenBudgetExceeded() {
+        // Build a wide tree
+        val root = TestTreeNode(id = 0)
+        for (i in 1..500) {
+            root.children.add(TestTreeNode(id = i))
+        }
+
+        var simulatedTime = 0L
+        val collected = mutableListOf<TestTreeNode>()
+        io.github.ryoaonetsuki.mira.service.MiraAccessibilityService.traverseTreeBounded(
+            root = root,
+            startIndex = 0,
+            out = collected,
+            maxNodes = 800,
+            timeBudgetMs = 50L,
+            startTimeMs = 0L,
+            clockMs = {
+                simulatedTime += 2L
+                simulatedTime
+            },
+            isEligible = { it.isEligible },
+            getChildren = { it.children }
+        )
+
+        assertTrue("Must stop traversal well before all 501 nodes are visited", collected.size < 500)
+        assertTrue("Collected nodes must be > 0", collected.size > 0)
+        assertTrue("Simulated time must have reached/exceeded 50ms budget", simulatedTime >= 50L)
+    }
 }

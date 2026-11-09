@@ -58,6 +58,7 @@ interface SessionClient {
     fun sendUserMessage(content: String) {}
     fun sendFunctionResponse(id: String, name: String, response: Value.Object) {}
     fun stopAudioPlayback() {}
+    fun setOutputSuppressed(suppressed: Boolean) {}
     val isClosed: Boolean
 }
 
@@ -109,6 +110,10 @@ class DefaultSessionClient(
 
     override fun stopAudioPlayback() {
         transport.stopAudioPlayback()
+    }
+
+    override fun setOutputSuppressed(suppressed: Boolean) {
+        transport.setOutputSuppressed(suppressed)
     }
 }
 
@@ -290,6 +295,11 @@ class GeminiSessionManager(
 
     fun stopAudioPlayback() {
         currentClient?.stopAudioPlayback()
+    }
+
+    /** Drops Live audio output while a phone action runs; always release in a finally. */
+    fun setOutputSuppressed(suppressed: Boolean) {
+        currentClient?.setOutputSuppressed(suppressed)
     }
 
     fun sendFunctionResponse(id: String, name: String, response: Value.Object) {

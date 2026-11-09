@@ -236,7 +236,10 @@ fun MiraNavGraph(
             }
 
             composable(Screen.Extensions.route) {
-                ExtensionsScreen(onBack = { navController.popBackStack() })
+                ExtensionsScreen(
+                    onBack = { navController.popBackStack() },
+                    onNavigateToConnectors = { navController.navigate(Screen.SettingsConnectors.route) }
+                )
             }
 
             composable(Screen.Skills.route) {

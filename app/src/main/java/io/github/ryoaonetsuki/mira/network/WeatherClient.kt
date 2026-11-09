@@ -5,6 +5,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
+import java.util.TimeZone
 import java.util.concurrent.TimeUnit
 
 data class WeatherData(
@@ -15,12 +16,30 @@ data class WeatherData(
 
 class WeatherClient {
 
+    companion object {
+        const val DHAKA_LAT = 23.8103
+        const val DHAKA_LON = 90.4125
+        const val NYC_LAT = 40.7128
+        const val NYC_LON = -74.0060
+
+        fun defaultCoordinates(timeZoneId: String = TimeZone.getDefault().id): Pair<Double, Double> {
+            return if (timeZoneId == "Asia/Dhaka" || timeZoneId == "Asia/Dacca") {
+                Pair(DHAKA_LAT, DHAKA_LON)
+            } else {
+                Pair(NYC_LAT, NYC_LON)
+            }
+        }
+    }
+
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.SECONDS)
         .build()
 
-    suspend fun getCurrentWeather(latitude: Double = 40.7128, longitude: Double = -74.0060): WeatherData = withContext(Dispatchers.IO) {
+    suspend fun getCurrentWeather(
+        latitude: Double = defaultCoordinates().first,
+        longitude: Double = defaultCoordinates().second
+    ): WeatherData = withContext(Dispatchers.IO) {
         try {
             val url = "https://api.open-meteo.com/v1/forecast?latitude=$latitude&longitude=$longitude&current=temperature_2m,relative_humidity_2m,weather_code"
             val request = Request.Builder().url(url).build()

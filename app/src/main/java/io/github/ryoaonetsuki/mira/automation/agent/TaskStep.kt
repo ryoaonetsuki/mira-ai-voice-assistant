@@ -357,18 +357,6 @@ data class TaskStep(
         }
       }
 
-      if (lower.contains("task complete") ||
-          lower.contains("task completed") ||
-          lower.contains("goal complete") ||
-          lower.contains("successfully installed") ||
-          lower.contains("finished")) {
-        return TaskStep(
-          action = ACTION_DONE,
-          reasoning = "Task marked complete in response",
-          isComplete = true
-        )
-      }
-
       return null
     }
   }

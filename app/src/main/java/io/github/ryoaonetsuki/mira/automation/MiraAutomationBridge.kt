@@ -19,54 +19,103 @@ data class AutomationResult(
 )
 
 class MiraAutomationBridge(
-    private val context: Context,
+    private val context: Context?,
     private val apiKey: suspend () -> String
 ) {
+    private var taskTimeoutMs: Long = TaskExecutor.DEFAULT_TASK_TIMEOUT_MS
+    private var clockMs: () -> Long = { System.currentTimeMillis() }
+    private var executorFactory: (() -> TaskExecutor)? = null
+
+    internal constructor(
+        context: Context?,
+        taskTimeoutMs: Long = TaskExecutor.DEFAULT_TASK_TIMEOUT_MS,
+        clockMs: () -> Long = { System.currentTimeMillis() },
+        executorFactory: (() -> TaskExecutor)? = null,
+        apiKey: suspend () -> String = { "" }
+    ) : this(context, apiKey) {
+        this.taskTimeoutMs = taskTimeoutMs
+        this.clockMs = clockMs
+        this.executorFactory = executorFactory
+    }
+    private val stateLock = Any()
+
     @Volatile
     private var activeExecutor: TaskExecutor? = null
 
+    @Volatile
+    var runningGoal: String? = null
+        private set
+
+    @Volatile
+    var runningSinceMs: Long = 0L
+        private set
+
     val isRunning: Boolean
-        get() = activeExecutor?.isRunning == true
-
-    fun cancel() {
-        activeExecutor?.cancel()
-    }
-
-    suspend fun executeGoal(goal: String): AutomationResult {
-        if (isRunning) {
-            return AutomationResult(TaskStatus.FAILED, "Another task is already running", 0)
+        get() = synchronized(stateLock) {
+            checkRunningAndClearStaleLocked()
         }
 
-        val automation: AutomationPort = ScreenAutomationService(context)
-        val skills = SkillMemoryService.getInstance(context)
-        val restClient = GeminiRestClient()
+    private fun checkRunningAndClearStaleLocked(): Boolean {
+        val current = activeExecutor ?: return false
+        val now = clockMs()
+        val elapsed = if (runningSinceMs > 0L) (now - runningSinceMs).coerceAtLeast(0L) else 0L
+        if (elapsed > taskTimeoutMs) {
+            current.cancel()
+            activeExecutor = null
+            runningGoal = null
+            runningSinceMs = 0L
+            return false
+        }
+        return true
+    }
 
-        val systemPrompt = "You control an Android phone. Reply with ONLY one JSON action object {action, params, reasoning, is_complete}. Actions: click_text, click_at, type_text, press_enter, scroll, swipe, press_back, press_home, open_app, wait, done. Screen description and goal are provided. Never invent coordinates outside the screen. If the goal is complete, reply done."
+    private fun buildAlreadyRunningMessageLocked(): String {
+        val goal = runningGoal ?: "unknown"
+        val elapsedSec = if (runningSinceMs > 0L) ((clockMs() - runningSinceMs).coerceAtLeast(0L) / 1000L) else 0L
+        return "Another task is already running (\"$goal\", ${elapsedSec}s elapsed)"
+    }
 
-        val thinkLambda: suspend (String, String, List<Pair<String, String>>) -> String = { currentGoal, screenDescription, history ->
-            val key = apiKey()
-            val entities = ArrayList<ChatMessageEntity>(history.size + 1)
-            for ((role, content) in history) {
-                entities.add(
-                    ChatMessageEntity(
-                        conversationId = "automation",
-                        role = if (role == "assistant" || role == "model") "model" else "user",
-                        content = content
-                    )
-                )
-            }
+    fun cancel() {
+        synchronized(stateLock) {
+            activeExecutor?.cancel()
+        }
+    }
+
+    private fun buildHistoryEntities(
+        currentGoal: String,
+        screenDescription: String,
+        history: List<Pair<String, String>>
+    ): ArrayList<ChatMessageEntity> {
+        val entities = ArrayList<ChatMessageEntity>(history.size + 1)
+        for ((role, content) in history) {
             entities.add(
                 ChatMessageEntity(
                     conversationId = "automation",
-                    role = "user",
-                    content = "Goal: $currentGoal\nScreen:\n$screenDescription"
+                    role = if (role == "assistant" || role == "model") "model" else "user",
+                    content = content
                 )
             )
+        }
+        entities.add(
+            ChatMessageEntity(
+                conversationId = "automation",
+                role = "user",
+                content = "Goal: $currentGoal\nScreen:\n$screenDescription"
+            )
+        )
+        return entities
+    }
 
+    private fun buildThinkLambda(
+        restClient: GeminiRestClient
+    ): suspend (String, String, List<Pair<String, String>>) -> String =
+        { currentGoal, screenDescription, history ->
+            val key = apiKey()
+            val entities = buildHistoryEntities(currentGoal, screenDescription, history)
             val chatResult = restClient.generateChatResponse(
                 apiKey = key,
                 history = entities,
-                systemPrompt = systemPrompt,
+                systemPrompt = SYSTEM_PROMPT,
                 model = "gemini-3.8-flash",
                 enableThinking = false,
                 isChatCall = false
@@ -78,31 +127,17 @@ class MiraAutomationBridge(
             }
         }
 
-        val thinkVisionLambda: suspend (String, String, List<Pair<String, String>>, ByteArray) -> String = { currentGoal, screenDescription, history, screenshotBytes ->
+    private fun buildThinkVisionLambda(
+        restClient: GeminiRestClient
+    ): suspend (String, String, List<Pair<String, String>>, ByteArray) -> String =
+        { currentGoal, screenDescription, history, screenshotBytes ->
             val key = apiKey()
-            val entities = ArrayList<ChatMessageEntity>(history.size + 1)
-            for ((role, content) in history) {
-                entities.add(
-                    ChatMessageEntity(
-                        conversationId = "automation",
-                        role = if (role == "assistant" || role == "model") "model" else "user",
-                        content = content
-                    )
-                )
-            }
-            entities.add(
-                ChatMessageEntity(
-                    conversationId = "automation",
-                    role = "user",
-                    content = "Goal: $currentGoal\nScreen:\n$screenDescription"
-                )
-            )
-
+            val entities = buildHistoryEntities(currentGoal, screenDescription, history)
             val visionResult = restClient.generateVision(
                 apiKey = key,
                 history = entities,
                 imageBytes = screenshotBytes,
-                systemPrompt = systemPrompt,
+                systemPrompt = SYSTEM_PROMPT,
                 model = "gemini-3.8-flash",
                 enableThinking = false
             )
@@ -113,13 +148,33 @@ class MiraAutomationBridge(
             }
         }
 
-        val executor = TaskExecutor(
+    private fun createDefaultExecutor(): TaskExecutor {
+        executorFactory?.let { return it() }
+        val ctx = requireNotNull(context) { "Context is required when no executorFactory is provided" }
+        val automation: AutomationPort = ScreenAutomationService(ctx)
+        val skills = SkillMemoryService.getInstance(ctx)
+        val restClient = GeminiRestClient()
+        return TaskExecutor(
             automation = automation,
             skills = skills,
-            think = thinkLambda,
-            thinkWithVision = thinkVisionLambda
+            think = buildThinkLambda(restClient),
+            thinkWithVision = buildThinkVisionLambda(restClient),
+            taskTimeoutMs = taskTimeoutMs
         )
-        activeExecutor = executor
+    }
+
+    suspend fun executeGoal(goal: String): AutomationResult {
+        val executor: TaskExecutor
+        synchronized(stateLock) {
+            if (checkRunningAndClearStaleLocked()) {
+                return AutomationResult(TaskStatus.FAILED, buildAlreadyRunningMessageLocked(), 0)
+            }
+            executor = createDefaultExecutor()
+            activeExecutor = executor
+            runningGoal = goal
+            runningSinceMs = clockMs()
+        }
+
         return try {
             val result = executor.executeGoal(goal)
             AutomationResult(
@@ -128,24 +183,28 @@ class MiraAutomationBridge(
                 stepsUsed = result.stepsUsed
             )
         } finally {
-            activeExecutor = null
+            synchronized(stateLock) {
+                if (activeExecutor === executor) {
+                    activeExecutor = null
+                    runningGoal = null
+                    runningSinceMs = 0L
+                }
+            }
         }
     }
 
     suspend fun executeSkill(skill: io.github.ryoaonetsuki.mira.automation.agent.Skill): AutomationResult {
-        if (isRunning) {
-            return AutomationResult(TaskStatus.FAILED, "Another task is already running", 0)
+        val executor: TaskExecutor
+        synchronized(stateLock) {
+            if (checkRunningAndClearStaleLocked()) {
+                return AutomationResult(TaskStatus.FAILED, buildAlreadyRunningMessageLocked(), 0)
+            }
+            executor = createDefaultExecutor()
+            activeExecutor = executor
+            runningGoal = skill.goal
+            runningSinceMs = clockMs()
         }
 
-        val automation: AutomationPort = ScreenAutomationService(context)
-        val skills = SkillMemoryService.getInstance(context)
-
-        val executor = TaskExecutor(
-            automation = automation,
-            skills = skills,
-            think = null
-        )
-        activeExecutor = executor
         return try {
             val result = executor.replaySkillDirect(skill)
             AutomationResult(
@@ -154,11 +213,19 @@ class MiraAutomationBridge(
                 stepsUsed = result.stepsUsed
             )
         } finally {
-            activeExecutor = null
+            synchronized(stateLock) {
+                if (activeExecutor === executor) {
+                    activeExecutor = null
+                    runningGoal = null
+                    runningSinceMs = 0L
+                }
+            }
         }
     }
 
     companion object {
+        private const val SYSTEM_PROMPT =
+            "You control an Android phone. Reply with ONLY one JSON action object {action, params, reasoning, is_complete}. Actions: click_text, click_at, type_text, press_enter, scroll, swipe, press_back, press_home, open_app, wait, done. Screen description and goal are provided. Never invent coordinates outside the screen. If the goal is complete, reply done."
         @Volatile
         private var instance: MiraAutomationBridge? = null
 
@@ -432,7 +499,7 @@ class MiraAutomationBridge(
             for ((keywords, canonical) in TARGET_APP_CANONICAL_MAP) {
                 for (keyword in keywords) {
                     val matched = if (isLatinWordToken(keyword)) {
-                        Regex("""(?U)\b${Regex.escape(keyword)}""").containsMatchIn(lower)
+                        Regex("""(?U)(?:\b|(?<=[^\p{IsLatin}\p{N}]))${Regex.escape(keyword)}""").containsMatchIn(lower)
                     } else {
                         lower.contains(keyword)
                     }
@@ -525,10 +592,10 @@ class MiraAutomationBridge(
 
             if (!hasVerb) return false
 
-            // 3. Target app/media noun check (prefix word boundary for Latin tokens to support suffixes like -e, -এ, -te)
+            // 3. Target app/media noun check (prefix word boundary for Latin tokens to support suffixes like -e, -এ, -te, or CJK prefixes)
             val hasApp = KNOWN_APPS.any { app ->
                 if (isLatinWordToken(app)) {
-                    Regex("""(?U)\b${Regex.escape(app)}""").containsMatchIn(lower)
+                    Regex("""(?U)(?:\b|(?<=[^\p{IsLatin}\p{N}]))${Regex.escape(app)}""").containsMatchIn(lower)
                 } else {
                     lower.contains(app)
                 }

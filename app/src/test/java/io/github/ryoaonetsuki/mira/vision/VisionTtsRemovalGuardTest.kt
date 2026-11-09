@@ -142,11 +142,9 @@ class VisionTtsRemovalGuardTest {
         // Allowed files:
         // 1. GeminiTtsClient.kt (definition)
         // 2. VoiceEngineScreen.kt (voice preview - the ONE allowed UI place)
-        // 3. MicService.kt (Turn 4 offline automation fallback)
         val allowedFiles = setOf(
             "io/github/ryoaonetsuki/mira/network/GeminiTtsClient.kt",
-            "io/github/ryoaonetsuki/mira/ui/screens/settings/VoiceEngineScreen.kt",
-            "io/github/ryoaonetsuki/mira/service/MicService.kt"
+            "io/github/ryoaonetsuki/mira/ui/screens/settings/VoiceEngineScreen.kt"
         )
 
         val unexpected = filesWithGeminiTts.filter { it !in allowedFiles }

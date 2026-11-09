@@ -49,7 +49,7 @@ data class ScreenNode(
     }
 }
 
-class ScreenAutomationService(private val context: Context? = null) : AutomationPort {
+open class ScreenAutomationService(private val context: Context? = null) : AutomationPort {
 
     override fun isServiceEnabled(): Boolean {
         return try {
@@ -131,9 +131,24 @@ class ScreenAutomationService(private val context: Context? = null) : Automation
         return goalWords.any { it in nodeWords }
     }
 
+    override fun clickText(
+        text: String,
+        nodes: List<ScreenNode>,
+        fallbackX: Int?,
+        fallbackY: Int?
+    ): Boolean {
+        if (clickText(text, nodes)) return true
+        if (fallbackX != null && fallbackY != null && fallbackX > 0 && fallbackY > 0) {
+            try {
+                Log.i(TAG, "clickText '$text' not found on screen; falling back to recorded coordinates ($fallbackX, $fallbackY)")
+            } catch (_: Throwable) {}
+            return clickAt(fallbackX.toFloat(), fallbackY.toFloat())
+        }
+        return false
+    }
+
     override fun clickText(text: String, nodes: List<ScreenNode>): Boolean {
         return try {
-            val service = MiraAccessibilityService.instance ?: return false
             if (text.isBlank()) return false
 
             // 1. Direct clickable node matching text or description
@@ -154,7 +169,8 @@ class ScreenAutomationService(private val context: Context? = null) : Automation
             } ?: return false
 
             // Climb live accessibility node hierarchy first (like MacroRunner.clickNode)
-            val root = service.rootInActiveWindow
+            val service = MiraAccessibilityService.instance
+            val root = service?.rootInActiveWindow
             if (root != null) {
                 val foundNode = findNodeMatchingText(root, text)
                 if (foundNode != null) {

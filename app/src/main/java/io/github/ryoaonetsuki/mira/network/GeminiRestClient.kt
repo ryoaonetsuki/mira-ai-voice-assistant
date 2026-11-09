@@ -1427,11 +1427,21 @@ class GeminiRestClient(
         }
     }
 
-    /** Walks the cause chain looking for a [CancellationException], if any. */
+    /**
+     * Walks the cause chain AND suppressed exceptions looking for a
+     * [CancellationException], if any. OkHttp's AsyncCall wraps a
+     * non-IOException thrown by an interceptor as
+     * `IOException("canceled due to <t>")` with the original attached via
+     * [Throwable.addSuppressed] (not as the cause), so the cause chain
+     * alone is not enough.
+     */
     private fun findCancellationCause(e: Throwable?): CancellationException? {
         var cause: Throwable? = e
         while (cause != null) {
             if (cause is CancellationException) return cause
+            for (suppressed in cause.suppressed) {
+                findCancellationCause(suppressed)?.let { return it }
+            }
             cause = cause.cause
         }
         return null

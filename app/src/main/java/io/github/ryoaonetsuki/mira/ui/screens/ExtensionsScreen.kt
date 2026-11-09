@@ -4,6 +4,7 @@ import androidx.annotation.DrawableRes
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -20,9 +21,13 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import io.github.ryoaonetsuki.mira.R
 import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
 import io.github.ryoaonetsuki.mira.ui.components.MiraCard
+import io.github.ryoaonetsuki.mira.ui.screens.settings.ALL_CONNECTORS
 import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -37,101 +42,51 @@ data class ExtensionItem(
     val requiresToken: Boolean = true
 )
 
+val ALL_EXTENSIONS: List<ExtensionItem> = ALL_CONNECTORS.map { c ->
+    ExtensionItem(
+        id = c.id,
+        name = c.name,
+        description = c.description,
+        capabilities = c.whatMiraCanDo,
+        iconRes = c.iconRes,
+        requiresToken = c.requiresToken
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ExtensionsScreen(
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onNavigateToConnectors: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val palette = LocalMiraPalette.current
     val securePrefs = remember { SecurePreferences(context) }
 
-    val allExtensions = remember {
-        listOf(
-            ExtensionItem(
-                id = "weather",
-                name = "Open-Meteo Weather",
-                description = "Live global forecasts, temperature, and atmospheric conditions.",
-                capabilities = "Queries live weather via coordinates without requiring an API key.",
-                iconRes = R.drawable.ic_fluent_weather_sunny_24_regular,
-                requiresToken = false
-            ),
-            ExtensionItem(
-                id = "github",
-                name = "GitHub Connector",
-                description = "Repository intelligence, commits, pull requests, and code search.",
-                capabilities = "Lists top repositories, checks PR status, and reads repo details.",
-                iconRes = R.drawable.ic_fluent_code_24_regular,
-                requiresToken = true
-            ),
-            ExtensionItem(
-                id = "todoist",
-                name = "Todoist Tasks",
-                description = "Task management, daily productivity, reminders, and checklists.",
-                capabilities = "Lists pending tasks and creates new tasks from voice or chat commands.",
-                iconRes = R.drawable.ic_fluent_task_list_square_ltr_24_regular,
-                requiresToken = true
-            ),
-            ExtensionItem(
-                id = "notion",
-                name = "Notion Workspace",
-                description = "Workspace pages, knowledge base, docs, and structured databases.",
-                capabilities = "Searches pages and databases across your shared Notion workspace.",
-                iconRes = R.drawable.ic_fluent_document_search_24_regular,
-                requiresToken = true
-            ),
-            ExtensionItem(
-                id = "telegram",
-                name = "Telegram Bot",
-                description = "Direct mobile notification bridge and chat commands via bot.",
-                capabilities = "Sends real-time messages and alerts to your linked Telegram chat.",
-                iconRes = R.drawable.ic_fluent_send_24_regular,
-                requiresToken = true
-            ),
-            ExtensionItem(
-                id = "linear",
-                name = "Linear Issues",
-                description = "Engineering issue tracker, project boards, and roadmap cycles.",
-                capabilities = "Lists assigned engineering issues and tracks project progress.",
-                iconRes = R.drawable.ic_fluent_target_arrow_24_regular,
-                requiresToken = true
-            ),
-            ExtensionItem(
-                id = "gitlab",
-                name = "GitLab Projects",
-                description = "Access repositories, pipelines, and merge requests on GitLab.",
-                capabilities = "Lists your projects and code repositories with visibility status.",
-                iconRes = R.drawable.ic_fluent_laptop_24_regular,
-                requiresToken = true
-            ),
-            ExtensionItem(
-                id = "vercel",
-                name = "Vercel Deployments",
-                description = "Cloud frontend deployments, serverless functions, and domains.",
-                capabilities = "Monitors build statuses, preview URLs, and production domains.",
-                iconRes = R.drawable.ic_fluent_globe_24_regular,
-                requiresToken = true
-            ),
-            ExtensionItem(
-                id = "maps",
-                name = "Google Places & Maps",
-                description = "Geocoding, nearby points of interest, and navigation queries.",
-                capabilities = "Enriches location queries with place descriptions and addresses.",
-                iconRes = R.drawable.ic_fluent_options_24_regular,
-                requiresToken = true
-            )
-        )
-    }
+    val allExtensions = remember { ALL_EXTENSIONS }
 
     var selectedFilter by remember { mutableStateOf("All") }
+    var refreshTrigger by remember { mutableIntStateOf(0) }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                refreshTrigger++
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
 
     fun isConnected(item: ExtensionItem): Boolean {
-        if (!item.requiresToken) return true
         val token = securePrefs.getConnectorToken(item.id)
         return !token.isNullOrBlank()
     }
 
-    val filteredExtensions = remember(selectedFilter, allExtensions) {
+    val filteredExtensions = remember(selectedFilter, allExtensions, refreshTrigger) {
         when (selectedFilter) {
             "Connected" -> allExtensions.filter { isConnected(it) }
             "Setup Required" -> allExtensions.filter { !isConnected(it) }
@@ -139,7 +94,7 @@ fun ExtensionsScreen(
         }
     }
 
-    val connectedCount = remember(allExtensions) {
+    val connectedCount = remember(allExtensions, refreshTrigger) {
         allExtensions.count { isConnected(it) }
     }
 
@@ -248,7 +203,11 @@ fun ExtensionsScreen(
                 val connected = isConnected(ext)
                 val lastUsed = securePrefs.getConnectorLastUsed(ext.id)
 
-                MiraCard(modifier = Modifier.fillMaxWidth()) {
+                MiraCard(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onNavigateToConnectors() }
+                ) {
                     Column(modifier = Modifier.fillMaxWidth()) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -300,15 +259,15 @@ fun ExtensionsScreen(
                             Surface(
                                 shape = RoundedCornerShape(12.dp),
                                 color = when {
-                                    !ext.requiresToken -> palette.primary.copy(alpha = 0.15f)
                                     connected -> Color(0xFF10B981).copy(alpha = 0.18f)
+                                    !ext.requiresToken -> palette.primary.copy(alpha = 0.15f)
                                     else -> Color(0xFFF59E0B).copy(alpha = 0.15f)
                                 },
                                 border = BorderStroke(
                                     1.dp,
                                     when {
-                                        !ext.requiresToken -> palette.primary.copy(alpha = 0.35f)
                                         connected -> Color(0xFF10B981).copy(alpha = 0.4f)
+                                        !ext.requiresToken -> palette.primary.copy(alpha = 0.35f)
                                         else -> Color(0xFFF59E0B).copy(alpha = 0.35f)
                                     }
                                 )
@@ -321,22 +280,22 @@ fun ExtensionsScreen(
                                         Icon(
                                             painter = painterResource(id = R.drawable.ic_fluent_checkmark_circle_24_regular),
                                             contentDescription = null,
-                                            tint = if (!ext.requiresToken) palette.primary else Color(0xFF10B981),
+                                            tint = Color(0xFF10B981),
                                             modifier = Modifier.size(12.dp)
                                         )
                                         Spacer(modifier = Modifier.width(4.dp))
                                     }
                                     Text(
                                         text = when {
-                                            !ext.requiresToken -> "Built-in"
                                             connected -> "Connected"
+                                            !ext.requiresToken -> "No key needed"
                                             else -> "Setup Required"
                                         },
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.SemiBold,
                                         color = when {
-                                            !ext.requiresToken -> palette.primary
                                             connected -> Color(0xFF10B981)
+                                            !ext.requiresToken -> palette.primary
                                             else -> Color(0xFFF59E0B)
                                         }
                                     )

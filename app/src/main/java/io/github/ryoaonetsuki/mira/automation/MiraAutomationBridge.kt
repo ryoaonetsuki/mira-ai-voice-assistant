@@ -499,7 +499,7 @@ class MiraAutomationBridge(
             for ((keywords, canonical) in TARGET_APP_CANONICAL_MAP) {
                 for (keyword in keywords) {
                     val matched = if (isLatinWordToken(keyword)) {
-                        Regex("""(?U)(?:\b|(?<=[^\p{IsLatin}\p{N}]))${Regex.escape(keyword)}""").containsMatchIn(lower)
+                        Regex("""(?:^|\b|(?<=[^\p{IsLatin}\p{N}]))${Regex.escape(keyword)}""").containsMatchIn(lower)
                     } else {
                         lower.contains(keyword)
                     }
@@ -525,21 +525,21 @@ class MiraAutomationBridge(
             Regex("سکتے ہو|سکتی ہو|سکتے ہیں|کیا تم|کیا آپ"),
             Regex("هل يمكنك|هل تستطيع|هل تقدر"),
             // es, fr, de, pt, it, nl, pl, sv, tr, id, vi
-            Regex("""(?U)\b(puedes|podrías|podrias|eres capaz de)\b""", RegexOption.IGNORE_CASE),
-            Regex("""(?U)\b(peux-tu|peux tu|pouvez-vous|pouvez vous|tu peux|est-ce que tu peux)\b""", RegexOption.IGNORE_CASE),
-            Regex("""(?U)\b(kannst du|können sie|koennen sie|könntest du)\b""", RegexOption.IGNORE_CASE),
-            Regex("""(?U)\b(você pode|voce pode|podes|consegue|consegues)\b""", RegexOption.IGNORE_CASE),
-            Regex("""(?U)\b(puoi|potresti|riesci a|sei in grado di)\b""", RegexOption.IGNORE_CASE),
-            Regex("""(?U)\b(kun je|kan je|kunt u|zou je kunnen)\b""", RegexOption.IGNORE_CASE),
-            Regex("""(?U)\b(czy możesz|czy mozesz|czy potrafisz)\b""", RegexOption.IGNORE_CASE),
-            Regex("""(?U)\b(kan du|skulle du kunna)\b""", RegexOption.IGNORE_CASE),
-            Regex("""(?U)\b(\p{L}+(?:abilir|ebilir)\s+m[iıuü]s[iıuü]n|yapabilir misin|açabilir misin)\b""", RegexOption.IGNORE_CASE),
-            Regex("""(?U)\b(bisakah|apakah kamu bisa|bisa nggak|bisa tidak)\b""", RegexOption.IGNORE_CASE),
-            Regex("""(?U)\b(bạn có thể|có thể .+ không|làm được không)\b""", RegexOption.IGNORE_CASE),
+            Regex("""(?<![\p{L}\p{N}])(puedes|podrías|podrias|eres capaz de)(?![\p{L}\p{N}])""", RegexOption.IGNORE_CASE),
+            Regex("""(?<![\p{L}\p{N}])(peux-tu|peux tu|pouvez-vous|pouvez vous|tu peux|est-ce que tu peux)(?![\p{L}\p{N}])""", RegexOption.IGNORE_CASE),
+            Regex("""(?<![\p{L}\p{N}])(kannst du|können sie|koennen sie|können|könntest du)(?![\p{L}\p{N}])""", RegexOption.IGNORE_CASE),
+            Regex("""(?<![\p{L}\p{N}])(você pode|voce pode|podes|consegue|consegues)(?![\p{L}\p{N}])""", RegexOption.IGNORE_CASE),
+            Regex("""(?<![\p{L}\p{N}])(puoi|potresti|riesci a|sei in grado di)(?![\p{L}\p{N}])""", RegexOption.IGNORE_CASE),
+            Regex("""(?<![\p{L}\p{N}])(kun je|kan je|kunt u|zou je kunnen)(?![\p{L}\p{N}])""", RegexOption.IGNORE_CASE),
+            Regex("""(?<![\p{L}\p{N}])(czy możesz|czy mozesz|czy potrafisz)(?![\p{L}\p{N}])""", RegexOption.IGNORE_CASE),
+            Regex("""(?<![\p{L}\p{N}])(kan du|skulle du kunna)(?![\p{L}\p{N}])""", RegexOption.IGNORE_CASE),
+            Regex("""(?<![\p{L}\p{N}])(\p{L}+(?:abilir|ebilir)\s+m[iıuü]s[iıuü]n|yapabilir misin|açabilir misin)(?![\p{L}\p{N}])""", RegexOption.IGNORE_CASE),
+            Regex("""(?<![\p{L}\p{N}])(bisakah|apakah kamu bisa|bisa nggak|bisa tidak)(?![\p{L}\p{N}])""", RegexOption.IGNORE_CASE),
+            Regex("""(?<![\p{L}\p{N}])(bạn có thể|có thể .+ không|làm được không)(?![\p{L}\p{N}])""", RegexOption.IGNORE_CASE),
             // ru, uk, el
-            Regex("""(?U)\b(ты можешь|можешь ли|вы можете|умеешь ли)\b""", RegexOption.IGNORE_CASE),
-            Regex("""(?U)\b(ти можеш|чи можеш|ви можете|вмієш)\b""", RegexOption.IGNORE_CASE),
-            Regex("""(?U)\b(μπορείς να|μπορεις να|θα μπορούσες)\b""", RegexOption.IGNORE_CASE),
+            Regex("""(?<![\p{L}\p{N}])(ты можешь|можешь ли|вы можете|умеешь ли)(?![\p{L}\p{N}])""", RegexOption.IGNORE_CASE),
+            Regex("""(?<![\p{L}\p{N}])(ти можеш|чи можеш|ви можете|вмієш)(?![\p{L}\p{N}])""", RegexOption.IGNORE_CASE),
+            Regex("""(?<![\p{L}\p{N}])(μπορείς να|μπορεις να|μπορείς|μπορεις|θα μπορούσες)(?![\p{L}\p{N}])""", RegexOption.IGNORE_CASE),
             // ja, ko, zh, th, ta, te, ml, kn
             Regex("できますか|出来ますか|できる\\?|できる？|開けますか|再生できますか|可能ですか"),
             Regex("할 수 있|열 수 있|재생할 수 있|가능해|가능한가요"),
@@ -582,9 +582,9 @@ class MiraAutomationBridge(
             //    Latin-script verbs use Unicode word-boundary regex; non-Latin / no-word-boundary scripts use substring contains.
             val hasLatinVerb = LATIN_VERBS.any { verb ->
                 if (verb.contains(" ")) {
-                    Regex("""(?U)\b${Regex.escape(verb)}\b""").containsMatchIn(lower)
+                    Regex("""(?<![\p{L}\p{N}])${Regex.escape(verb)}(?![\p{L}\p{N}])""").containsMatchIn(lower)
                 } else {
-                    Regex("""(?U)\b${Regex.escape(verb)}\b""").containsMatchIn(lower)
+                    Regex("""(?<![\p{L}\p{N}])${Regex.escape(verb)}(?![\p{L}\p{N}])""").containsMatchIn(lower)
                 }
             }
             val hasSubstringVerb = SUBSTRING_VERBS.any { lower.contains(it) }
@@ -595,7 +595,7 @@ class MiraAutomationBridge(
             // 3. Target app/media noun check (prefix word boundary for Latin tokens to support suffixes like -e, -এ, -te, or CJK prefixes)
             val hasApp = KNOWN_APPS.any { app ->
                 if (isLatinWordToken(app)) {
-                    Regex("""(?U)(?:\b|(?<=[^\p{IsLatin}\p{N}]))${Regex.escape(app)}""").containsMatchIn(lower)
+                    Regex("""(?:^|\b|(?<=[^\p{IsLatin}\p{N}]))${Regex.escape(app)}""").containsMatchIn(lower)
                 } else {
                     lower.contains(app)
                 }

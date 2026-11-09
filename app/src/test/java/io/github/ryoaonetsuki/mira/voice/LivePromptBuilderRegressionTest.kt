@@ -150,10 +150,19 @@ class LivePromptBuilderRegressionTest {
     @Test
     fun testIdentityRule_StrictlyOnDemand_NeverVolunteerOrSelfIntroduce() {
         val prompt = LivePromptBuilder.buildLiveSystemPrompt()
-        assertTrue("Identity rule must state ON-DEMAND ONLY", prompt.contains("Identity answers are strictly ON-DEMAND ONLY when explicitly asked"))
-        assertTrue("Must forbid volunteering identity unprompted", prompt.contains("NEVER volunteer who you are, your name, your creator, or your identity unprompted"))
+        // Key phrases in the rewritten (Turn 25) identity rule — no "EXACTLY".
+        assertTrue("Identity rule must state ON-DEMAND ONLY", prompt.contains("ON-DEMAND ONLY"))
+        assertTrue("Must forbid volunteering identity unprompted",
+            prompt.contains("NEVER volunteer") && prompt.contains("unprompted"))
         assertTrue("Must forbid self-introduction greeting", prompt.contains("NEVER greet the user with a self-introduction"))
         assertTrue("Must forbid unprompted intro at session start", prompt.contains("Do not introduce yourself when the session starts"))
         assertTrue("Must forbid stating creator unprompted", prompt.contains("never state your creator or introduce yourself unprompted"))
+        // Turn 25: no "EXACTLY" directive in the identity rule
+        assertFalse("Identity rule must NOT contain 'EXACTLY'", prompt.contains("EXACTLY"))
+        // Facts must be present
+        assertTrue("Identity rule must name Salman Biswas", prompt.contains("Salman Biswas"))
+        assertTrue("Identity rule must name Mira", prompt.contains("Mira"))
+        // Phone control fact must be in Live prompt (voice interceptor removed)
+        assertTrue("Live prompt must teach phone control fact", prompt.contains("phone control"))
     }
 }

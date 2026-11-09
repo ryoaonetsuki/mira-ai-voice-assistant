@@ -27,6 +27,18 @@ android {
         buildConfigField("String", "SUPABASE_URL", "\"https://zvnfwlqxdbommtozugzt.supabase.co\"")
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp2bmZ3bHF4ZGJvbW10b3p1Z3p0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM5MTM2NDksImV4cCI6MjEwOTQ4OTY0OX0.uqyERmXVe2GEP2oaU0xc7I9V1ry-43adAEg6jddYBpk\"")
 
+        val localProperties = java.util.Properties().apply {
+            val localPropertiesFile = rootProject.file("local.properties")
+            if (localPropertiesFile.exists()) {
+                localPropertiesFile.inputStream().use { load(it) }
+            }
+        }
+        val imageApiKey: String = System.getenv("IMAGE_API_KEY")?.takeIf { it.isNotBlank() }
+            ?: localProperties.getProperty("miraImageApiKey")?.takeIf { it.isNotBlank() }
+            ?: ""
+        val escapedImageApiKey = imageApiKey.replace("\\", "\\\\").replace("\"", "\\\"")
+        buildConfigField("String", "MIRA_IMAGE_API_KEY", "\"$escapedImageApiKey\"")
+
         externalNativeBuild {
             cmake {
                 arguments("-DANDROID_STL=c++_static")

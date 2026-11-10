@@ -1,6 +1,5 @@
 package io.github.ryoaonetsuki.mira.voice
 
-import io.github.ryoaonetsuki.mira.automation.MiraAutomationBridge
 import io.github.ryoaonetsuki.mira.voice.pipecat.VoiceEchoDetector
 import java.util.Locale
 
@@ -10,9 +9,7 @@ enum class VoiceTurnRoute {
     IGNORE_ECHO,
     /** "stop"/"thamo" while an agent task runs: cancel it. */
     STOP_AUTOMATION,
-    /** A real phone command: run the agent. */
-    AUTOMATION,
-    /** Everything else (incl. "can you control my phone?"): the Live model answers by itself. */
+    /** Everything else: the Live model answers and executes tools by itself. */
     LIVE_ANSWERS
 }
 
@@ -38,7 +35,6 @@ object VoiceTurnRouter {
         if (isEcho(clean, recentModelSpeech)) return VoiceTurnRoute.IGNORE_ECHO
         val tokens = clean.lowercase(Locale.ROOT).split(Regex("\\s+")).filter { it.isNotBlank() }
         if (automationRunning && tokens.any { it in STOP_WORDS }) return VoiceTurnRoute.STOP_AUTOMATION
-        if (MiraAutomationBridge.isAutomationIntent(clean)) return VoiceTurnRoute.AUTOMATION
         return VoiceTurnRoute.LIVE_ANSWERS
     }
 
@@ -50,32 +46,13 @@ object VoiceTurnRouter {
      * SINGLE-VOICE INVARIANT. The separate Gemini TTS voice may speak only when
      *  - NO Live session is connected (then it is the only voice, not a second one), AND
      *  - the speech is user-initiated (the user asked this turn, or a requested action completed).
-     * While Live is connected, results go to Live as context and Live announces them itself.
+     * While Live is connected, the Live model speaks directly.
      */
     fun mayUseFallbackTts(liveConnected: Boolean, userInitiated: Boolean): Boolean =
         !liveConnected && userInitiated
 
     /** An automation result may be announced only if it came from an explicit user command in this session. */
     fun mayAnnounceAutomationResult(goalFromUserCommand: Boolean): Boolean = goalFromUserCommand
-
-    /** Context note handed to Live so it announces the outcome in its OWN words (no verbatim recitation). */
-    fun buildResultNote(message: String, language: String, success: Boolean): String {
-        val state = if (success) "finished" else "did not complete"
-        return "[Phone action $state. Outcome: ${message.trim()}. " +
-            "Tell the user this briefly and warmly in your own words, in $language. " +
-            "Do not read this note aloud and do not mention it.]"
-    }
-
-    /** Short "working on it" note for a phone action that will take a few seconds (AI path only). */
-    fun buildWorkingNote(language: String): String =
-        "[The user asked you to do a phone action that will take a few seconds. " +
-            "Say one brief warm acknowledgement in your own words, in $language, e.g. 'working on it'. " +
-            "Do not read this note aloud and do not mention it.]"
-
-    fun buildAccessibilityNote(language: String): String =
-        "[Phone control cannot run yet because Mira's accessibility service is off; the accessibility settings screen was just opened. " +
-            "Tell the user briefly and warmly in your own words, in $language, to switch Mira on there. " +
-            "Do not read this note aloud and do not mention it.]"
 }
 
 /**

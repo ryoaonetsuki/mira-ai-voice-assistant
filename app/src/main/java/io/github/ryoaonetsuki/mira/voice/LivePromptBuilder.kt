@@ -41,6 +41,29 @@ object LivePromptBuilder {
     }
 
     /**
+     * Builds the tool-use and narration rule for the Live session system prompt (Milestone 1).
+     * Instructs the model when to call phone tools, to narrate briefly in the user's
+     * language while tools execute, that tool results arrive as function responses,
+     * and never to claim it cannot act on the phone.
+     */
+    fun buildToolUseRule(language: String): String {
+        val lang = language.ifBlank { DEFAULT_LANGUAGE }
+        val isBn = LanguageUtils.isBangla(lang)
+        val narrationExample = if (isBn) {
+            "Bangla: \"হ্যাঁ আমি কাজটা করে দিচ্ছি...\" or \"হ্যাঁ, ওপেন করছি...\""
+        } else {
+            "e.g. \"Sure, doing that for you...\" or \"Opening it now...\""
+        }
+
+        return "PHONE CONTROL & TOOL USE: You have real tools to directly control the user's phone (such as `open_app`). " +
+            "You CAN and MUST act on the phone whenever asked — NEVER claim you cannot control the phone, open apps, or take actions. " +
+            "When the user asks you to open an app (e.g. 'YouTube খুলো', 'open WhatsApp') or perform a phone action: CALL THE TOOL IMMEDIATELY. " +
+            "While the tool executes in the background, NARRATE BRIEFLY in the conversation language ($narrationExample). Never stay silent and never give robotic excuses. " +
+            "Tool results arrive directly as function responses containing the updated screen state and outcome — they are NOT user messages. " +
+            "When a tool result arrives, review the result and screen state, and speak the outcome naturally and briefly to the user in the conversation language."
+    }
+
+    /**
      * Builds the full Live system prompt incorporating persona, tone, language rule,
      * identity rule, search rule, device date/time, and user instructions/rules.
      */
@@ -60,6 +83,7 @@ object LivePromptBuilder {
         val lang = language.ifBlank { DEFAULT_LANGUAGE }
         val languageRule = buildLanguageRule(lang)
         val webSearchRule = buildWebSearchRule(lang, searchAckPhrase)
+        val toolUseRule = buildToolUseRule(lang)
 
         val effectiveAssistantName = if (personaType == PersonaType.ORION) "Orion" else assistantName.ifBlank { "Mira" }
 
@@ -116,6 +140,8 @@ object LivePromptBuilder {
             }
             append("\nWeb search rule: ")
             append(webSearchRule)
+            append("\nTool use rule: ")
+            append(toolUseRule)
             if (customInstructions.isNotBlank()) {
                 append("\nUser instructions: ")
                 append(customInstructions)

@@ -3,6 +3,7 @@
 package io.github.ryoaonetsuki.mira.automation.agent
 
 import android.util.Log
+import io.github.ryoaonetsuki.mira.automation.MiraAutomationBridge
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.coroutineScope
@@ -11,6 +12,9 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONArray
+import org.json.JSONObject
+import java.net.URLEncoder
 
 enum class TaskStatus {
     SUCCESS,
@@ -51,10 +55,16 @@ interface AutomationPort {
     fun typeText(text: String): Boolean
     fun pressEnter(): Boolean
     fun scroll(direction: String): Boolean
+    /** Scroll by a relative fraction of the screen (0.15 = "a bit"). Defaults to the plain scroll. */
+    fun scroll(direction: String, fraction: Float): Boolean = scroll(direction)
     fun swipe(startX: Float, startY: Float, endX: Float, endY: Float, durationMs: Long): Boolean
     fun pressBack(): Boolean
     fun pressHome(): Boolean
     fun openApp(query: String): String?
+    /** Opens a URL with ACTION_VIEW (search results, web pages). */
+    fun openUrl(url: String): Boolean = false
+    /** Opens the dialer (ACTION_DIAL) with the number prefilled; the user confirms the call. */
+    fun dialNumber(number: String): Boolean = false
     fun getCurrentPackage(): String? = null
     suspend fun takeScreenshotJpeg(maxWidthPx: Int = 720): ByteArray? = null
 }
@@ -162,6 +172,10 @@ class TaskExecutor(
     private val stepDelayMs: Long = 600,
     var onProgress: ((step: Int, description: String) -> Unit)? = null,
     private val thinkWithVision: (suspend (goal: String, screenDescription: String, history: List<Pair<String, String>>, screenshotJpeg: ByteArray) -> String)? = null,
+    // Turn F plan-once: ONE planning call returning the FULL command list as
+    // JSON. Null in old call sites and in tests that do not plan — the AI
+    // loop is then the only fallback.
+    private val plan: (suspend (goal: String, screenDescription: String) -> String)? = null,
     private val taskTimeoutMs: Long = DEFAULT_TASK_TIMEOUT_MS,
     private val thinkTimeoutMs: Long = DEFAULT_THINK_TIMEOUT_MS,
     private val clockMs: () -> Long = { System.currentTimeMillis() },
@@ -311,7 +325,16 @@ class TaskExecutor(
             )
         }
 
-        // 2. Skill-memory fast path (Jarvis task_executor.dart:308-333 behaviour)
+        // 2. Direct fast path (Turn F-direct / Voice Access model): a fixed
+        // local command set (open app, home, back, scroll, tap label, search,
+        // dial) resolved by the local grammar with ZERO Gemini calls.
+        // Pre-built macros are exactly this set — always available, no
+        // recording needed.
+        executeDirectAction(goal)?.let { return it }
+
+        // 3. Skill-memory fast path (Jarvis task_executor.dart:308-333 behaviour):
+        // a saved command list replays directly with zero think calls on the
+        // happy path — the learning loop's instant second invocation.
         val matchedSkill = skills.findMatch(goal)
         if (matchedSkill != null) {
             onProgress?.invoke(0, "Found memorized skill (${matchedSkill.steps.size} steps). Replaying…")
@@ -320,9 +343,269 @@ class TaskExecutor(
             return executeSkillWithResume(matchedSkill)
         }
 
-        // 3. AI loop
+        // 4. Plan-once (Turn F): ONE planning call returns the full command
+        // list; the direct executor runs it with no further think calls.
+        // The list is saved as a Skill immediately, so the next identical
+        // command replays instantly (step 3 above).
+        runPlanOnce(goal)?.let { return it }
+
+        // 5. Bounded last resort ONLY: per-step thinking, when no plan could
+        // be produced at all (planner missing, failed, or unparsable).
         return runAiLoop(goal)
     }
+
+    /**
+     * Turn F-direct: executes one fixed local command with zero think calls.
+     * Returns null when the goal is not a fixed command — the caller falls
+     * through to skill replay / plan-once / the AI loop.
+     */
+    private suspend fun executeDirectAction(goal: String): TaskResult? {
+        val action = MiraAutomationBridge.parseDirectAction(goal) ?: return null
+        return when (action) {
+            is MiraAutomationBridge.DirectAction.OpenApp -> executeDirectOpenApp(action.target)
+            MiraAutomationBridge.DirectAction.PressHome -> {
+                enterPhase("acting", 1, "Going home")
+                if (automation.pressHome()) {
+                    TaskResult(TaskStatus.SUCCESS, "Went home", 1)
+                } else {
+                    recordDiagnosis("Direct press_home failed (gesture rejected)")
+                    TaskResult(TaskStatus.FAILED, "Could not go home (gesture rejected)", 1)
+                }
+            }
+            MiraAutomationBridge.DirectAction.PressBack -> {
+                enterPhase("acting", 1, "Going back")
+                if (automation.pressBack()) {
+                    TaskResult(TaskStatus.SUCCESS, "Went back", 1)
+                } else {
+                    recordDiagnosis("Direct press_back failed (gesture rejected)")
+                    TaskResult(TaskStatus.FAILED, "Could not go back (gesture rejected)", 1)
+                }
+            }
+            is MiraAutomationBridge.DirectAction.Scroll -> {
+                enterPhase("acting", 1, "Scrolling ${action.direction}")
+                val ok = if (action.small) {
+                    automation.scroll(action.direction, SCROLL_SMALL_FRACTION)
+                } else {
+                    automation.scroll(action.direction)
+                }
+                if (ok) {
+                    TaskResult(TaskStatus.SUCCESS, "Scrolled ${action.direction}", 1)
+                } else {
+                    recordDiagnosis("Direct scroll ${action.direction} failed")
+                    TaskResult(TaskStatus.FAILED, "Could not scroll ${action.direction}", 1)
+                }
+            }
+            is MiraAutomationBridge.DirectAction.TapLabel -> executeDirectTapLabel(action.label)
+            is MiraAutomationBridge.DirectAction.Search -> executeDirectSearch(action)
+            is MiraAutomationBridge.DirectAction.Dial -> executeDirectDial(action.number)
+        }
+    }
+
+    private suspend fun executeDirectOpenApp(target: String): TaskResult? {
+        val step = TaskStep(action = TaskStep.ACTION_OPEN_APP, params = mapOf("app" to target))
+        val prePackage = automation.getCurrentPackage().orEmpty()
+        val blocked = AutomationSafety.isBlocked(step, prePackage.ifEmpty { null })
+        if (blocked != null) {
+            recordDiagnosis("Direct action blocked for safety: $blocked")
+            return TaskResult(TaskStatus.FAILED, "Blocked for safety: $blocked — ask me first.", 0)
+        }
+        _currentStep = 1
+        enterPhase("acting", 1, "Opening $target")
+        // startActivity with FLAG_ACTIVITY_NEW_TASK from the service context
+        // opens the app from whatever page the user is on.
+        val launched = automation.openApp(target)
+        if (launched == null) return null // app not resolvable — let skill/AI try
+        enterPhase("observing", 1, "waiting for app to open")
+        val reached = pollForOpenApp(step, prePackage)
+        return if (openAppTargetReached(step, prePackage, reached)) {
+            TaskResult(TaskStatus.SUCCESS, "Opened $target", 1)
+        } else {
+            val msg = "Opened $target but it did not come to the foreground (current='$reached')"
+            recordDiagnosis(msg)
+            TaskResult(TaskStatus.FAILED, msg, 1)
+        }
+    }
+
+    private suspend fun executeDirectTapLabel(label: String): TaskResult? {
+        // Direct accessibility action on the live node tree: no think call,
+        // no gesture round-trip. A label that is not on screen falls through
+        // to the AI loop (which can scroll / look for it).
+        _currentStep = 1
+        enterPhase("observing", 1, "looking for '$label'")
+        val nodes = dumpScreenSafe()
+        if (nodes.isEmpty()) return null
+        enterPhase("acting", 1, "tapping '$label'")
+        return if (automation.clickText(label, nodes)) {
+            TaskResult(TaskStatus.SUCCESS, "Tapped '$label'", 1)
+        } else {
+            null
+        }
+    }
+
+    private suspend fun executeDirectSearch(action: MiraAutomationBridge.DirectAction.Search): TaskResult? {
+        val encoded = URLEncoder.encode(action.query, "UTF-8")
+        val url = if (action.targetApp == YOUTUBE_PACKAGE) {
+            "https://www.youtube.com/results?search_query=$encoded"
+        } else {
+            "https://www.google.com/search?q=$encoded"
+        }
+        val prePackage = automation.getCurrentPackage().orEmpty()
+        _currentStep = 1
+        enterPhase("acting", 1, "Searching for '${action.query}'")
+        if (!automation.openUrl(url)) return null
+        val current = pollForPackageChange(prePackage)
+        return if (current != prePackage) {
+            TaskResult(TaskStatus.SUCCESS, "Searched for '${action.query}'", 1)
+        } else {
+            val msg = "Search did not open (current='$current')"
+            recordDiagnosis(msg)
+            TaskResult(TaskStatus.FAILED, msg, 1)
+        }
+    }
+
+    private suspend fun executeDirectDial(number: String): TaskResult {
+        // ACTION_DIAL only opens the dialer with the number prefilled — the
+        // user confirms the call there. No call is placed automatically.
+        val prePackage = automation.getCurrentPackage().orEmpty()
+        _currentStep = 1
+        enterPhase("acting", 1, "Opening dialer")
+        if (!automation.dialNumber(number)) {
+            val msg = "No dialer app available"
+            recordDiagnosis(msg)
+            return TaskResult(TaskStatus.FAILED, msg, 1)
+        }
+        val current = pollForPackageChange(prePackage)
+        return if (current != prePackage) {
+            TaskResult(TaskStatus.SUCCESS, "Opened dialer for $number", 1)
+        } else {
+            val msg = "Dialer did not come to the foreground"
+            recordDiagnosis(msg)
+            TaskResult(TaskStatus.FAILED, msg, 1)
+        }
+    }
+
+    /** Polls until the foreground package changes from [prePackage] (short window for intents). */
+    private suspend fun pollForPackageChange(prePackage: String): String {
+        val timeoutMs = if (stepDelayMs == 0L) 0L else DIRECT_INTENT_POLL_TIMEOUT_MS
+        val deadline = clockMs() + timeoutMs
+        var current = automation.getCurrentPackage().orEmpty()
+        while (current == prePackage && !_cancelRequested && clockMs() < deadline) {
+            delay(250L)
+            current = automation.getCurrentPackage().orEmpty()
+        }
+        return current
+    }
+
+    /**
+     * Turn F plan-once: one observe + ONE planning call returns the full
+     * command list; the direct executor runs it with no further think calls.
+     * Returns null when no plan could be produced — the caller falls back to
+     * the bounded AI loop. On success the list is saved as a Skill
+     * immediately, so the second identical command replays instantly.
+     */
+    private suspend fun runPlanOnce(goal: String): TaskResult? {
+        val planner = plan ?: return null
+        enterPhase("observing", 0, "Observing screen to plan…")
+        val nodes = dumpScreenSafe()
+        val description = if (nodes.isEmpty()) {
+            "Screen appears empty (use open_app to launch the target app)"
+        } else {
+            automation.getCompressedScreenDescription(nodes, goal)
+        }
+        enterPhase("thinking", 0, "planning the full command list…")
+        val raw: String
+        try {
+            raw = withTimeout(thinkTimeoutMs) { planner(goal, description) }
+        } catch (e: TimeoutCancellationException) {
+            val msg = "Planning timed out (think call exceeded ${thinkTimeoutMs / 1000}s)"
+            recordDiagnosis(msg)
+            logWarn(msg)
+            return null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            logWarn("Planning failed: ${e.message}")
+            return null
+        }
+        val parsed = parseAiPlan(raw) ?: run {
+            logWarn("Planning returned no usable command list: $raw")
+            return null
+        }
+        if (parsed.done) {
+            return TaskResult(TaskStatus.SUCCESS, "Goal already complete.", 0)
+        }
+        if (parsed.steps.isEmpty()) return null
+        val steps = parsed.steps.take(maxSteps)
+        val skill = Skill(goal = goal, steps = steps)
+        val result = executeSkillWithResume(skill)
+        if (result.status == TaskStatus.SUCCESS) {
+            // Save the planned list immediately — unless the resume path
+            // already saved it with an AI-fixed step (do not overwrite the
+            // fixed step with the broken original).
+            val existing = skills.findMatch(goal)
+            if (existing == null || existing.normalizedGoal != Skill.normalize(goal)) {
+                skills.saveOrUpdate(goal, steps)
+            }
+            // The resume message ("Task completed via memorized skill") is
+            // wrong for a first-time plan — unless the AI actually fixed a
+            // step, in which case the detail is valuable.
+            if (!result.message.contains("AI completed")) {
+                return TaskResult(
+                    TaskStatus.SUCCESS,
+                    "Goal completed in ${result.stepsUsed} step(s).",
+                    result.stepsUsed
+                )
+            }
+        }
+        return result
+    }
+
+    /** A parsed plan: the full command list, or done=true when already complete. */
+    internal data class AiPlan(val steps: List<TaskStep>, val done: Boolean)
+
+    /**
+     * Parses a plan response: {"steps": [{...}, ...]} or {"done": true}, or a
+     * bare JSON array. Each element is parsed with the same alias
+     * normalisation as single-step decisions (TaskStep.tryParse). Unsupported
+     * actions are dropped; a plan with no usable steps returns null.
+     */
+    internal fun parseAiPlan(raw: String): AiPlan? {
+        var text = raw.trim()
+        if (text.isEmpty()) return null
+        val fence = Regex("""```(?:json)?\s*([\s\S]*?)```""", RegexOption.IGNORE_CASE).find(text)
+        if (fence != null) text = fence.groupValues[1].trim()
+        val array: JSONArray
+        var done = false
+        try {
+            val obj = JSONObject(text)
+            if (obj.optBoolean("done", false)) return AiPlan(emptyList(), done = true)
+            array = obj.optJSONArray("steps") ?: return null
+        } catch (_: Throwable) {
+            if (!text.startsWith("[")) return null
+            try {
+                array = JSONArray(text)
+            } catch (_: Throwable) {
+                return null
+            }
+        }
+        val steps = mutableListOf<TaskStep>()
+        var hadDoneStep = false
+        for (i in 0 until array.length()) {
+            val el = array.optJSONObject(i) ?: continue
+            val step = TaskStep.tryParse(el.toString()) ?: continue
+            if (step.action == TaskStep.ACTION_DONE) {
+                hadDoneStep = true
+                continue
+            }
+            if (step.isSupported) steps.add(step)
+        }
+        if (steps.isEmpty()) {
+            if (hadDoneStep) return AiPlan(emptyList(), done = true)
+            return null
+        }
+        return AiPlan(steps, done)
+    }
+
 
     suspend fun replaySkillDirect(skill: Skill): TaskResult {
         if (_isRunning) {
@@ -710,6 +993,17 @@ class TaskExecutor(
      * fix for one failed step can RESUME the macro instead of restarting
      * the whole goal. Returns which step failed, if any.
      */
+    /**
+     * Direct replay of a saved skill's step list, with no think calls and no
+     * AI resume — the boolean form used by macro play and tests. True only
+     * when the replay succeeds (every critical step verified; at most half
+     * the steps skipped as non-critical no-effect). False for empty skills.
+     */
+    suspend fun replaySkill(skill: Skill): Boolean {
+        if (skill.steps.isEmpty()) return false
+        return replaySkillFrom(skill, 0).success
+    }
+
     suspend fun replaySkillFrom(skill: Skill, startIndex: Int): ReplayOutcome {
         if (skill.steps.isEmpty()) {
             logWarn("Cannot replay skill '${skill.goal}': no steps recorded")
@@ -1078,6 +1372,20 @@ class TaskExecutor(
                         raw,
                         "ACTION RESULT: [OK] for ${decision.action}."
                     )
+                    // Turn F-direct: an open-only goal is DONE the moment the
+                    // app is foreground — no more think rounds on the opened
+                    // app's screen (the "~1 hour to home screen" bug: the loop
+                    // kept acting on an already-open app).
+                    if (decision.action == TaskStep.ACTION_OPEN_APP &&
+                        MiraAutomationBridge.isOpenOnlyGoal(goal)
+                    ) {
+                        skills.saveOrUpdate(goal, executedSteps)
+                        return TaskResult(
+                            status = TaskStatus.SUCCESS,
+                            message = "Goal completed in $step step(s).",
+                            stepsUsed = step
+                        )
+                    }
                     if (decision.isComplete && executedSteps.isNotEmpty()) {
                         skills.saveOrUpdate(goal, executedSteps)
                         return TaskResult(
@@ -1302,6 +1610,12 @@ class TaskExecutor(
         const val DEFAULT_OPEN_APP_POLL_INTERVAL_MS: Long = 500L
         /** Turn F(b): max AI turns spent fixing ONE failed recorded step. */
         const val AI_RESUME_MAX_ATTEMPTS: Int = 3
+        /** Turn F-direct: swipe fraction for an "a bit" scroll (half the 0.30f fallback). */
+        const val SCROLL_SMALL_FRACTION: Float = 0.15f
+        /** Turn F-direct: how long a search/dial intent waits for the foreground package to change. */
+        const val DIRECT_INTENT_POLL_TIMEOUT_MS: Long = 3_000L
+        /** Turn F-direct: YouTube package, for search URLs. */
+        const val YOUTUBE_PACKAGE: String = "com.google.android.youtube"
 
         fun isCriticalReplayStep(action: String): Boolean =
             action == TaskStep.ACTION_OPEN_APP || action == TaskStep.ACTION_TYPE_TEXT

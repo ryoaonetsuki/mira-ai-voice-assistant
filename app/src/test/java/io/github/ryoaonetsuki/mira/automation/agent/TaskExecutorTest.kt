@@ -1135,6 +1135,14 @@ class TaskExecutorTest {
     }
 
     @Test
+    fun testDirect_TapNumber_ZeroThink() {
+        assertEquals(MiraAutomationBridge.DirectAction.TapNumber(3), MiraAutomationBridge.parseDirectAction("tap 3"))
+        assertEquals(MiraAutomationBridge.DirectAction.TapNumber(5), MiraAutomationBridge.parseDirectAction("tap number 5"))
+        assertEquals(MiraAutomationBridge.DirectAction.TapNumber(3), MiraAutomationBridge.parseDirectAction("tap ৩"))
+        assertTrue(MiraAutomationBridge(context = null).isDirectGoal("tap 3"))
+    }
+
+    @Test
     fun testDirect_TapLabel_ZeroThink() {
         assertEquals(MiraAutomationBridge.DirectAction.TapLabel("settings"), MiraAutomationBridge.parseDirectAction("tap Settings"))
         assertTrue(MiraAutomationBridge(context = null).isDirectGoal("tap Settings"))
@@ -1209,6 +1217,83 @@ class TaskExecutorTest {
         assertNotNull(best)
         assertEquals("com.example.app:id/search_button", best!!.viewId)
         assertNull(UiNodeMatcher.findBest(nodes, "nothing here"))
+    }
+
+    @Test
+    fun testUiNodeMatcher_TappableNumbered() {
+        val node1 = ScreenNode(0, "First", "", "android.widget.Button", "", isClickable = true, isEditable = false, isScrollable = false, isCheckable = false, isEnabled = true, 0, 0, 10, 10, 5, 5)
+        val node2NonClickable = ScreenNode(1, "Second", "", "android.widget.TextView", "", isClickable = false, isEditable = false, isScrollable = false, isCheckable = false, isEnabled = true, 0, 0, 10, 10, 5, 5)
+        val node3Disabled = ScreenNode(2, "Third", "", "android.widget.Button", "", isClickable = true, isEditable = false, isScrollable = false, isCheckable = false, isEnabled = false, 0, 0, 10, 10, 5, 5)
+        val node4ZeroWidth = ScreenNode(3, "Fourth", "", "android.widget.Button", "", isClickable = true, isEditable = false, isScrollable = false, isCheckable = false, isEnabled = true, 5, 0, 5, 10, 5, 5)
+        val node5ZeroHeight = ScreenNode(4, "Fifth", "", "android.widget.Button", "", isClickable = true, isEditable = false, isScrollable = false, isCheckable = false, isEnabled = true, 0, 5, 10, 5, 5)
+        val node6 = ScreenNode(5, "Sixth", "", "android.widget.Button", "", isClickable = true, isEditable = false, isScrollable = false, isCheckable = false, isEnabled = true, 0, 0, 20, 20, 10, 10)
+        val node7 = ScreenNode(6, "Seventh", "", "android.widget.Button", "", isClickable = true, isEditable = false, isScrollable = false, isCheckable = false, isEnabled = true, 10, 10, 30, 30, 20, 20)
+
+        val inputNodes = listOf(node1, node2NonClickable, node3Disabled, node4ZeroWidth, node5ZeroHeight, node6, node7)
+        val numbered = UiNodeMatcher.tappableNumbered(inputNodes)
+
+        assertEquals(3, numbered.size)
+        assertEquals(1, numbered[0].first)
+        assertSame(node1, numbered[0].second)
+        assertEquals(2, numbered[1].first)
+        assertSame(node6, numbered[1].second)
+        assertEquals(3, numbered[2].first)
+        assertSame(node7, numbered[2].second)
+    }
+
+    @Test
+    fun testFormatNumberedList() {
+        val emptyResult = formatNumberedList(emptyList())
+        assertEquals("", emptyResult)
+
+        val nodeText = ScreenNode(
+            index = 0,
+            text = "Submit",
+            contentDescription = "Submit button",
+            className = "android.widget.Button",
+            viewId = "id/submit",
+            isClickable = true,
+            isEditable = false,
+            isScrollable = false,
+            isCheckable = false,
+            isEnabled = true,
+            left = 0, top = 0, right = 10, bottom = 10, centerX = 5, centerY = 5
+        )
+        val nodeDesc = ScreenNode(
+            index = 1,
+            text = "",
+            contentDescription = "Close dialog",
+            className = "android.widget.ImageView",
+            viewId = "id/close",
+            isClickable = true,
+            isEditable = false,
+            isScrollable = false,
+            isCheckable = false,
+            isEnabled = true,
+            left = 10, top = 10, right = 20, bottom = 20, centerX = 15, centerY = 15
+        )
+        val nodeClass = ScreenNode(
+            index = 2,
+            text = "   ",
+            contentDescription = "",
+            className = "android.widget.CheckBox",
+            viewId = "id/chk",
+            isClickable = true,
+            isEditable = false,
+            isScrollable = false,
+            isCheckable = false,
+            isEnabled = true,
+            left = 20, top = 20, right = 30, bottom = 30, centerX = 25, centerY = 25
+        )
+
+        val numbered = listOf(
+            Pair(1, nodeText),
+            Pair(2, nodeDesc),
+            Pair(3, nodeClass)
+        )
+        val formatted = formatNumberedList(numbered)
+        val expected = "1: Submit\n2: Close dialog\n3: CheckBox"
+        assertEquals(expected, formatted)
     }
 
     // --- Best-of-all: Mika per-app knowledge files ---

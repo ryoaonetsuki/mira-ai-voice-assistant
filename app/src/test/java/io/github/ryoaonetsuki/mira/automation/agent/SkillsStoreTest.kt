@@ -142,8 +142,67 @@ class SkillsStoreTest {
         assertNotNull("Rephrased command 'ফেসবুক ওপেন করো' must match saved skill", match2)
         assertEquals("ফেসবুকটা ওপেন করো", match2?.goal)
 
+        val match3 = service.findMatch("ফেসবুকটা খুলো")
+        assertNotNull("Rephrased command 'ফেসবুকটা খুলো' must match saved skill", match3)
+        assertEquals("ফেসবুকটা ওপেন করো", match3?.goal)
+
+        val match4 = service.findMatch("ফেসবুক খোলো")
+        assertNotNull("Rephrased command 'ফেসবুক খোলো' must match saved skill", match4)
+        assertEquals("ফেসবুকটা ওপেন করো", match4?.goal)
+
         // Verify English matching behaviour is untouched
         assertEquals(1.0, Skill.similarity("open youtube", "open youtube"), 0.001)
         assertEquals(0.0, Skill.similarity("open youtube", "play spotify"), 0.001)
+    }
+
+    @Test
+    fun testBanglaRephraseMatching_UnrelatedGoalsDoNotMatch() {
+        val store = InMemorySkillStore()
+        val service = SkillMemoryService(store)
+
+        val fbStep = TaskStep(action = TaskStep.ACTION_OPEN_APP, params = mapOf("app" to "com.facebook.katana"))
+        service.saveOrUpdate("ফেসবুক খুলো", listOf(fbStep))
+
+        // Unrelated goals must NOT match
+        assertNull("Unrelated goal 'ইউটিউব চালাও' must not match 'ফেসবুক খুলো'", service.findMatch("ইউটিউব চালাও"))
+        assertNull("Unrelated goal 'হোয়াটসঅ্যাপে মেসেজ পাঠাও' must not match 'ফেসবুক খুলো'", service.findMatch("হোয়াটসঅ্যাপে মেসেজ পাঠাও"))
+        assertNull("Unrelated goal 'open youtube' must not match 'ফেসবুক খুলো'", service.findMatch("open youtube"))
+    }
+
+    @Test
+    fun testBanglaRephraseMatching_TransliteratedOpenAndKhuloEquivalence() {
+        val store = InMemorySkillStore()
+        val service = SkillMemoryService(store)
+
+        val fbStep = TaskStep(action = TaskStep.ACTION_OPEN_APP, params = mapOf("app" to "com.facebook.katana"))
+        service.saveOrUpdate("facebookta open koro", listOf(fbStep))
+
+        // Both 'facebook khulo' and 'facebook open' should match 'facebookta open koro'
+        val matchKhulo = service.findMatch("facebook khulo")
+        assertNotNull("Transliterated 'facebook khulo' must match 'facebookta open koro'", matchKhulo)
+        assertEquals("facebookta open koro", matchKhulo?.goal)
+
+        val matchOpen = service.findMatch("facebook open")
+        assertNotNull("Transliterated 'facebook open' must match 'facebookta open koro'", matchOpen)
+        assertEquals("facebookta open koro", matchOpen?.goal)
+
+        // Unrelated transliterated goal
+        assertNull(service.findMatch("youtube play"))
+    }
+
+    @Test
+    fun testExactMatchPathFirst_TakesPrecedence() {
+        val store = InMemorySkillStore()
+        val service = SkillMemoryService(store)
+
+        val step1 = TaskStep(action = TaskStep.ACTION_OPEN_APP, params = mapOf("app" to "com.facebook.katana"))
+        val step2 = TaskStep(action = TaskStep.ACTION_OPEN_APP, params = mapOf("app" to "com.facebook.lite"))
+        service.saveOrUpdate("open facebook", listOf(step1))
+        service.saveOrUpdate("open facebook lite", listOf(step2))
+
+        val exactMatch = service.findMatch("open facebook")
+        assertNotNull(exactMatch)
+        assertEquals("open facebook", exactMatch?.goal)
+    }
     }
 }

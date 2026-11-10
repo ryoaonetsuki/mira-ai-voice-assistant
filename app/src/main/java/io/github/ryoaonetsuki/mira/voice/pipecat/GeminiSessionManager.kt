@@ -47,6 +47,15 @@ interface SessionManagerListener {
     fun onSessionEnded(reason: String, error: Throwable?) {}
     fun onReconnecting(attempt: Int, maxAttempts: Int) {}
     fun onError(message: String) {}
+    /** Turn G: mic capture died after its bounded internal retries. */
+    fun onMicError(reason: String) {}
+    /**
+     * Turn G: a (re)connect completed. [resumed] is true when the session
+     * resumed with a resumption handle (context intact), false when it
+     * started fresh — the service can then re-seed task context instead of
+     * starting blank.
+     */
+    fun onSessionResumed(resumed: Boolean) {}
     fun onFunctionCall(id: String, name: String, args: Value.Array, rawArgs: Map<String, String> = emptyMap()) {}
 }
 
@@ -204,6 +213,13 @@ class GeminiSessionManager(
     private val isCountedAsLive = AtomicBoolean(false)
     private val activeFunctionCalls = AtomicInteger(0)
     private val currentEpoch = AtomicInteger(0)
+    /**
+     * Turn G: the resumption handle the current connect attempt is trying
+     * to resume with (null = fresh session). It is cleared from the store
+     * ONLY once the server accepts it (setupComplete) — a failed reconnect
+     * must not burn a handle that was never used.
+     */
+    private var pendingResumptionHandleValue: String? = null
 
     @Volatile private var isBotSpeaking = false
     @Volatile private var isUserSpeaking = false
@@ -267,6 +283,7 @@ class GeminiSessionManager(
         reconnectJob?.cancel()
         reconnectJob = null
         retryCount = 0
+        pendingResumptionHandleValue = null
         activeFunctionCalls.set(0)
         isBotSpeaking = false
         isUserSpeaking = false
@@ -289,6 +306,24 @@ class GeminiSessionManager(
         if (_state.value == SessionManagerState.CONNECTED) {
             currentClient?.enableMic(enabled)
         }
+    }
+
+    /**
+     * Turn G: force a reconnect of the live session (liveness watchdog).
+     * No-op when the manager is stopped, in ERROR, or already reconnecting —
+     * the in-flight reconnect owns the recovery then.
+     */
+    fun requestReconnect(reason: String) {
+        if (isExplicitlyStopped.get() || _state.value == SessionManagerState.STOPPED ||
+            _state.value == SessionManagerState.ERROR ||
+            _state.value == SessionManagerState.RECONNECTING
+        ) {
+            Log.i(TAG, "MIRA_LIVE_VOICE: requestReconnect($reason) ignored in state ${_state.value}")
+            return
+        }
+        Log.w(TAG, "MIRA_LIVE_VOICE: requestReconnect: $reason (state=${_state.value})")
+        LiveVoiceDiagnostics.recordDropReason("watchdog:$reason")
+        launchReconnect(isGoAway = false, isStage4Timeout = false)
     }
 
     fun sendUserMessage(content: String) {
@@ -335,6 +370,11 @@ class GeminiSessionManager(
         // Free-tier safety: always close previous WebSocket explicitly before opening a new one
         closeCurrentClient()
 
+        // Turn G: remember which handle this attempt is resuming with; it
+        // is cleared from the store only on setupComplete (server accepted
+        // it) — never up front, so a failed attempt cannot burn it.
+        pendingResumptionHandleValue = resumptionHandle
+
         val epoch = currentEpoch.incrementAndGet()
 
         transitionTo(SessionManagerState.CONNECTING)
@@ -360,6 +400,10 @@ class GeminiSessionManager(
 
             override fun onSessionEnded(reason: String, t: Throwable?) {
                 handleSessionEnded(reason, t, epoch)
+            }
+
+            override fun onMicError(reason: String) {
+                handleMicError(reason, epoch)
             }
 
             override fun onBotStartedSpeaking() {
@@ -496,8 +540,35 @@ class GeminiSessionManager(
         // Successful handshake: reset retry counter
         retryCount = 0
 
+        // Turn G: the server accepted the resumption handle (single-use —
+        // it is now invalid). Clear it from the store ONLY if it is still
+        // the handle we resumed with, so a newer handle that arrived
+        // meanwhile is never wiped.
+        val resumed = pendingResumptionHandleValue != null
+        if (resumed) {
+            val stored = resumptionStore.getHandle()
+            if (stored != null && stored == pendingResumptionHandleValue) {
+                resumptionStore.clearHandle()
+                Log.i(TAG, "MIRA_LIVE_VOICE: Resumed session accepted by server — consumed handle (length=${pendingResumptionHandleValue?.length})")
+            }
+            pendingResumptionHandleValue = null
+        }
+        LiveVoiceDiagnostics.recordResumedWithContext(resumed)
+
         transitionTo(SessionManagerState.CONNECTED)
+        listener.onSessionResumed(resumed)
         currentClient?.enableMic(true)
+    }
+
+    private fun handleMicError(reason: String, epoch: Int) {
+        if (epoch != currentEpoch.get()) {
+            Log.d(TAG, "MIRA_LIVE_VOICE: Ignoring handleMicError from stale epoch $epoch (current: ${currentEpoch.get()})")
+            return
+        }
+        if (isExplicitlyStopped.get() || _state.value == SessionManagerState.STOPPED) return
+        Log.e(TAG, "MIRA_LIVE_VOICE: Mic died after internal retries: $reason — restarting session")
+        LiveVoiceDiagnostics.recordDropReason("mic-died: $reason")
+        launchReconnect(isGoAway = false, isStage4Timeout = false)
     }
 
     private fun handleSessionResumptionUpdate(handle: String, resumable: Boolean, epoch: Int) {
@@ -509,8 +580,15 @@ class GeminiSessionManager(
             Log.d(TAG, "MIRA_LIVE_VOICE: sessionResumptionUpdate ignored (resumable=false)")
             return
         }
-        if (_state.value != SessionManagerState.CONNECTED) {
-            Log.d(TAG, "MIRA_LIVE_VOICE: sessionResumptionUpdate ignored outside CONNECTED state (state=${_state.value})")
+        // Turn G (verified bug): the handle was saved ONLY in CONNECTED, but
+        // the server sends sessionResumptionUpdate right after setup — while
+        // the state is still CONFIGURING (setupComplete has not arrived
+        // yet). Those handles were dropped, so EVERY reconnect was a fresh
+        // session with no context. Save during CONFIGURING and CONNECTED.
+        if (_state.value != SessionManagerState.CONNECTED &&
+            _state.value != SessionManagerState.CONFIGURING
+        ) {
+            Log.d(TAG, "MIRA_LIVE_VOICE: sessionResumptionUpdate ignored outside CONFIGURING/CONNECTED state (state=${_state.value})")
             return
         }
         if (handle.isBlank()) {
@@ -557,6 +635,23 @@ class GeminiSessionManager(
 
         Log.w(TAG, "MIRA_LIVE_VOICE: Session ended (reason=$reason, error=${t?.message})")
 
+        // Turn G instrumentation: log every session end with the reason, the
+        // state it died in, and whether a resumption handle was available
+        // at that moment (length only, never the value) — the next phone
+        // test can tell which suspect fired from logcat alone.
+        val handleAtEnd = try {
+            resumptionStore.getHandle()
+        } catch (_: Throwable) {
+            null
+        }
+        Log.w(
+            TAG,
+            "MIRA_LIVE_VOICE: Session-end context: state=${_state.value} " +
+                "hasResumptionHandle=${handleAtEnd != null} " +
+                "handleLength=${handleAtEnd?.length ?: 0} retryCount=$retryCount"
+        )
+        LiveVoiceDiagnostics.recordDropReason("socket-dropped: $reason (state=${_state.value})")
+
         stage4WatchdogJob?.cancel()
         stage4WatchdogJob = null
         activeFunctionCalls.set(0)
@@ -569,6 +664,7 @@ class GeminiSessionManager(
         if (_state.value == SessionManagerState.CONFIGURING) {
             Log.w(TAG, "MIRA_LIVE_VOICE: Disconnected while CONFIGURING; clearing rejected resumption handle")
             resumptionStore.clearHandle()
+            pendingResumptionHandleValue = null
         }
 
         listener.onSessionEnded(reason, t)
@@ -588,6 +684,7 @@ class GeminiSessionManager(
                     "Live voice: Connection failed after $MAX_RETRIES retries — tap to retry"
                 }
                 Log.e(TAG, "MIRA_LIVE_VOICE: $errorMsg")
+                LiveVoiceDiagnostics.recordDropReason("retries-exhausted: $errorMsg")
                 releaseLiveSessionSlot()
                 transitionTo(SessionManagerState.ERROR)
                 listener.onError(errorMsg)
@@ -615,10 +712,15 @@ class GeminiSessionManager(
                 return@launch
             }
 
-            // Single-use: consume resumption handle atomically
-            val resumptionHandle = resumptionStore.consumeHandle()
+            // Turn G: PEEK at the handle — do NOT consume it up front. A
+            // resumption handle is single-use on the SERVER side: if this
+            // reconnect attempt never reaches the server (network failure,
+            // app backgrounded), the handle was never used and must survive
+            // for the next attempt. It is cleared only when the server
+            // accepts it (setupComplete) or rejects it (CONFIGURING failure).
+            val resumptionHandle = resumptionStore.getHandle()
             if (resumptionHandle != null) {
-                Log.i(TAG, "MIRA_LIVE_VOICE: Reconnecting with consumed resumption handle (length=${resumptionHandle.length})")
+                Log.i(TAG, "MIRA_LIVE_VOICE: Reconnecting with stored resumption handle (length=${resumptionHandle.length})")
                 LiveVoiceDiagnostics.recordResumptionHandleEvent("reconnecting_with_handle (len=${resumptionHandle.length})")
             } else {
                 Log.w(TAG, "MIRA_LIVE_VOICE: Reconnecting with fresh session (no valid handle)")

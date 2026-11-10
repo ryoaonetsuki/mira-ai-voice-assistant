@@ -60,7 +60,7 @@ object LivePromptBuilder {
             "`open_app` (opens an app by name or package), `click_text` (clicks a UI element by text label, with optional fallback x/y coordinates), " +
             "`type_text` (types text into the focused field), `scroll` (scrolls the screen up, down, left, or right), `press_back` (presses Back button), " +
             "`press_home` (returns to home screen), `wait` (pauses for UI to load), `get_screen` (inspects current UI elements and screen state), " +
-            "`web_search` (searches web for information), and `run_connector_command` (runs connector actions). " +
+            "`web_search` (searches web for information), `run_connector_command` (runs connector actions), and `run_skill` (replays a saved skill macro in one tool call). " +
             "You CAN and MUST act on the phone whenever asked — NEVER claim you cannot control the phone, open apps, or take actions. " +
             "OFF-TARGET RULE: If the screen is not currently on the target application needed for the user's goal, you MUST call `open_app` first before attempting to click or type. " +
             "When the user asks for a phone action or search: CALL THE TOOL IMMEDIATELY. " +

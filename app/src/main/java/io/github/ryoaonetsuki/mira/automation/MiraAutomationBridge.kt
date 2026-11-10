@@ -826,7 +826,10 @@ class MiraAutomationBridge(
         private val SECOND_ACTION_TOKENS = setOf("and", "then", "এবং", "তারপর")
 
         private fun hasLatinWord(lower: String, word: String): Boolean =
-            Regex("""(?<![\p{L}\p{N}])${Regex.escape(word)}(?![\p{L}\p{N}])""")
+            // \p{M} in the lookarounds: a combining mark (Indic vowel sign /
+            // hasant) belongs to its base letter, so a Latin word next to one
+            // is not at a word boundary.
+            Regex("""(?<![\p{L}\p{M}\p{N}])${Regex.escape(word)}(?![\p{L}\p{M}\p{N}])""")
                 .containsMatchIn(lower)
 
         private fun hasAnyLatin(lower: String, words: Collection<String>): Boolean =
@@ -835,8 +838,16 @@ class MiraAutomationBridge(
         private fun hasAnySubstring(lower: String, words: Collection<String>): Boolean =
             words.any { lower.contains(it) }
 
+        /**
+         * Word splitter. \p{M} (combining marks) MUST be kept: Indic scripts
+         * write vowels as marks on consonants (Bengali ে া ো ু, hasant ্;
+         * Hindi, Tamil, Telugu, … the same). Without \p{M} every Indic word
+         * shatters into bare consonants — "ফেসবুকটা" became ["ফ","স","ব","ক","ট"] —
+         * so isOpenOnlyGoal counted 8 remaining words instead of 1 and the
+         * direct path rejected every natural Bengali/Hindi command.
+         */
         private fun tokenize(lower: String): List<String> =
-            lower.split(Regex("[^\\p{L}\\p{N}]+")).filter { it.isNotBlank() }
+            lower.split(Regex("[^\\p{L}\\p{M}\\p{N}]+")).filter { it.isNotBlank() }
 
         private fun hasOpenOrPlayVerb(lower: String): Boolean =
             hasAnyLatin(lower, OPEN_PLAY_VERBS_LATIN) ||

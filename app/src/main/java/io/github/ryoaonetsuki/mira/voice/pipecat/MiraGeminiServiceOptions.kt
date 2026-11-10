@@ -47,8 +47,9 @@ data class MiraGeminiServiceOptions(
         const val DEFAULT_AUTH_HEADER_NAME = "x-goog-api-key"
 
         /**
-         * Default phone tools declared in Gemini Live setup frame (Milestone 1).
-         * Declares ONE function: open_app with args {app: string}.
+         * Default phone tools declared in Gemini Live setup frame (Milestones 1, 2, 3).
+         * Declares phone action tools: open_app, click_text, type_text, scroll, press_back, press_home, wait, get_screen,
+         * plus web_search and run_connector_command.
          * Note: google_search grounding is NOT combined with function calling (prohibited by Live API).
          */
         fun defaultPhoneTools(): Value.Array {
@@ -67,6 +68,120 @@ data class MiraGeminiServiceOptions(
                                     )
                                 ),
                                 "required" to Value.Array(Value.Str("app"))
+                            )
+                        ),
+                        Value.Object(
+                            "name" to Value.Str("click_text"),
+                            "description" to Value.Str("Clicks or taps an on-screen element matching the given text label, with optional fallback screen coordinates (x, y)."),
+                            "parameters" to Value.Object(
+                                "type" to Value.Str("OBJECT"),
+                                "properties" to Value.Object(
+                                    "text" to Value.Object(
+                                        "type" to Value.Str("STRING"),
+                                        "description" to Value.Str("Visible text or label of the UI element to click")
+                                    ),
+                                    "x" to Value.Object(
+                                        "type" to Value.Str("NUMBER"),
+                                        "description" to Value.Str("Optional fallback X coordinate on screen if label is not found")
+                                    ),
+                                    "y" to Value.Object(
+                                        "type" to Value.Str("NUMBER"),
+                                        "description" to Value.Str("Optional fallback Y coordinate on screen if label is not found")
+                                    )
+                                ),
+                                "required" to Value.Array(Value.Str("text"))
+                            )
+                        ),
+                        Value.Object(
+                            "name" to Value.Str("type_text"),
+                            "description" to Value.Str("Types text into the currently focused input field on screen."),
+                            "parameters" to Value.Object(
+                                "type" to Value.Str("OBJECT"),
+                                "properties" to Value.Object(
+                                    "text" to Value.Object(
+                                        "type" to Value.Str("STRING"),
+                                        "description" to Value.Str("Text to type into the focused field")
+                                    )
+                                ),
+                                "required" to Value.Array(Value.Str("text"))
+                            )
+                        ),
+                        Value.Object(
+                            "name" to Value.Str("scroll"),
+                            "description" to Value.Str("Scrolls the current screen in a specified direction (up, down, left, right)."),
+                            "parameters" to Value.Object(
+                                "type" to Value.Str("OBJECT"),
+                                "properties" to Value.Object(
+                                    "direction" to Value.Object(
+                                        "type" to Value.Str("STRING"),
+                                        "description" to Value.Str("Direction to scroll: 'up', 'down', 'left', or 'right' (default 'down')")
+                                    )
+                                )
+                            )
+                        ),
+                        Value.Object(
+                            "name" to Value.Str("press_back"),
+                            "description" to Value.Str("Presses the system Back button."),
+                            "parameters" to Value.Object(
+                                "type" to Value.Str("OBJECT"),
+                                "properties" to Value.Object()
+                            )
+                        ),
+                        Value.Object(
+                            "name" to Value.Str("press_home"),
+                            "description" to Value.Str("Presses the system Home button to return to the home screen launcher."),
+                            "parameters" to Value.Object(
+                                "type" to Value.Str("OBJECT"),
+                                "properties" to Value.Object()
+                            )
+                        ),
+                        Value.Object(
+                            "name" to Value.Str("wait"),
+                            "description" to Value.Str("Waits for a specified duration in milliseconds (default 1000, 100..10000) for UI elements or apps to load."),
+                            "parameters" to Value.Object(
+                                "type" to Value.Str("OBJECT"),
+                                "properties" to Value.Object(
+                                    "ms" to Value.Object(
+                                        "type" to Value.Str("NUMBER"),
+                                        "description" to Value.Str("Milliseconds to wait (default 1000, clamp 100..10000)")
+                                    )
+                                )
+                            )
+                        ),
+                        Value.Object(
+                            "name" to Value.Str("get_screen"),
+                            "description" to Value.Str("Inspects the current screen state and returns fresh UI element descriptions and screen text."),
+                            "parameters" to Value.Object(
+                                "type" to Value.Str("OBJECT"),
+                                "properties" to Value.Object()
+                            )
+                        ),
+                        Value.Object(
+                            "name" to Value.Str("web_search"),
+                            "description" to Value.Str("Searches the web for up-to-date information, news, or answers using search engine."),
+                            "parameters" to Value.Object(
+                                "type" to Value.Str("OBJECT"),
+                                "properties" to Value.Object(
+                                    "query" to Value.Object(
+                                        "type" to Value.Str("STRING"),
+                                        "description" to Value.Str("The search query string")
+                                    )
+                                ),
+                                "required" to Value.Array(Value.Str("query"))
+                            )
+                        ),
+                        Value.Object(
+                            "name" to Value.Str("run_connector_command"),
+                            "description" to Value.Str("Executes a connector command (e.g. smart home, music, calendar, notes, device actions)."),
+                            "parameters" to Value.Object(
+                                "type" to Value.Str("OBJECT"),
+                                "properties" to Value.Object(
+                                    "command" to Value.Object(
+                                        "type" to Value.Str("STRING"),
+                                        "description" to Value.Str("Connector command or intent to execute")
+                                    )
+                                ),
+                                "required" to Value.Array(Value.Str("command"))
                             )
                         )
                     )

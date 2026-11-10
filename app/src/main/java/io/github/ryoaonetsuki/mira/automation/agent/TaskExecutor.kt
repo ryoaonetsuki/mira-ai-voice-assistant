@@ -51,6 +51,13 @@ interface AutomationPort {
         }
         return false
     }
+    fun clickNumber(number: Int, nodes: List<ScreenNode>): Boolean {
+        val node = UiNodeMatcher.tappableNumbered(nodes).firstOrNull { it.first == number }?.second ?: return false
+        return clickAt(node.centerX.toFloat(), node.centerY.toFloat())
+    }
+    fun clickNumber(number: Int): Boolean = clickNumber(number, dumpScreen())
+    fun showTapNumbers(): List<Pair<Int, ScreenNode>> = emptyList()
+    fun hideTapNumbers() {}
     fun clickAt(x: Float, y: Float): Boolean
     /** Long-press at a point (flutter_automate GestureEngine.longClick, MIT). */
     fun longPress(x: Float, y: Float, durationMs: Long = 500): Boolean = false
@@ -279,6 +286,9 @@ class TaskExecutor(
     private fun describeStep(step: TaskStep): String = when (step.action) {
         TaskStep.ACTION_OPEN_APP -> "open the app '${step.stringParam("app") ?: step.stringParam("package") ?: ""}'"
         TaskStep.ACTION_CLICK_TEXT -> "tap '${step.stringParam("text") ?: ""}' on screen"
+        TaskStep.ACTION_CLICK_NUMBER -> "tap #${step.intParam("number") ?: ""}"
+        TaskStep.ACTION_SHOW_NUMBERS -> "show tap numbers on screen"
+        TaskStep.ACTION_HIDE_NUMBERS -> "hide tap numbers"
         TaskStep.ACTION_CLICK_AT -> "tap at (${step.intParam("x")}, ${step.intParam("y")})"
         TaskStep.ACTION_TYPE_TEXT -> "type '${step.stringParam("text") ?: ""}'"
         TaskStep.ACTION_PRESS_ENTER -> "press Enter"
@@ -539,6 +549,30 @@ class TaskExecutor(
                     }
                     success
                 }
+                TaskStep.ACTION_CLICK_NUMBER -> {
+                    val number = step.intParam("number") ?: run {
+                        lastActionError = "click_number missing number param"
+                        return false
+                    }
+                    val success = automation.clickNumber(number)
+                    if (!success) {
+                        lastActionError = "click_number $number failed (no tappable element with that number)"
+                    }
+                    success
+                }
+                TaskStep.ACTION_SHOW_NUMBERS -> {
+                    val numbered = automation.showTapNumbers()
+                    if (numbered.isEmpty()) {
+                        lastActionError = "show_numbers failed: no tappable elements found, or the \"Display over other apps\" permission is not granted (enable it in setup)"
+                        false
+                    } else {
+                        true
+                    }
+                }
+                TaskStep.ACTION_HIDE_NUMBERS -> {
+                    automation.hideTapNumbers()
+                    true
+                }
                 TaskStep.ACTION_CLICK_AT -> {
                     val x = step.intParam("x") ?: run {
                         lastActionError = "click_at missing x coordinate"
@@ -782,6 +816,7 @@ class TaskExecutor(
             return when (step.action) {
                 TaskStep.ACTION_OPEN_APP -> openAppTargetReached(step, prePackage, postPackage)
                 TaskStep.ACTION_CLICK_TEXT,
+                TaskStep.ACTION_CLICK_NUMBER,
                 TaskStep.ACTION_CLICK_AT,
                 TaskStep.ACTION_TYPE_TEXT,
                 TaskStep.ACTION_SCROLL,

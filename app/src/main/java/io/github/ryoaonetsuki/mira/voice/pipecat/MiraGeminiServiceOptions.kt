@@ -48,7 +48,7 @@ data class MiraGeminiServiceOptions(
 
         /**
          * Default phone tools declared in Gemini Live setup frame (Milestones 1, 2, 3, 4).
-         * Declares phone action tools: open_app, click_text, type_text, scroll, press_back, press_home, wait, get_screen,
+         * Declares phone action tools: open_app, click_text, tap_number, show_numbers, hide_numbers, type_text, scroll, press_back, press_home, wait, get_screen,
          * web_search, run_connector_command, and run_skill.
          * Note: google_search grounding is NOT combined with function calling (prohibited by Live API).
          */
@@ -90,6 +90,36 @@ data class MiraGeminiServiceOptions(
                                     )
                                 ),
                                 "required" to Value.Array(Value.Str("text"))
+                            )
+                        ),
+                        Value.Object(
+                            "name" to Value.Str("tap_number"),
+                            "description" to Value.Str("Taps the on-screen element with the given number from the tap-number overlay (see show_numbers). Numbers are 1-based and refer only to tappable elements."),
+                            "parameters" to Value.Object(
+                                "type" to Value.Str("OBJECT"),
+                                "properties" to Value.Object(
+                                    "number" to Value.Object(
+                                        "type" to Value.Str("NUMBER"),
+                                        "description" to Value.Str("The 1-based number shown on the tappable element")
+                                    )
+                                ),
+                                "required" to Value.Array(Value.Str("number"))
+                            )
+                        ),
+                        Value.Object(
+                            "name" to Value.Str("show_numbers"),
+                            "description" to Value.Str("Shows numbered badges on all tappable elements on the current screen and returns the numbered list (number, label, center coordinates) as text. Call this first when the user asks to tap a number and numbers are not already shown."),
+                            "parameters" to Value.Object(
+                                "type" to Value.Str("OBJECT"),
+                                "properties" to Value.Object()
+                            )
+                        ),
+                        Value.Object(
+                            "name" to Value.Str("hide_numbers"),
+                            "description" to Value.Str("Hides the tap-number badges from the screen."),
+                            "parameters" to Value.Object(
+                                "type" to Value.Str("OBJECT"),
+                                "properties" to Value.Object()
                             )
                         ),
                         Value.Object(

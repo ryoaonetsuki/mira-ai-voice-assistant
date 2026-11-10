@@ -115,6 +115,9 @@ class MiraGeminiLiveTransport(
         fun onUserAudioLevel(level: Float) {}
         fun onRemoteAudioLevel(level: Float) {}
         fun onFunctionCall(id: String, name: String, args: Value.Array, rawArgs: Map<String, String> = emptyMap()) {}
+        fun onFunctionCall(id: String, name: String, args: Value.Array, rawArgs: Map<String, String>, typedArgs: Map<String, Any?>) {
+            onFunctionCall(id, name, args, rawArgs)
+        }
     }
 
     object AudioDevices {
@@ -455,6 +458,16 @@ class MiraGeminiLiveTransport(
                             args: Value.Array,
                             rawArgs: Map<String, String>
                         ) {
+                            onFunctionCall(id, name, args, rawArgs, emptyMap())
+                        }
+
+                        override fun onFunctionCall(
+                            id: String,
+                            name: String,
+                            args: Value.Array,
+                            rawArgs: Map<String, String>,
+                            typedArgs: Map<String, Any?>
+                        ) {
                             val data = LLMFunctionCallData(
                                 functionName = name,
                                 toolCallID = id,
@@ -471,7 +484,7 @@ class MiraGeminiLiveTransport(
                             )
 
                             thread.runOnThread {
-                                sessionListener?.onFunctionCall(id, name, args, rawArgs)
+                                sessionListener?.onFunctionCall(id, name, args, rawArgs, typedArgs)
                             }
                         }
                     }

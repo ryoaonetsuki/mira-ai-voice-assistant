@@ -272,6 +272,7 @@ class MicService : Service() {
         _voiceStage.value = VoiceStage.ERROR
         _micAmplitude.value = 0f
         _isReconnecting.value = false
+        callStateStore.setCallActive(false)
         LiveVoiceDiagnostics.updateLastError(message)
         LiveVoiceDiagnostics.updateStage("ERROR")
         dismissNotification()
@@ -405,8 +406,12 @@ class MicService : Service() {
                 if (callStateStore.isCallActive() && !userRequestedStop) {
                     Log.i(TAG, "MIRA_LIVE_VOICE: Service recreated with an active call — resuming session")
                     LiveVoiceDiagnostics.recordDropReason("service-killed: service recreated, resuming call")
+                    callVoiceName = callStateStore.getVoiceName()
+                    callLanguage = callStateStore.getLanguage()
+                    lastAutomationGoal = callStateStore.getLastGoal()
+                    connectsThisCall = 1
                     startForegroundWithNotification()
-                    startLiveVoiceSession()
+                    startLiveVoiceSession(isAutoRestart = true)
                 } else {
                     stopSelf()
                 }
@@ -471,6 +476,9 @@ class MicService : Service() {
             lastAutomationGoal = null
             callVoiceName = null
             callLanguage = null
+            callStateStore.setVoiceName(null)
+            callStateStore.setLanguage(null)
+            callStateStore.setLastGoal(null)
         }
 
         stopLiveVoiceSessionInternal()
@@ -558,6 +566,8 @@ class MicService : Service() {
         val personaName = userPrefs.personaFlow.first()
         val customInstructions = userPrefs.customInstructionsFlow.first()
         val language = callLanguage ?: userPrefs.languageFlow.first().also { callLanguage = it }
+        callStateStore.setVoiceName(voiceName)
+        callStateStore.setLanguage(language)
         val secretMode = userPrefs.secretModeFlow.first()
         val echoGuard = userPrefs.echoGuardFlow.first()
         val userName = userPrefs.userNameFlow.first()
@@ -1092,6 +1102,7 @@ class MicService : Service() {
     private fun handleAutomationCommand(cleanText: String) {
         val token = sessionGenerationToken.get()
         lastAutomationGoal = cleanText
+        callStateStore.setLastGoal(cleanText)
         _statusText.value = "Running: $cleanText..."
         _modelTranscript.value = "Running: $cleanText..."
         val serviceEnabled = MiraAccessibilityService.isEnabled(applicationContext)

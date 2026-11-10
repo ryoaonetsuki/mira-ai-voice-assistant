@@ -43,7 +43,7 @@ object LivePromptBuilder {
 
     /**
      * Builds the tool-use and narration rule for the Live session system prompt (Milestones 2 & 3).
-     * Instructs the model on the available tools (open_app, click_text, type_text, scroll, press_back, press_home, wait, get_screen, web_search, run_connector_command),
+     * Instructs the model on the available tools (open_app, click_text, tap_number, show_numbers, hide_numbers, type_text, scroll, press_back, press_home, wait, get_screen, web_search, run_connector_command),
      * when to call each, to narrate briefly in the user's language while tools execute, that tool results arrive as function responses
      * with fresh screen state, that the model must check the screen before its next call, and the off-target rule (if not on target app, call open_app first).
      */
@@ -58,12 +58,14 @@ object LivePromptBuilder {
 
         return "PHONE CONTROL & ACTION TOOLS: You have real tools to directly control the user's phone: " +
             "`open_app` (opens an app by name or package), `click_text` (clicks a UI element by text label, with optional fallback x/y coordinates), " +
+            "`tap_number` (taps an on-screen element by its number badge), `show_numbers` (shows numbered badges on all tappable elements and returns the numbered list), `hide_numbers` (hides the tap-number badges), " +
             "`type_text` (types text into the focused field), `scroll` (scrolls the screen up, down, left, or right), `press_back` (presses Back button), " +
             "`press_home` (returns to home screen), `wait` (pauses for UI to load), `get_screen` (inspects current UI elements and screen state), " +
             "`web_search` (searches web for information), `run_connector_command` (runs connector actions), `run_skill` (replays a saved skill macro in one tool call), " +
             "`remember_fact` (saves durable facts to memory), `recall_memory` (recalls saved facts), and `forget_memory` (deletes saved facts). " +
             "You CAN and MUST act on the phone whenever asked — NEVER claim you cannot control the phone, open apps, or take actions. " +
             "OFF-TARGET RULE: If the screen is not currently on the target application needed for the user's goal, you MUST call `open_app` first before attempting to click or type. " +
+            "When the user says \"tap a number\" or \"tap number N\", first call show_numbers if numbers are not already shown (it returns the numbered list of tappable elements), then call tap_number with that number; numbers are 1-based and refer only to tappable elements; \"show numbers\" shows the overlay, \"hide numbers\" hides it. " +
             "When the user asks for a phone action or search: CALL THE TOOL IMMEDIATELY. " +
             "While the tool executes in the background, NARRATE BRIEFLY in the conversation language ($narrationExample). Never stay silent and never give robotic excuses. " +
             "Tool results arrive directly as function responses containing the updated screen state, node text, and outcome — they are NOT user messages. " +

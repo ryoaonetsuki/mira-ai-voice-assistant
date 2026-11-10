@@ -94,6 +94,65 @@ class MiraGeminiSetupPayloadTest {
     }
 
     @Test
+    fun testSetupPayload_ToolsKeyPresent_DeclaresOpenApp() {
+        val modelConfig = buildPipecatModelConfig(
+            model = "models/gemini-3.8-live",
+            voiceName = "Aoede",
+            languageCode = "bn-BD",
+            systemInstructionText = "Mira persona"
+        )
+
+        // (a) tools key present in setup config
+        val tools = modelConfig.value["tools"] as? Value.Array
+        assertNotNull("tools key MUST be present in setup config", tools)
+        assertTrue("tools array must not be empty", tools!!.value.isNotEmpty())
+
+        val toolDeclObj = tools.value[0] as? Value.Object
+        assertNotNull("tools[0] must be Value.Object", toolDeclObj)
+        val funcDecls = toolDeclObj!!.value["functionDeclarations"] as? Value.Array
+        assertNotNull("functionDeclarations must be present", funcDecls)
+        assertTrue("functionDeclarations must not be empty", funcDecls!!.value.isNotEmpty())
+
+        val openAppDecl = funcDecls.value.firstOrNull {
+            val name = (it as? Value.Object)?.value?.get("name") as? Value.Str
+            name?.value == "open_app"
+        } as? Value.Object
+        assertNotNull("open_app function declaration MUST be declared", openAppDecl)
+
+        val params = openAppDecl!!.value["parameters"] as? Value.Object
+        assertNotNull("parameters must be present", params)
+        assertEquals(Value.Str("OBJECT"), params!!.value["type"])
+
+        val properties = params.value["properties"] as? Value.Object
+        assertNotNull("properties must exist", properties)
+        val appProp = properties!!.value["app"] as? Value.Object
+        assertNotNull("app property must exist", appProp)
+        assertEquals(Value.Str("STRING"), appProp!!.value["type"])
+
+        val required = params.value["required"] as? Value.Array
+        assertNotNull("required parameters must exist", required)
+        assertTrue("app must be in required params", required!!.value.contains(Value.Str("app")))
+
+        // Verify serialized JSON format and exclusion of google_search grounding
+        val jsonString = modelConfig.toJsonString(json)
+        val jsonObj = JSONObject(jsonString)
+        assertTrue("Serialized JSON must have tools", jsonObj.has("tools"))
+        val jsonTools = jsonObj.getJSONArray("tools")
+        assertEquals(1, jsonTools.length())
+        val jsonFuncDecls = jsonTools.getJSONObject(0).getJSONArray("functionDeclarations")
+        assertEquals(1, jsonFuncDecls.length())
+        val jsonOpenApp = jsonFuncDecls.getJSONObject(0)
+        assertEquals("open_app", jsonOpenApp.getString("name"))
+        val jsonParams = jsonOpenApp.getJSONObject("parameters")
+        assertEquals("OBJECT", jsonParams.getString("type"))
+        assertEquals("STRING", jsonParams.getJSONObject("properties").getJSONObject("app").getString("type"))
+        assertEquals("app", jsonParams.getJSONArray("required").getString(0))
+
+        // Live API requirement: google_search grounding must NOT be combined with function calling
+        assertFalse("google_search grounding MUST NOT be in setup alongside function calling", jsonString.contains("google_search") || jsonString.contains("googleSearch"))
+    }
+
+    @Test
     fun testSetupPayload_ResumptionSessionWithHandle() {
         val storedHandle = "c2Vzc2lvbl9oYW5kbGVfZXhhbXBsZV8xMjM0NQ"
         val modelConfig = buildPipecatModelConfig(

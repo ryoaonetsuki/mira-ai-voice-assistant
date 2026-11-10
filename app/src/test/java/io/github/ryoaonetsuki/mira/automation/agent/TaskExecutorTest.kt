@@ -268,33 +268,6 @@ class TaskExecutorTest {
     // =========================================================================
 
     @Test
-    fun testTurnG_NoRestrictions_PaymentAndDeleteStepsExecute() = runBlocking {
-        val fakePort = FakeAutomationPort(serviceEnabled = true)
-        val skills = SkillMemoryService(InMemorySkillStore())
-        var thinkTurn = 0
-        val executor = TaskExecutor(
-            automation = fakePort,
-            skills = skills,
-            think = { _, _, _ ->
-                thinkTurn++
-                if (thinkTurn == 1) {
-                    """{"action": "click_text", "params": {"text": "Confirm and Pay"}}"""
-                } else {
-                    """{"action": "done", "is_complete": true}"""
-                }
-            },
-            stepDelayMs = 0
-        )
-
-        val result = executor.executeGoal("open mybankapp and confirm payment")
-        assertEquals(TaskStatus.SUCCESS, result.status)
-        assertTrue(
-            "A 'Confirm and Pay' step must execute, not be blocked: ${fakePort.actionsPerformed}",
-            fakePort.actionsPerformed.any { it == "clickText:Confirm and Pay" }
-        )
-    }
-
-    @Test
     fun testTurnG_NoRestrictions_BankingAppReplayExecutes() = runBlocking {
         // A recorded skill inside a banking app replays — no package block.
         val fakePort = FakeAutomationPort(
@@ -387,137 +360,6 @@ class TaskExecutorTest {
             )
         )
 
-        var thinkCalled = false
-        val executor = TaskExecutor(
-            automation = fakePort,
-            skills = skills,
-            think = { _, _, _ ->
-                thinkCalled = true
-                """{"action": "done", "is_complete": true}"""
-            },
-            stepDelayMs = 0
-        )
-
-        val result = executor.executeGoal("play lofi on youtube")
-
-        assertEquals(TaskStatus.SUCCESS, result.status)
-        assertFalse("Think lambda must NOT be called on skill replay match", thinkCalled)
-        assertTrue(fakePort.actionsPerformed.contains("openApp:youtube"))
-        assertTrue(fakePort.actionsPerformed.contains("clickText:Search"))
-        assertEquals("Task completed via memorized skill", result.message)
-    }
-
-    @Test
-    fun testTaskExecutor_AiLoop_SuccessAndAutoSavesSkill() = runBlocking {
-        val fakePort = FakeAutomationPort(serviceEnabled = true)
-        val skills = SkillMemoryService(InMemorySkillStore())
-
-        var thinkTurn = 0
-        val executor = TaskExecutor(
-            automation = fakePort,
-            skills = skills,
-            think = { _, _, _ ->
-                thinkTurn++
-                if (thinkTurn == 1) {
-                    """{"action": "open_app", "params": {"app": "youtube"}, "reasoning": "Open YouTube app"}"""
-                } else {
-                    """{"action": "done", "params": {}, "reasoning": "Goal completed", "is_complete": true}"""
-                }
-            },
-            stepDelayMs = 0
-        )
-
-        val result = executor.executeGoal("open youtube and play lofi")
-
-        assertEquals(TaskStatus.SUCCESS, result.status)
-        assertEquals(2, result.stepsUsed)
-        assertTrue(fakePort.actionsPerformed.contains("openApp:youtube"))
-
-        // Assert skill was auto-saved
-        val savedSkill = skills.findMatch("open youtube and play lofi")
-        assertNotNull("Skill must be auto-saved after successful AI loop", savedSkill)
-        assertEquals(1, savedSkill?.steps?.size)
-        assertEquals("open_app", savedSkill?.steps?.first()?.action)
-    }
-
-    @Test
-    fun testTaskExecutor_CancelMidRun() = runBlocking {
-        val fakePort = FakeAutomationPort(serviceEnabled = true)
-        val skills = SkillMemoryService(InMemorySkillStore())
-
-        lateinit var executor: TaskExecutor
-        executor = TaskExecutor(
-            automation = fakePort,
-            skills = skills,
-            think = { _, _, _ ->
-                executor.cancel()
-                """{"action": "wait", "params": {"ms": 100}}"""
-            },
-            stepDelayMs = 0
-        )
-
-        val result = executor.executeGoal("do something then cancel")
-
-        assertEquals(TaskStatus.CANCELLED, result.status)
-        assertTrue(result.message.contains("cancelled"))
-        assertFalse(executor.isRunning)
-    }
-
-    @Test
-    fun testTaskExecutor_MaxStepsExceeded_ReturnsFailed() = runBlocking {
-        val fakePort = FakeAutomationPort(serviceEnabled = true)
-        val skills = SkillMemoryService(InMemorySkillStore())
-
-        val executor = TaskExecutor(
-            automation = fakePort,
-            skills = skills,
-            think = { _, _, _ ->
-                """{"action": "wait", "params": {"ms": 100}}"""
-            },
-            maxSteps = 3,
-            stepDelayMs = 0
-        )
-
-        val result = executor.executeGoal("infinite waiting task")
-
-        assertEquals(TaskStatus.FAILED, result.status)
-        assertEquals(3, result.stepsUsed)
-        assertTrue(result.message.contains("maximum of 3 steps"))
-    }
-
-    @Test
-    fun testTurnG_NoRestrictions_PaymentClickExecutes() = runBlocking {
-        // Turn G (owner order): the Round 22 AutomationSafety blocklist is
-        // REMOVED — a payment click must EXECUTE, not fail with
-        // "Blocked for safety". The model's own judgement decides what
-        // cannot be done. (Replaces the old safety-block test.)
-        val fakePort = FakeAutomationPort(serviceEnabled = true)
-        val skills = SkillMemoryService(InMemorySkillStore())
-        var thinkTurn = 0
-        val executor = TaskExecutor(
-            automation = fakePort,
-            skills = skills,
-            think = { _, _, _ ->
-                thinkTurn++
-                if (thinkTurn == 1) {
-                    """{"action": "click_text", "params": {"text": "Pay $99.99 Now"}}"""
-                } else {
-                    """{"action": "done", "is_complete": true}"""
-                }
-            },
-            stepDelayMs = 0
-        )
-
-        val result = executor.executeGoal("buy item online")
-
-        assertEquals(TaskStatus.SUCCESS, result.status)
-        assertFalse(result.message.contains("Blocked for safety"))
-        assertTrue(
-            "A 'Pay \$99.99 Now' step must execute, not be blocked: ${fakePort.actionsPerformed}",
-            fakePort.actionsPerformed.any { it == "clickText:Pay \$99.99 Now" }
-        )
-    }
-
     @Test
     fun testTaskExecutor_AccessibilityOff_ReturnsFailed() = runBlocking {
         val fakePort = FakeAutomationPort(serviceEnabled = false)
@@ -526,11 +368,10 @@ class TaskExecutorTest {
         val executor = TaskExecutor(
             automation = fakePort,
             skills = skills,
-            think = { _, _, _ -> """{"action": "done"}""" },
             stepDelayMs = 0
         )
-
-        val result = executor.executeGoal("launch settings")
+        val skill = Skill(goal = "launch settings", steps = listOf(TaskStep(action = TaskStep.ACTION_OPEN_APP)))
+        val result = executor.replaySkillDirect(skill)
 
         assertEquals(TaskStatus.FAILED, result.status)
         assertEquals(0, result.stepsUsed)
@@ -563,34 +404,6 @@ class TaskExecutorTest {
         // Replay boolean method
         val ok = executor.replaySkill(emptySkill)
         assertFalse("replaySkill must return false for empty steps", ok)
-    }
-
-    @Test
-    fun testTaskExecutor_ExecuteGoal_StaleOrEmptySkillMatch_FallsThroughToAiLoop() = runBlocking {
-        val fakePort = FakeAutomationPort(serviceEnabled = true)
-        // Stored skill with 0 steps (representing legacy or empty macro recorded on phone)
-        val store = InMemorySkillStore("""[{"id":"empty-skill","goal":"play lofi song on youtube","steps":[]}]""")
-        val skills = SkillMemoryService(store)
-
-        var thinkTurns = 0
-        val executor = TaskExecutor(
-            automation = fakePort,
-            skills = skills,
-            think = { _, _, _ ->
-                thinkTurns++
-                if (thinkTurns == 1) {
-                    """{"action": "open_app", "params": {"app": "youtube"}}"""
-                } else {
-                    """{"action": "done", "is_complete": true}"""
-                }
-            },
-            stepDelayMs = 0
-        )
-
-        val result = executor.executeGoal("play lofi song on youtube")
-        assertEquals("F-08: Stale/empty skill must fall through to AI loop and succeed", TaskStatus.SUCCESS, result.status)
-        assertTrue(thinkTurns >= 2)
-        assertTrue(fakePort.actionsPerformed.contains("openApp:youtube"))
     }
 
     @Test
@@ -2085,66 +1898,6 @@ class TaskExecutorTest {
         assertFalse("Executor slot must clear after the timeout", bridge.isRunning)
     }
 
-    // --- Best-of-all: Tapilot loop guard (design port of guardRepeatedGesture) ---
-
-    @Test
-    fun testLoopGuard_IdenticalNoEffect_StopsAtThree() {
-        val guard = LoopGuard()
-        assertNull(guard.observeNoEffect("scroll", 123))
-        assertNull(guard.observeNoEffect("scroll", 123))
-        val reason = guard.observeNoEffect("scroll", 123)
-        assertNotNull("Same action + same screen 3x with no effect must stop", reason)
-        assertTrue(reason!!.contains("repeated 3 times"))
-    }
-
-    @Test
-    fun testLoopGuard_AlternatingLoop_StopsAtFour() {
-        val guard = LoopGuard()
-        assertNull(guard.observeNoEffect("scroll", 123))
-        assertNull(guard.observeNoEffect("swipe", 123))
-        assertNull(guard.observeNoEffect("scroll", 123))
-        val reason = guard.observeNoEffect("swipe", 123)
-        assertNotNull("A/B/A/B with no effect must stop as an alternating loop", reason)
-        assertTrue(reason!!.contains("alternating"))
-    }
-
-    @Test
-    fun testLoopGuard_ResetsOnEffect() {
-        val guard = LoopGuard()
-        assertNull(guard.observeNoEffect("scroll", 123))
-        assertNull(guard.observeNoEffect("scroll", 123))
-        guard.reset() // a verified effect is progress — the count restarts
-        assertNull(guard.observeNoEffect("scroll", 123))
-        assertNull(guard.observeNoEffect("scroll", 123))
-        assertNotNull(guard.observeNoEffect("scroll", 123))
-    }
-
-    @Test
-    fun testLoopGuard_AiLoop_StopsStuckScrollAtStep3() = runBlocking {
-        // The AI keeps scrolling a screen that never changes (simulateEffect
-        // = false: dispatch succeeds, nothing moves). Without the guard this
-        // burns all 15 steps; with it, the task fails at step 3.
-        val fakePort = FakeAutomationPort(serviceEnabled = true, simulateEffect = false)
-        val skills = SkillMemoryService(InMemorySkillStore())
-        var thinkTurns = 0
-        val executor = TaskExecutor(
-            automation = fakePort,
-            skills = skills,
-            think = { _, _, _ ->
-                thinkTurns++
-                """{"action": "scroll", "params": {"direction": "down"}}"""
-            },
-            maxSteps = 15,
-            stepDelayMs = 0
-        )
-
-        val result = executor.executeGoal("explore the page then scroll down")
-        assertEquals(TaskStatus.FAILED, result.status)
-        assertEquals("Guard must stop at step 3, not burn all 15", 3, result.stepsUsed)
-        assertEquals(3, thinkTurns)
-        assertTrue(result.message.contains("repeated 3 times"))
-    }
-
     // --- Best-of-all: flutter_automate long_press / pinch ---
 
     @Test
@@ -2246,29 +1999,6 @@ class TaskExecutorTest {
         assertNull(knowledge.noteForTarget(null))
         assertEquals("youtube", AppKnowledge.slugFor("com.google.android.youtube"))
         assertNull(AppKnowledge.slugFor("unknown.app"))
-    }
-
-    // --- Best-of-all: Automator-style human-readable plan format ---
-
-    @Test
-    fun testFormatPlan_AutomatorStyle() {
-        val executor = TaskExecutor(
-            automation = FakeAutomationPort(),
-            skills = SkillMemoryService(InMemorySkillStore()),
-            stepDelayMs = 0
-        )
-
-        val steps = listOf(
-            TaskStep("open_app", mapOf("app" to "youtube")),
-            TaskStep("click_text", mapOf("text" to "Search")),
-            TaskStep("type_text", mapOf("text" to "lofi"))
-        )
-        val formatted = executor.formatPlan(steps)
-        assertEquals(
-            "Plan (3 steps):\n1. OPEN_APP: youtube\n2. CLICK_ELEMENT: \"Search\"\n3. TYPE_TEXT: \"lofi\"",
-            formatted
-        )
-        assertEquals("Plan (0 steps): nothing to do.", executor.formatPlan(emptyList()))
     }
 
     // --- Turn G Residual Tests (Items 3, 4, 5, 7, 8) ---

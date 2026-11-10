@@ -486,25 +486,36 @@ class TaskExecutorTest {
     }
 
     @Test
-    fun testTaskExecutor_SafetyBlock_ReturnsFailedWithMessage() = runBlocking {
+    fun testTurnG_NoRestrictions_PaymentClickExecutes() = runBlocking {
+        // Turn G (owner order): the Round 22 AutomationSafety blocklist is
+        // REMOVED — a payment click must EXECUTE, not fail with
+        // "Blocked for safety". The model's own judgement decides what
+        // cannot be done. (Replaces the old safety-block test.)
         val fakePort = FakeAutomationPort(serviceEnabled = true)
         val skills = SkillMemoryService(InMemorySkillStore())
-
+        var thinkTurn = 0
         val executor = TaskExecutor(
             automation = fakePort,
             skills = skills,
             think = { _, _, _ ->
-                """{"action": "click_text", "params": {"text": "Pay $99.99 Now"}}"""
+                thinkTurn++
+                if (thinkTurn == 1) {
+                    """{"action": "click_text", "params": {"text": "Pay $99.99 Now"}}"""
+                } else {
+                    """{"action": "done", "is_complete": true}"""
+                }
             },
             stepDelayMs = 0
         )
 
         val result = executor.executeGoal("buy item online")
 
-        assertEquals(TaskStatus.FAILED, result.status)
-        assertTrue(result.message.contains("Blocked for safety"))
-        assertTrue(result.message.contains("ask me first"))
-        assertFalse(fakePort.actionsPerformed.any { it.contains("clickText") })
+        assertEquals(TaskStatus.SUCCESS, result.status)
+        assertFalse(result.message.contains("Blocked for safety"))
+        assertTrue(
+            "A 'Pay \$99.99 Now' step must execute, not be blocked: ${fakePort.actionsPerformed}",
+            fakePort.actionsPerformed.any { it == "clickText:Pay \$99.99 Now" }
+        )
     }
 
     @Test

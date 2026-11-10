@@ -249,7 +249,7 @@ class MiraGeminiSetupPayloadTest {
         val jsonTools = jsonObj.getJSONArray("tools")
         assertEquals(1, jsonTools.length())
         val jsonFuncDecls = jsonTools.getJSONObject(0).getJSONArray("functionDeclarations")
-        assertEquals(14, jsonFuncDecls.length())
+        assertEquals(17, jsonFuncDecls.length())
 
         // Live API requirement: google_search grounding must NOT be combined with function calling
         assertFalse("google_search grounding MUST NOT be in setup alongside function calling", jsonString.contains("google_search") || jsonString.contains("googleSearch"))

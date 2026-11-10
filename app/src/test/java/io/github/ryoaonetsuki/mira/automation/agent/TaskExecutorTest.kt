@@ -28,6 +28,10 @@ class TaskExecutorTest {
         // until this many getCurrentPackage() checks have passed — simulates
         // a cold app start (YouTube commonly 2-5s).
         var packageAppearAfterChecks: Int = 0,
+        // Turn G: when set, openApp replaces the screen with these nodes
+        // instead of mutating it — emptyList() simulates a blank/loading
+        // screen after the app opened.
+        var openAppScreenNodes: List<ScreenNode>? = null,
         var screenNodes: List<ScreenNode> = listOf(
             ScreenNode(
                 index = 0,
@@ -222,7 +226,11 @@ class TaskExecutorTest {
                 // start); the screen itself mutates immediately.
                 pendingPkg = launchedPkg
                 packageChecksSinceOpen = 0
-                mutateScreenState("opened:$launchedPkg")
+                if (openAppScreenNodes != null) {
+                    screenNodes = openAppScreenNodes!!
+                } else {
+                    mutateScreenState("opened:$launchedPkg")
+                }
             }
             return launchedPkg
         }
@@ -252,75 +260,61 @@ class TaskExecutorTest {
     }
 
     // =========================================================================
-    // 1. AutomationSafety Tests
+    // 1. Turn G — NO artificial action restrictions (owner override of the
+    // Round 22 Jarvis-port safety limits). The AutomationSafety blocklist is
+    // removed entirely: payment/delete/banking steps must EXECUTE, with the
+    // model's own judgement deciding what cannot be done. These tests prove
+    // the executor no longer refuses them.
     // =========================================================================
 
     @Test
-    fun testAutomationSafety_BlockedWords() {
-        val payStep = TaskStep(action = "click_text", params = mapOf("text" to "pay"))
-        assertNotNull(AutomationSafety.isBlocked(payStep, null))
+    fun testTurnG_NoRestrictions_PaymentAndDeleteStepsExecute() = runBlocking {
+        val fakePort = FakeAutomationPort(serviceEnabled = true)
+        val skills = SkillMemoryService(InMemorySkillStore())
+        var thinkTurn = 0
+        val executor = TaskExecutor(
+            automation = fakePort,
+            skills = skills,
+            think = { _, _, _ ->
+                thinkTurn++
+                if (thinkTurn == 1) {
+                    """{"action": "click_text", "params": {"text": "Confirm and Pay"}}"""
+                } else {
+                    """{"action": "done", "is_complete": true}"""
+                }
+            },
+            stepDelayMs = 0
+        )
 
-        val purchaseStep = TaskStep(action = "click_text", params = mapOf("text" to "confirm purchase"))
-        assertNotNull(AutomationSafety.isBlocked(purchaseStep, null))
-
-        val deleteStep = TaskStep(action = "click_text", params = mapOf("text" to "delete account"))
-        assertNotNull(AutomationSafety.isBlocked(deleteStep, null))
-
-        // Bangla blocked words
-        val paymentBangla = TaskStep(action = "click_text", params = mapOf("text" to "পেমেন্ট সম্পন্ন করুন"))
-        assertNotNull(AutomationSafety.isBlocked(paymentBangla, null))
-
-        val buyBangla = TaskStep(action = "click_text", params = mapOf("text" to "এখনই কিনুন"))
-        assertNotNull(AutomationSafety.isBlocked(buyBangla, null))
-
-        val deleteBangla1 = TaskStep(action = "click_text", params = mapOf("text" to "মুছুন"))
-        assertNotNull(AutomationSafety.isBlocked(deleteBangla1, null))
-
-        val deleteBangla2 = TaskStep(action = "click_text", params = mapOf("text" to "ডিলিট করুন"))
-        assertNotNull(AutomationSafety.isBlocked(deleteBangla2, null))
-
-        // "play song on youtube" must NOT be blocked
-        val safePlayStep = TaskStep(action = "click_text", params = mapOf("text" to "play song on youtube"))
-        assertNull(AutomationSafety.isBlocked(safePlayStep, null))
+        val result = executor.executeGoal("open mybankapp and confirm payment")
+        assertEquals(TaskStatus.SUCCESS, result.status)
+        assertTrue(
+            "A 'Confirm and Pay' step must execute, not be blocked: ${fakePort.actionsPerformed}",
+            fakePort.actionsPerformed.any { it == "clickText:Confirm and Pay" }
+        )
     }
 
     @Test
-    fun testAutomationSafety_BankingPackage() {
-        val clickStep = TaskStep(action = "click_text", params = mapOf("text" to "Send Money"))
-        val bkashBlocked = AutomationSafety.isBlocked(clickStep, "com.bkash")
-        assertNotNull(bkashBlocked)
+    fun testTurnG_NoRestrictions_BankingAppReplayExecutes() = runBlocking {
+        // A recorded skill inside a banking app replays — no package block.
+        val fakePort = FakeAutomationPort(
+            serviceEnabled = true,
+            currentPkg = "com.bkash"
+        )
+        val skills = SkillMemoryService(InMemorySkillStore())
+        val skill = Skill(
+            goal = "bkash send",
+            steps = listOf(
+                TaskStep(action = TaskStep.ACTION_CLICK_TEXT, params = mapOf("text" to "Send Money")),
+                TaskStep(action = TaskStep.ACTION_CLICK_TEXT, params = mapOf("text" to "Confirm"))
+            )
+        )
+        val executor = TaskExecutor(automation = fakePort, skills = skills, stepDelayMs = 0)
 
-        val backStep = TaskStep(action = "press_back")
-        val bkashBackAllowed = AutomationSafety.isBlocked(backStep, "com.bkash")
-        assertNull(bkashBackAllowed)
-
-        val homeStep = TaskStep(action = "press_home")
-        val nagadHomeAllowed = AutomationSafety.isBlocked(homeStep, "com.nagad")
-        assertNull(nagadHomeAllowed)
-
-        val waitStep = TaskStep(action = "wait", params = mapOf("ms" to 1000))
-        val rocketWaitAllowed = AutomationSafety.isBlocked(waitStep, "com.rocket")
-        assertNull(rocketWaitAllowed)
-
-        val doneStep = TaskStep(action = "done")
-        val walletDoneAllowed = AutomationSafety.isBlocked(doneStep, "com.google.android.apps.walletnfcrel")
-        assertNull(walletDoneAllowed)
-
-        // Unknown package allows normal clicks
-        val normalAllowed = AutomationSafety.isBlocked(clickStep, "com.example.newsapp")
-        assertNull(normalAllowed)
-    }
-
-    @Test
-    fun testAutomationSafety_ConfirmAndSensitiveActions() {
-        val confirmPay = TaskStep(action = "click_text", params = mapOf("text" to "Confirm and Pay"))
-        assertNotNull(AutomationSafety.isBlocked(confirmPay, null))
-
-        val confirmPurchase = TaskStep(action = "click_text", params = mapOf("text" to "Confirm purchase now"))
-        assertNotNull(AutomationSafety.isBlocked(confirmPurchase, null))
-
-        val confirmDelete = TaskStep(action = "click_text", params = mapOf("text" to "Confirm delete"))
-        assertNotNull(AutomationSafety.isBlocked(confirmDelete, null))
+        val result = executor.replaySkillDirect(skill)
+        assertEquals(TaskStatus.SUCCESS, result.status)
+        assertTrue(fakePort.actionsPerformed.contains("clickText:Send Money"))
+        assertTrue(fakePort.actionsPerformed.contains("clickText:Confirm"))
     }
 
     // =========================================================================
@@ -893,10 +887,10 @@ class TaskExecutorTest {
             stepDelayMs = 0
         )
 
-        // Turn F(d): a screenshot is paid ONLY when the previous step had no
-        // effect AND the text description is insufficient.
-        // 1. Empty nodes + previous step had effect -> false (step-1 hint text suffices)
-        assertFalse(executor.shouldAttachScreenshot(emptyList(), lastStepHadNoEffect = false))
+        // Turn G: the agent must SEE the screen at decision points.
+        // 1. Empty nodes -> TRUE (pixels are the only signal; the old rule
+        //    waited for a failed step first and decided blind on step 1).
+        assertTrue(executor.shouldAttachScreenshot(emptyList(), lastStepHadNoEffect = false))
         // 2. Empty nodes + previous step had NO effect -> true
         assertTrue(executor.shouldAttachScreenshot(emptyList(), lastStepHadNoEffect = true))
 
@@ -941,6 +935,192 @@ class TaskExecutorTest {
         assertEquals(TaskStatus.SUCCESS, result.status)
         assertEquals("First AI step on an unlabeled screen must use text-only think", 1, visionThinkTurns)
         assertTrue("thinkWithVision must be invoked on the step after a no-effect step on an unlabeled screen", visionCalled)
+    }
+
+    @Test
+    fun testTurnG_ScreenshotAfterOpenApp_AndPlanVision() = runBlocking {
+        val labeledNodes = listOf(
+            ScreenNode(0, "Home", "Home button", "android.widget.Button", "", isClickable = true, isEditable = false, isScrollable = false, isCheckable = false, isEnabled = true, 0, 0, 10, 10, 5, 5)
+        )
+        val probe = TaskExecutor(
+            automation = FakeAutomationPort(serviceEnabled = true),
+            skills = SkillMemoryService(InMemorySkillStore()),
+            stepDelayMs = 0
+        )
+        // (a) Just opened an app: the next decision MUST see the home screen,
+        // even when the node text looks sufficient.
+        assertTrue(
+            "After open_app the next decision must attach a screenshot",
+            probe.shouldAttachScreenshot(labeledNodes, lastStepHadNoEffect = false, lastStepWasOpenApp = true)
+        )
+        // (b) No open, no failure, labeled screen: still text-only (no tax).
+        assertFalse(
+            probe.shouldAttachScreenshot(labeledNodes, lastStepHadNoEffect = false, lastStepWasOpenApp = false)
+        )
+
+        // (c) End-to-end: after an open_app step, the NEXT decision routes
+        // through thinkWithVision (the agent looks at the new home screen).
+        val fakePort = FakeAutomationPort(serviceEnabled = true)
+        val skills = SkillMemoryService(InMemorySkillStore())
+        var textTurns = 0
+        var visionTurns = 0
+        val executor = TaskExecutor(
+            automation = fakePort,
+            skills = skills,
+            think = { _, _, _ ->
+                textTurns++
+                """{"action": "open_app", "params": {"app": "youtube"}}"""
+            },
+            thinkWithVision = { _, _, _, bytes ->
+                visionTurns++
+                assertTrue(bytes.isNotEmpty())
+                """{"action": "done", "is_complete": true}"""
+            },
+            stepDelayMs = 0
+        )
+        val result = executor.executeGoal("open youtube and play lofi")
+        assertEquals(TaskStatus.SUCCESS, result.status)
+        assertEquals("Exactly one text think (the open_app decision)", 1, textTurns)
+        assertEquals("The decision after open_app must use vision", 1, visionTurns)
+    }
+
+    @Test
+    fun testTurnG_PlanOnce_UsesVisionWhenScreenshotAvailable() = runBlocking {
+        // (a) Screenshot available: the vision planner decides, text planner untouched.
+        val fakePort = FakeAutomationPort(serviceEnabled = true)
+        val skills = SkillMemoryService(InMemorySkillStore())
+        var visionPlanCalls = 0
+        var textPlanCalls = 0
+        val executor = TaskExecutor(
+            automation = fakePort,
+            skills = skills,
+            think = { _, _, _ -> """{"action": "done", "is_complete": true}""" },
+            plan = { _, _ ->
+                textPlanCalls++
+                """{"steps": [{"action": "open_app", "params": {"app": "youtube"}}]}"""
+            },
+            planWithVision = { _, _, bytes ->
+                visionPlanCalls++
+                assertTrue("Vision planner must receive screenshot bytes", bytes.isNotEmpty())
+                """{"steps": [{"action": "open_app", "params": {"app": "youtube"}}]}"""
+            },
+            stepDelayMs = 0
+        )
+        val first = executor.executeGoal("open youtube and play lofi")
+        assertEquals(TaskStatus.SUCCESS, first.status)
+        assertEquals("Plan-once must use the vision planner when a screenshot exists", 1, visionPlanCalls)
+        assertEquals("Text planner must not run when vision planned", 0, textPlanCalls)
+
+        // (b) No screenshot (service not ready): falls back to the text planner.
+        val noShotPort = FakeAutomationPort(serviceEnabled = true, screenshotBytes = null)
+        val noShotSkills = SkillMemoryService(InMemorySkillStore())
+        var fallbackVisionCalls = 0
+        var fallbackTextCalls = 0
+        val fallbackExecutor = TaskExecutor(
+            automation = noShotPort,
+            skills = noShotSkills,
+            think = { _, _, _ -> """{"action": "done", "is_complete": true}""" },
+            plan = { _, _ ->
+                fallbackTextCalls++
+                """{"steps": [{"action": "open_app", "params": {"app": "youtube"}}]}"""
+            },
+            planWithVision = { _, _, _ ->
+                fallbackVisionCalls++
+                """{"steps": []}"""
+            },
+            stepDelayMs = 0
+        )
+        val second = fallbackExecutor.executeGoal("open youtube and play lofi")
+        assertEquals(TaskStatus.SUCCESS, second.status)
+        assertEquals("No screenshot must fall back to the text planner", 1, fallbackTextCalls)
+        assertEquals("Vision planner must not run without a screenshot", 0, fallbackVisionCalls)
+    }
+
+    @Test
+    fun testTurnG_OpenAppTargetReached_WrongPackageIsFailure() {
+        val step = TaskStep(action = TaskStep.ACTION_OPEN_APP, params = mapOf("app" to "whatsapp"))
+        // Chrome opening after a WhatsApp request used to count as success
+        // (any package change). Only the target app counts now.
+        assertFalse(
+            "Chrome is not WhatsApp — a wrong package must fail",
+            TaskExecutor.openAppTargetReached(step, "io.github.ryoaonetsuki.mira", "com.android.chrome")
+        )
+        assertFalse(
+            "No package change to the wrong app must fail",
+            TaskExecutor.openAppTargetReached(step, "com.android.chrome", "com.android.chrome")
+        )
+        assertTrue(
+            "The target package itself counts",
+            TaskExecutor.openAppTargetReached(step, "io.github.ryoaonetsuki.mira", "com.whatsapp")
+        )
+        assertTrue(
+            "WhatsApp Business (alias) counts as the target",
+            TaskExecutor.openAppTargetReached(step, "io.github.ryoaonetsuki.mira", "com.whatsapp.w4b")
+        )
+        assertTrue(
+            "Already in the target app counts as success",
+            TaskExecutor.openAppTargetReached(step, "com.whatsapp", "com.whatsapp")
+        )
+        val miraStep = TaskStep(action = TaskStep.ACTION_OPEN_APP, params = mapOf("app" to "facebook"))
+        assertFalse(
+            "Landing back on Mira itself is not the target app",
+            TaskExecutor.openAppTargetReached(miraStep, "com.facebook.katana", "io.github.ryoaonetsuki.mira")
+        )
+    }
+
+    @Test
+    fun testTurnG_DirectSearch_KnownAppNeverRoutesToWebSearch() = runBlocking {
+        val fakePort = FakeAutomationPort(serviceEnabled = true)
+        val skills = SkillMemoryService(InMemorySkillStore())
+        val executor = TaskExecutor(
+            automation = fakePort,
+            skills = skills,
+            think = { _, _, _ -> """{"action": "done", "is_complete": true}""" },
+            plan = { _, _ -> """{"done": true}""" },
+            stepDelayMs = 0
+        )
+
+        // "search lofi on whatsapp": the app must open; Chrome must NOT.
+        val result = executor.executeGoal("search lofi on whatsapp")
+        assertEquals(TaskStatus.SUCCESS, result.status)
+        assertTrue(
+            "WhatsApp itself must open: ${fakePort.actionsPerformed}",
+            fakePort.actionsPerformed.contains("openApp:com.whatsapp")
+        )
+        assertTrue(
+            "No web search may open for a named-app search: ${fakePort.actionsPerformed}",
+            fakePort.actionsPerformed.none { it.startsWith("openUrl:") }
+        )
+    }
+
+    @Test
+    fun testTurnG_DirectOpenApp_BlankScreenIsFailureNotSuccess() = runBlocking {
+        val fakePort = FakeAutomationPort(
+            serviceEnabled = true,
+            openAppScreenNodes = emptyList()
+        )
+        val skills = SkillMemoryService(InMemorySkillStore())
+        val thinkCalls = mutableListOf<String>()
+        val executor = directExecutor(fakePort, skills, thinkCalls)
+
+        val result = executor.executeGoal("open youtube")
+        assertEquals(
+            "A matching package with a blank screen is still loading, not done",
+            TaskStatus.FAILED, result.status
+        )
+        assertTrue("Failure must say the screen is blank", result.message.contains("still blank"))
+    }
+
+    @Test
+    fun testTurnG_BrowserAndDialerPackageChecks() {
+        assertTrue(TaskExecutor.isBrowserPackage("com.android.chrome"))
+        assertTrue(TaskExecutor.isBrowserPackage("org.mozilla.firefox"))
+        assertFalse(TaskExecutor.isBrowserPackage("com.google.android.youtube"))
+        assertFalse(TaskExecutor.isBrowserPackage("com.whatsapp"))
+        assertTrue(TaskExecutor.isDialerPackage("com.google.android.dialer"))
+        assertTrue(TaskExecutor.isDialerPackage("com.samsung.android.dialer"))
+        assertFalse(TaskExecutor.isDialerPackage("com.android.chrome"))
+        assertFalse(TaskExecutor.isDialerPackage("com.whatsapp"))
     }
 
     // =========================================================================

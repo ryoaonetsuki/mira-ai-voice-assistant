@@ -100,6 +100,10 @@ data class TaskStep(
     const val ACTION_OPEN_APP: String = "open_app"
     const val ACTION_WAIT: String = "wait"
     const val ACTION_DONE: String = "done"
+    // Best-of-all (flutter_automate GestureEngine, MIT): long-press and
+    // two-finger pinch were the two gesture primitives Mira lacked.
+    const val ACTION_LONG_PRESS: String = "long_press"
+    const val ACTION_PINCH: String = "pinch"
 
     // Lowercase constant aliases matching Dart naming conventions
     const val actionClickText: String = ACTION_CLICK_TEXT
@@ -113,6 +117,8 @@ data class TaskStep(
     const val actionOpenApp: String = ACTION_OPEN_APP
     const val actionWait: String = ACTION_WAIT
     const val actionDone: String = ACTION_DONE
+    const val actionLongPress: String = ACTION_LONG_PRESS
+    const val actionPinch: String = ACTION_PINCH
 
     val supportedActions: Set<String> = setOf(
       ACTION_CLICK_TEXT,
@@ -125,7 +131,9 @@ data class TaskStep(
       ACTION_PRESS_HOME,
       ACTION_OPEN_APP,
       ACTION_WAIT,
-      ACTION_DONE
+      ACTION_DONE,
+      ACTION_LONG_PRESS,
+      ACTION_PINCH
     )
 
     fun fromJson(json: JSONObject): TaskStep {
@@ -201,6 +209,22 @@ data class TaskStep(
         rawAction = ACTION_PRESS_BACK
       } else if (rawAction == "home") {
         rawAction = ACTION_PRESS_HOME
+      } else if (rawAction == "long_press" || rawAction == "longpress" ||
+          rawAction == "long_click" || rawAction == "longclick" ||
+          rawAction == "press_and_hold" || rawAction == "hold") {
+        rawAction = ACTION_LONG_PRESS
+      } else if (rawAction == "pinch" || rawAction == "pinch_in" || rawAction == "pinch_out" ||
+          rawAction == "pinchin" || rawAction == "pinchout" ||
+          rawAction == "zoom_in" || rawAction == "zoom_out" ||
+          rawAction == "zoomin" || rawAction == "zoomout") {
+        // Normalise the direction into params["direction"]: "in" | "out".
+        val direction = when (rawAction) {
+          "pinch_in", "pinchin", "zoom_in", "zoomin" -> "in"
+          "pinch_out", "pinchout", "zoom_out", "zoomout" -> "out"
+          else -> params["zoom"]?.toString() ?: params["direction"]?.toString() ?: "in"
+        }
+        rawAction = ACTION_PINCH
+        if (!params.containsKey("direction")) params["direction"] = direction
       } else if (rawAction == "finish" ||
           rawAction == "complete" ||
           rawAction == "completed" ||

@@ -80,7 +80,7 @@ class MiraAutomationBridge(
         if (current.isPaused) {
             return true
         }
-        val elapsed = current.activeElapsedMs()
+        val elapsed = ((clockMs() - runningSinceMs) - current.pausedDurationMs()).coerceAtLeast(0L)
         if (elapsed > taskTimeoutMs) {
             current.cancel()
             activeExecutor = null
@@ -93,8 +93,11 @@ class MiraAutomationBridge(
 
     private fun buildAlreadyRunningMessageLocked(): String {
         val goal = runningGoal ?: "unknown"
-        val elapsed = activeExecutor?.activeElapsedMs()
-            ?: if (runningSinceMs > 0L) (clockMs() - runningSinceMs).coerceAtLeast(0L) else 0L
+        val elapsed = if (runningSinceMs > 0L) {
+            ((clockMs() - runningSinceMs) - (activeExecutor?.pausedDurationMs() ?: 0L)).coerceAtLeast(0L)
+        } else {
+            0L
+        }
         val elapsedSec = elapsed / 1000L
         return "Another task is already running (\"$goal\", ${elapsedSec}s elapsed)"
     }

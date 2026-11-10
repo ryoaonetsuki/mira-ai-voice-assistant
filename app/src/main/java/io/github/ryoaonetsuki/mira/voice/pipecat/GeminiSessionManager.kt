@@ -57,6 +57,9 @@ interface SessionManagerListener {
      */
     fun onSessionResumed(resumed: Boolean) {}
     fun onFunctionCall(id: String, name: String, args: Value.Array, rawArgs: Map<String, String> = emptyMap()) {}
+    fun onFunctionCall(id: String, name: String, args: Value.Array, rawArgs: Map<String, String>, typedArgs: Map<String, Any?>) {
+        onFunctionCall(id, name, args, rawArgs)
+    }
 }
 
 /**
@@ -252,6 +255,7 @@ class GeminiSessionManager(
             languageCode = language,
             systemInstructionText = systemPrompt,
             resumptionHandle = resumptionHandle,
+            tools = MiraGeminiServiceOptions.defaultPhoneTools(),
             echoGuardEnabled = echoGuardEnabled
         )
     }
@@ -466,11 +470,17 @@ class GeminiSessionManager(
                 listener.onModelTranscript(text)
             }
 
-            override fun onFunctionCall(id: String, name: String, args: Value.Array, rawArgs: Map<String, String>) {
+            override fun onFunctionCall(
+                id: String,
+                name: String,
+                args: Value.Array,
+                rawArgs: Map<String, String>,
+                typedArgs: Map<String, Any?>
+            ) {
                 if (epoch != currentEpoch.get()) return
                 activeFunctionCalls.incrementAndGet()
                 Log.i(TAG, "MIRA_LIVE_VOICE: Function call received: $name (id: $id)")
-                listener.onFunctionCall(id, name, args, rawArgs)
+                listener.onFunctionCall(id, name, args, rawArgs, typedArgs)
             }
         }
 

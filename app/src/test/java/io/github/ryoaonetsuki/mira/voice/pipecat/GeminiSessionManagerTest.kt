@@ -1019,4 +1019,42 @@ class GeminiSessionManagerTest {
         val sessionResumption = modelConfigObj.value["sessionResumption"] as Value.Object
         assertFalse("Fresh fallback session must NOT carry a handle", sessionResumption.value.containsKey("handle"))
     }
+
+    @Test
+    fun test25_Stage4Watchdog_DoesNotBurnHandleOnSilence() = runTest {
+        val manager = createManager(this)
+        manager.startSession()
+        runCurrent()
+        val client1 = fakeFactory.createdClients[0]
+        store.saveHandle("handle_must_survive_stage4_silence")
+
+        // WebSocket opens -> CONFIGURING -> starts 15s stage4 watchdog
+        client1.sessionListener.onWebSocketOpen()
+        runCurrent()
+        assertEquals(SessionManagerState.CONFIGURING, manager.state.value)
+
+        // Advance 15s: stage-4 silence timeout triggers
+        advanceTimeBy(15_000L)
+        runCurrent()
+
+        // Turn G: Slow server silence must NOT burn the handle
+        assertEquals(
+            "Resumption handle must survive stage-4 silence timeout",
+            "handle_must_survive_stage4_silence",
+            store.getHandle()
+        )
+
+        // Wait for reconnect delay
+        advanceTimeBy(1_000L)
+        runCurrent()
+        assertEquals(2, fakeFactory.createdClients.size)
+        val client2 = fakeFactory.createdClients[1]
+        val modelConfigObj = client2.options.modelConfig as Value.Object
+        val sessionResumption = modelConfigObj.value["sessionResumption"] as Value.Object
+        assertEquals(
+            "Next attempt must still carry the preserved handle",
+            Value.String("handle_must_survive_stage4_silence"),
+            sessionResumption.value["handle"]
+        )
+    }
 }

@@ -319,7 +319,7 @@ class GeminiRestClientTest {
         assertEquals(
             "Production think client must bound a hung call at 40s, inside the 45s think deadline",
             40_000,
-            restClient.thinkClient.callTimeoutMillis()
+            restClient.thinkClient.callTimeoutMillis
         )
         assertEquals(
             "Automation think model must be the fastest suitable model",

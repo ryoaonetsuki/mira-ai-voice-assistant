@@ -294,6 +294,7 @@ class JarvisExtrasTest {
         val skill = Skill(
             goal = "bridge test",
             steps = listOf(
+                TaskStep(TaskStep.ACTION_WAIT, mapOf("ms" to 3000)),
                 TaskStep(TaskStep.ACTION_OPEN_APP, mapOf("app" to "com.test.app")),
                 TaskStep(TaskStep.ACTION_OPEN_APP, mapOf("app" to "com.test.app"))
             )
@@ -303,7 +304,7 @@ class JarvisExtrasTest {
             bridge.executeSkill(skill)
         }
 
-        while (execRef == null) {
+        while (execRef == null || !bridge.isRunning) {
             delay(10L)
         }
 

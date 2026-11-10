@@ -96,6 +96,9 @@ data class TaskStep(
 
   companion object {
     const val ACTION_CLICK_TEXT: String = "click_text"
+    const val ACTION_CLICK_NUMBER: String = "click_number"
+    const val ACTION_SHOW_NUMBERS: String = "show_numbers"
+    const val ACTION_HIDE_NUMBERS: String = "hide_numbers"
     const val ACTION_CLICK_AT: String = "click_at"
     const val ACTION_TYPE_TEXT: String = "type_text"
     const val ACTION_PRESS_ENTER: String = "press_enter"
@@ -113,6 +116,9 @@ data class TaskStep(
 
     // Lowercase constant aliases matching Dart naming conventions
     const val actionClickText: String = ACTION_CLICK_TEXT
+    const val actionClickNumber: String = ACTION_CLICK_NUMBER
+    const val actionShowNumbers: String = ACTION_SHOW_NUMBERS
+    const val actionHideNumbers: String = ACTION_HIDE_NUMBERS
     const val actionClickAt: String = ACTION_CLICK_AT
     const val actionTypeText: String = ACTION_TYPE_TEXT
     const val actionPressEnter: String = ACTION_PRESS_ENTER
@@ -128,6 +134,9 @@ data class TaskStep(
 
     val supportedActions: Set<String> = setOf(
       ACTION_CLICK_TEXT,
+      ACTION_CLICK_NUMBER,
+      ACTION_SHOW_NUMBERS,
+      ACTION_HIDE_NUMBERS,
       ACTION_CLICK_AT,
       ACTION_TYPE_TEXT,
       ACTION_PRESS_ENTER,
@@ -162,7 +171,18 @@ data class TaskStep(
       }
 
       // Normalize action aliases commonly produced by various LLM models
-      if (rawAction == "open" ||
+      if (rawAction == "show_numbers" || rawAction == "show numbers") {
+        rawAction = ACTION_SHOW_NUMBERS
+      } else if (rawAction == "hide_numbers" || rawAction == "hide numbers") {
+        rawAction = ACTION_HIDE_NUMBERS
+      } else if (rawAction == "click_number" || rawAction == "tap_number") {
+        rawAction = ACTION_CLICK_NUMBER
+        val numVal = params["number"] ?: params["text"] ?: params["label"] ?: params["target"] ?: params["name"] ?: params["value"] ?: json.opt("number") ?: json.opt("text") ?: json.opt("label")
+        val parsedNum = numVal?.let { parseNumericTarget(it.toString()) }
+        if (parsedNum != null) {
+          params["number"] = parsedNum
+        }
+      } else if (rawAction == "open" ||
           rawAction == "launch" ||
           rawAction == "start" ||
           rawAction == "launch_app" ||
@@ -180,41 +200,50 @@ data class TaskStep(
           rawAction == "tap" ||
           rawAction == "press" ||
           rawAction == "touch") {
-        val hasLabel = params.containsKey("text") || params.containsKey("label") ||
-            params.containsKey("target") || params.containsKey("name") ||
-            json.opt("text") != null || json.opt("label") != null
-        if (hasLabel) {
-          rawAction = ACTION_CLICK_TEXT
-          if (!params.containsKey("text")) {
-            params["text"] = params["label"]
-              ?: params["target"]
-              ?: params["name"]
-              ?: params["value"]
-              ?: json.opt("text")
-              ?: json.opt("label")
-              ?: ""
-          }
-          if (!params.containsKey("fallbackX") && !params.containsKey("x")) {
-            val fx = json.opt("fallbackX") ?: json.opt("x")
-            if (fx != null && fx != JSONObject.NULL) params["fallbackX"] = fx
-          }
-          if (!params.containsKey("fallbackY") && !params.containsKey("y")) {
-            val fy = json.opt("fallbackY") ?: json.opt("y")
-            if (fy != null && fy != JSONObject.NULL) params["fallbackY"] = fy
-          }
-        } else if (params.containsKey("x") || params.containsKey("y") || params.containsKey("coordinates")) {
-          rawAction = ACTION_CLICK_AT
-        } else if (params.containsKey("app")) {
-          rawAction = ACTION_OPEN_APP
+        val labelVal = params["text"] ?: params["label"] ?:
+            params["target"] ?: params["name"] ?: params["value"] ?:
+            json.opt("text") ?: json.opt("label")
+        val numericNum = labelVal?.let { parseNumericTarget(it.toString()) }
+        if (numericNum != null) {
+          rawAction = ACTION_CLICK_NUMBER
+          params["number"] = numericNum
         } else {
-          rawAction = ACTION_CLICK_TEXT
-          if (!params.containsKey("text")) {
-            params["text"] = params["label"]
-              ?: params["target"]
-              ?: params["name"]
-              ?: params["value"]
-              ?: json.opt("text")
-              ?: ""
+          val hasLabel = params.containsKey("text") || params.containsKey("label") ||
+              params.containsKey("target") || params.containsKey("name") ||
+              json.opt("text") != null || json.opt("label") != null
+          if (hasLabel) {
+            rawAction = ACTION_CLICK_TEXT
+            if (!params.containsKey("text")) {
+              params["text"] = params["label"]
+                ?: params["target"]
+                ?: params["name"]
+                ?: params["value"]
+                ?: json.opt("text")
+                ?: json.opt("label")
+                ?: ""
+            }
+            if (!params.containsKey("fallbackX") && !params.containsKey("x")) {
+              val fx = json.opt("fallbackX") ?: json.opt("x")
+              if (fx != null && fx != JSONObject.NULL) params["fallbackX"] = fx
+            }
+            if (!params.containsKey("fallbackY") && !params.containsKey("y")) {
+              val fy = json.opt("fallbackY") ?: json.opt("y")
+              if (fy != null && fy != JSONObject.NULL) params["fallbackY"] = fy
+            }
+          } else if (params.containsKey("x") || params.containsKey("y") || params.containsKey("coordinates")) {
+            rawAction = ACTION_CLICK_AT
+          } else if (params.containsKey("app")) {
+            rawAction = ACTION_OPEN_APP
+          } else {
+            rawAction = ACTION_CLICK_TEXT
+            if (!params.containsKey("text")) {
+              params["text"] = params["label"]
+                ?: params["target"]
+                ?: params["name"]
+                ?: params["value"]
+                ?: json.opt("text")
+                ?: ""
+            }
           }
         }
       } else if (rawAction == "type" ||
@@ -403,6 +432,14 @@ data class TaskStep(
             .replace(Regex("""^["'\[\(]+|["'\]\)]+$"""), "")
             .trim()
           if (target.isNotEmpty() && target.length < 50) {
+            val targetNum = parseNumericTarget(target)
+            if (targetNum != null) {
+              return TaskStep(
+                action = ACTION_CLICK_NUMBER,
+                params = mapOf("number" to targetNum),
+                reasoning = "Extracted action: click number $targetNum"
+              )
+            }
             return TaskStep(
               action = ACTION_CLICK_TEXT,
               params = mapOf("text" to target),
@@ -430,6 +467,26 @@ data class TaskStep(
       }
 
       return null
+    }
+
+    private fun parseNumericTarget(raw: String): Int? {
+      var s = raw.trim()
+      if (s.startsWith("number", ignoreCase = true)) {
+        s = s.substring(6).trim()
+      } else if (s.startsWith("#")) {
+        s = s.substring(1).trim()
+      }
+      if (s.isEmpty()) return null
+      val sb = StringBuilder()
+      for (ch in s) {
+        when (ch) {
+          in '0'..'9' -> sb.append(ch)
+          in '\u0966'..'\u096F' -> sb.append((ch - '\u0966' + '0'.code).toChar())
+          in '\u09E6'..'\u09EF' -> sb.append((ch - '\u09E6' + '0'.code).toChar())
+          else -> return null
+        }
+      }
+      return sb.toString().toIntOrNull()
     }
   }
 }

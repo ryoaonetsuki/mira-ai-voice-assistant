@@ -71,13 +71,55 @@ class LiveCallStateStore(context: Context) {
     )
 
     fun setCallActive(active: Boolean) {
-        prefs.edit().putBoolean(KEY_CALL_ACTIVE, active).apply()
+        val editor = prefs.edit().putBoolean(KEY_CALL_ACTIVE, active)
+        if (!active) {
+            editor.remove(KEY_VOICE_NAME)
+                .remove(KEY_LANGUAGE)
+                .remove(KEY_LAST_GOAL)
+        }
+        editor.apply()
     }
 
     fun isCallActive(): Boolean = prefs.getBoolean(KEY_CALL_ACTIVE, false)
 
+    fun setVoiceName(voice: String?) {
+        val editor = prefs.edit()
+        if (voice == null) editor.remove(KEY_VOICE_NAME) else editor.putString(KEY_VOICE_NAME, voice)
+        editor.apply()
+    }
+
+    fun getVoiceName(): String? = prefs.getString(KEY_VOICE_NAME, null)
+
+    fun setLanguage(language: String?) {
+        val editor = prefs.edit()
+        if (language == null) editor.remove(KEY_LANGUAGE) else editor.putString(KEY_LANGUAGE, language)
+        editor.apply()
+    }
+
+    fun getLanguage(): String? = prefs.getString(KEY_LANGUAGE, null)
+
+    fun setLastGoal(goal: String?) {
+        val editor = prefs.edit()
+        if (goal == null) editor.remove(KEY_LAST_GOAL) else editor.putString(KEY_LAST_GOAL, goal)
+        editor.apply()
+    }
+
+    fun getLastGoal(): String? = prefs.getString(KEY_LAST_GOAL, null)
+
+    fun clear() {
+        prefs.edit()
+            .putBoolean(KEY_CALL_ACTIVE, false)
+            .remove(KEY_VOICE_NAME)
+            .remove(KEY_LANGUAGE)
+            .remove(KEY_LAST_GOAL)
+            .apply()
+    }
+
     companion object {
         const val PREFS_NAME = "mira_live_call"
         const val KEY_CALL_ACTIVE = "call_active"
+        const val KEY_VOICE_NAME = "call_voice_name"
+        const val KEY_LANGUAGE = "call_language"
+        const val KEY_LAST_GOAL = "call_last_goal"
     }
 }

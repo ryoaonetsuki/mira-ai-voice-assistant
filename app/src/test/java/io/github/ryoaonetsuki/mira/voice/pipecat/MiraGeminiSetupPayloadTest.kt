@@ -94,7 +94,7 @@ class MiraGeminiSetupPayloadTest {
     }
 
     @Test
-    fun testSetupPayload_ToolsKeyPresent_DeclaresOpenApp() {
+    fun testSetupPayload_ToolsKeyPresent_DeclaresAllTools() {
         val modelConfig = buildPipecatModelConfig(
             model = "models/gemini-3.8-live",
             voiceName = "Aoede",
@@ -111,27 +111,85 @@ class MiraGeminiSetupPayloadTest {
         assertNotNull("tools[0] must be Value.Object", toolDeclObj)
         val funcDecls = toolDeclObj!!.value["functionDeclarations"] as? Value.Array
         assertNotNull("functionDeclarations must be present", funcDecls)
-        assertTrue("functionDeclarations must not be empty", funcDecls!!.value.isNotEmpty())
+        assertEquals("Must declare all 10 phone tools", 10, funcDecls!!.value.size)
 
-        val openAppDecl = funcDecls.value.firstOrNull {
-            val name = (it as? Value.Object)?.value?.get("name") as? Value.Str
-            name?.value == "open_app"
-        } as? Value.Object
-        assertNotNull("open_app function declaration MUST be declared", openAppDecl)
+        val declaredNames = funcDecls.value.mapNotNull {
+            ((it as? Value.Object)?.value?.get("name") as? Value.Str)?.value
+        }
+        val expectedTools = listOf(
+            "open_app",
+            "click_text",
+            "type_text",
+            "scroll",
+            "press_back",
+            "press_home",
+            "wait",
+            "get_screen",
+            "web_search",
+            "run_connector_command"
+        )
+        assertEquals("Declared tools list must match expected", expectedTools, declaredNames)
 
-        val params = openAppDecl!!.value["parameters"] as? Value.Object
-        assertNotNull("parameters must be present", params)
-        assertEquals(Value.Str("OBJECT"), params!!.value["type"])
+        // Verify open_app
+        val openAppDecl = funcDecls.value.first {
+            ((it as? Value.Object)?.value?.get("name") as? Value.Str)?.value == "open_app"
+        } as Value.Object
+        val openAppParams = openAppDecl.value["parameters"] as Value.Object
+        assertEquals(Value.Str("OBJECT"), openAppParams.value["type"])
+        val openAppProps = openAppParams.value["properties"] as Value.Object
+        assertNotNull(openAppProps.value["app"])
+        val openAppReq = openAppParams.value["required"] as Value.Array
+        assertTrue(openAppReq.value.contains(Value.Str("app")))
 
-        val properties = params.value["properties"] as? Value.Object
-        assertNotNull("properties must exist", properties)
-        val appProp = properties!!.value["app"] as? Value.Object
-        assertNotNull("app property must exist", appProp)
-        assertEquals(Value.Str("STRING"), appProp!!.value["type"])
+        // Verify click_text
+        val clickTextDecl = funcDecls.value.first {
+            ((it as? Value.Object)?.value?.get("name") as? Value.Str)?.value == "click_text"
+        } as Value.Object
+        val clickTextParams = clickTextDecl.value["parameters"] as Value.Object
+        val clickTextProps = clickTextParams.value["properties"] as Value.Object
+        assertEquals(Value.Str("STRING"), (clickTextProps.value["text"] as Value.Object).value["type"])
+        assertEquals(Value.Str("NUMBER"), (clickTextProps.value["x"] as Value.Object).value["type"])
+        assertEquals(Value.Str("NUMBER"), (clickTextProps.value["y"] as Value.Object).value["type"])
+        val clickTextReq = clickTextParams.value["required"] as Value.Array
+        assertTrue(clickTextReq.value.contains(Value.Str("text")))
 
-        val required = params.value["required"] as? Value.Array
-        assertNotNull("required parameters must exist", required)
-        assertTrue("app must be in required params", required!!.value.contains(Value.Str("app")))
+        // Verify type_text
+        val typeTextDecl = funcDecls.value.first {
+            ((it as? Value.Object)?.value?.get("name") as? Value.Str)?.value == "type_text"
+        } as Value.Object
+        val typeTextParams = typeTextDecl.value["parameters"] as Value.Object
+        val typeTextProps = typeTextParams.value["properties"] as Value.Object
+        assertEquals(Value.Str("STRING"), (typeTextProps.value["text"] as Value.Object).value["type"])
+        val typeTextReq = typeTextParams.value["required"] as Value.Array
+        assertTrue(typeTextReq.value.contains(Value.Str("text")))
+
+        // Verify scroll
+        val scrollDecl = funcDecls.value.first {
+            ((it as? Value.Object)?.value?.get("name") as? Value.Str)?.value == "scroll"
+        } as Value.Object
+        val scrollParams = scrollDecl.value["parameters"] as Value.Object
+        val scrollProps = scrollParams.value["properties"] as Value.Object
+        assertEquals(Value.Str("STRING"), (scrollProps.value["direction"] as Value.Object).value["type"])
+
+        // Verify web_search
+        val webSearchDecl = funcDecls.value.first {
+            ((it as? Value.Object)?.value?.get("name") as? Value.Str)?.value == "web_search"
+        } as Value.Object
+        val webSearchParams = webSearchDecl.value["parameters"] as Value.Object
+        val webSearchProps = webSearchParams.value["properties"] as Value.Object
+        assertEquals(Value.Str("STRING"), (webSearchProps.value["query"] as Value.Object).value["type"])
+        val webSearchReq = webSearchParams.value["required"] as Value.Array
+        assertTrue(webSearchReq.value.contains(Value.Str("query")))
+
+        // Verify run_connector_command
+        val connectorDecl = funcDecls.value.first {
+            ((it as? Value.Object)?.value?.get("name") as? Value.Str)?.value == "run_connector_command"
+        } as Value.Object
+        val connectorParams = connectorDecl.value["parameters"] as Value.Object
+        val connectorProps = connectorParams.value["properties"] as Value.Object
+        assertEquals(Value.Str("STRING"), (connectorProps.value["command"] as Value.Object).value["type"])
+        val connectorReq = connectorParams.value["required"] as Value.Array
+        assertTrue(connectorReq.value.contains(Value.Str("command")))
 
         // Verify serialized JSON format and exclusion of google_search grounding
         val jsonString = modelConfig.toJsonString(json)
@@ -140,13 +198,7 @@ class MiraGeminiSetupPayloadTest {
         val jsonTools = jsonObj.getJSONArray("tools")
         assertEquals(1, jsonTools.length())
         val jsonFuncDecls = jsonTools.getJSONObject(0).getJSONArray("functionDeclarations")
-        assertEquals(1, jsonFuncDecls.length())
-        val jsonOpenApp = jsonFuncDecls.getJSONObject(0)
-        assertEquals("open_app", jsonOpenApp.getString("name"))
-        val jsonParams = jsonOpenApp.getJSONObject("parameters")
-        assertEquals("OBJECT", jsonParams.getString("type"))
-        assertEquals("STRING", jsonParams.getJSONObject("properties").getJSONObject("app").getString("type"))
-        assertEquals("app", jsonParams.getJSONArray("required").getString(0))
+        assertEquals(10, jsonFuncDecls.length())
 
         // Live API requirement: google_search grounding must NOT be combined with function calling
         assertFalse("google_search grounding MUST NOT be in setup alongside function calling", jsonString.contains("google_search") || jsonString.contains("googleSearch"))

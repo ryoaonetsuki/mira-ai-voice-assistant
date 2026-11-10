@@ -1572,8 +1572,12 @@ class TaskExecutorTest {
 
         // Natural Bangla with particle ("টা"), filler ("তো") and word order.
         val result = executor.executeGoal("ফেসবুকটা ওপেন করো তো")
+        val parsed = MiraAutomationBridge.parseDirectAction("ফেসবুকটা ওপেন করো তো")
 
-        assertEquals(TaskStatus.SUCCESS, result.status)
+        assertEquals(
+            "parse=$parsed result=$result think=$thinkCalls actions=${fakePort.actionsPerformed}",
+            TaskStatus.SUCCESS, result.status
+        )
         assertEquals(1, result.stepsUsed)
         assertTrue("Direct path must make zero think calls", thinkCalls.isEmpty())
         assertTrue(fakePort.actionsPerformed.contains("openApp:com.facebook.katana"))
@@ -1646,7 +1650,10 @@ class TaskExecutorTest {
 
         assertEquals(TaskStatus.SUCCESS, result.status)
         assertTrue("Direct path must make zero think calls", thinkCalls.isEmpty())
-        assertTrue(fakePort.actionsPerformed.contains("clickText:Settings"))
+        // The parsed label is lowercased by the grammar; clickText itself
+        // matches case-insensitively (real service + fake), so "settings" is
+        // the recorded action.
+        assertTrue(fakePort.actionsPerformed.contains("clickText:settings"))
     }
 
     @Test

@@ -574,7 +574,9 @@ class TaskExecutor(
         if (text.isEmpty()) return null
         val fence = Regex("""```(?:json)?\s*([\s\S]*?)```""", RegexOption.IGNORE_CASE).find(text)
         if (fence != null) text = fence.groupValues[1].trim()
-        val array: JSONArray
+        // `var`: assigned once in the try branch (object with "steps") or in
+        // the catch branch (bare array) — a `val` cannot be assigned in both.
+        var array: JSONArray
         var done = false
         try {
             val obj = JSONObject(text)

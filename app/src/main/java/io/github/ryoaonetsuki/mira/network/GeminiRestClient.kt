@@ -436,6 +436,17 @@ class GeminiRestClient(
         .readTimeout(8, TimeUnit.SECONDS)
         .writeTimeout(5, TimeUnit.SECONDS)
         .callTimeout(8, TimeUnit.SECONDS)
+        .build(),
+    // Turn F(c/g): dedicated client for automation think calls. Its 40s
+    // callTimeout bounds the WHOLE call — including a blocking body read
+    // that coroutine cancellation cannot interrupt — so a hung think call
+    // always dies inside the 45s think deadline. The shared `client` keeps
+    // no callTimeout because chat streaming can legitimately run longer.
+    internal val thinkClient: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(15, TimeUnit.SECONDS)
+        .callTimeout(THINK_CALL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
         .build()
 ) {
 
@@ -860,6 +871,35 @@ class GeminiRestClient(
             enableThinking = enableThinking,
             isChatCall = false,
             attachments = listOf(attachment)
+        )
+    }
+
+    /**
+     * Automation think call (Turn F/c+g): FASTEST model first
+     * (gemini-3.5-flash-lite), SINGLE attempt, no model ladder, no retries —
+     * fail fast with a named reason instead of burning the 120s task budget
+     * on 3 models x 4 attempts. Runs on [thinkClient], whose 40s callTimeout
+     * bounds even a blocking body read that coroutine cancellation cannot
+     * interrupt. Chat keeps the ladder via [generateChatResponse].
+     */
+    suspend fun generateAutomationThink(
+        apiKey: String,
+        history: List<ChatMessageEntity>,
+        systemPrompt: String = "",
+        model: String = AUTOMATION_THINK_MODEL,
+        attachments: List<ChatAttachment> = emptyList(),
+        httpClient: OkHttpClient = thinkClient
+    ): Result<GroundedChatResult> = withContext(Dispatchers.IO) {
+        executeGenerateContentSingleAttempt(
+            apiKey = apiKey,
+            history = history,
+            systemPrompt = systemPrompt,
+            model = model,
+            useServerProxy = false,
+            attachSearchTool = false,
+            enableThinking = false,
+            attachments = attachments,
+            httpClient = httpClient
         )
     }
 
@@ -1462,5 +1502,16 @@ class GeminiRestClient(
     companion object {
         private const val TAG = "MiraGeminiRestClient"
         private const val TAG_CHAT = "MiraChat"
+
+        /** Automation think model (Turn F/c): fastest suitable model first. */
+        const val AUTOMATION_THINK_MODEL: String = "gemini-3.5-flash-lite"
+
+        /**
+         * Whole-call timeout for automation think calls (Turn F/g). Must stay
+         * below TaskExecutor.DEFAULT_THINK_TIMEOUT_MS (45s): a hung think call
+         * dies at the HTTP layer even when coroutine cancellation cannot
+         * interrupt a blocking body read.
+         */
+        const val THINK_CALL_TIMEOUT_MS: Long = 40_000L
     }
 }

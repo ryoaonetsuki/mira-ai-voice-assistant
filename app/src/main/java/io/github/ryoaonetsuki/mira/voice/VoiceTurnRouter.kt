@@ -66,6 +66,12 @@ object VoiceTurnRouter {
             "Do not read this note aloud and do not mention it.]"
     }
 
+    /** Short "working on it" note for a phone action that will take a few seconds (AI path only). */
+    fun buildWorkingNote(language: String): String =
+        "[The user asked you to do a phone action that will take a few seconds. " +
+            "Say one brief warm acknowledgement in your own words, in $language, e.g. 'working on it'. " +
+            "Do not read this note aloud and do not mention it.]"
+
     fun buildAccessibilityNote(language: String): String =
         "[Phone control cannot run yet because Mira's accessibility service is off; the accessibility settings screen was just opened. " +
             "Tell the user briefly and warmly in your own words, in $language, to switch Mira on there. " +

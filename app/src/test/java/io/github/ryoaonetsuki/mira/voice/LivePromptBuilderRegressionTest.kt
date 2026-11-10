@@ -44,12 +44,12 @@ class LivePromptBuilderRegressionTest {
                 assertTrue("Prompt for '$lang' must instruct Reply ONLY in $lang", prompt.contains("Reply ONLY in $lang"))
                 assertFalse("Prompt for '$lang' must NOT contain hardcoded RESPOND IN BANGLA", prompt.contains("RESPOND IN BANGLA"))
                 assertFalse("Prompt for '$lang' must NOT contain hardcoded Reply ONLY in Bangla", prompt.contains("Reply ONLY in Bangla"))
-                assertFalse("Prompt for '$lang' must NOT contain 'acknowledgement in Bangla'", prompt.contains("acknowledgement in Bangla"))
+                assertFalse("Prompt for '$lang' must NOT contain 'Narrate briefly in Bangla'", prompt.contains("Narrate briefly in Bangla"))
                 assertFalse("Prompt for '$lang' must NOT contain 'Bengali date:'", prompt.contains("Bengali date:"))
             } else {
                 assertTrue("Prompt for Bangla must contain RESPOND IN BANGLA", prompt.contains("RESPOND IN BANGLA"))
                 assertTrue("Prompt for Bangla must contain Reply ONLY in Bangla", prompt.contains("Reply ONLY in Bangla"))
-                assertTrue("Prompt for Bangla must contain 'acknowledgement in Bangla'", prompt.contains("acknowledgement in Bangla"))
+                assertTrue("Prompt for Bangla must contain 'Narrate briefly in Bangla'", prompt.contains("Narrate briefly in Bangla"))
                 assertTrue("Prompt for Bangla must contain 'Bengali date:'", prompt.contains("Bengali date:"))
             }
         }

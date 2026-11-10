@@ -52,6 +52,10 @@ interface AutomationPort {
         return false
     }
     fun clickAt(x: Float, y: Float): Boolean
+    /** Long-press at a point (flutter_automate GestureEngine.longClick, MIT). */
+    fun longPress(x: Float, y: Float, durationMs: Long = 500): Boolean = false
+    /** Two-finger pinch (flutter_automate GestureEngine.pinchIn/pinchOut, MIT): [zoomIn] moves the fingers apart, else together. */
+    fun pinch(centerX: Float, centerY: Float, zoomIn: Boolean): Boolean = false
     fun typeText(text: String): Boolean
     fun pressEnter(): Boolean
     fun scroll(direction: String): Boolean
@@ -536,6 +540,10 @@ class TaskExecutor(
         }
         if (parsed.steps.isEmpty()) return null
         val steps = parsed.steps.take(maxSteps)
+        // Best-of-all (Automator YAML plan, design only — AGPL, never copied):
+        // the command list is human-readable, so the owner can see what the
+        // AI planned. Recorded in the diagnosis (visible in Skills detail).
+        recordDiagnosis("Plan for '$goal':\n" + formatPlan(steps))
         val skill = Skill(goal = goal, steps = steps)
         val result = executeSkillWithResume(skill)
         if (result.status == TaskStatus.SUCCESS) {
@@ -562,6 +570,38 @@ class TaskExecutor(
 
     /** A parsed plan: the full command list, or done=true when already complete. */
     internal data class AiPlan(val steps: List<TaskStep>, val done: Boolean)
+
+    /**
+     * Best-of-all (Automator, suobset/automator, AGPL-3.0 — DESIGN ONLY, never
+     * copied): Automator renders its plan as a human-readable YAML action
+     * list (OPEN_APP, CLICK_ELEMENT, SCROLL_VIEW, NAVIGATE_HOME, TYPE_TEXT,
+     * WAIT) executed by a deterministic Actor. Mira's command list is JSON;
+     * this renders the same list in Automator's readable action names so the
+     * owner — and the Skills detail screen — can read what the AI planned.
+     */
+    internal fun formatPlan(steps: List<TaskStep>): String {
+        if (steps.isEmpty()) return "Plan (0 steps): nothing to do."
+        val lines = steps.mapIndexed { index, step ->
+            val rendered = when (step.action) {
+                TaskStep.ACTION_OPEN_APP -> "OPEN_APP: ${step.stringParam("app") ?: step.stringParam("package") ?: ""}"
+                TaskStep.ACTION_CLICK_TEXT -> "CLICK_ELEMENT: \"${step.stringParam("text") ?: ""}\""
+                TaskStep.ACTION_CLICK_AT -> "CLICK_ELEMENT: (${step.intParam("x")}, ${step.intParam("y")})"
+                TaskStep.ACTION_TYPE_TEXT -> "TYPE_TEXT: \"${step.stringParam("text") ?: ""}\""
+                TaskStep.ACTION_PRESS_ENTER -> "PRESS_ENTER"
+                TaskStep.ACTION_SCROLL -> "SCROLL_VIEW: ${(step.stringParam("direction") ?: "down").uppercase()}"
+                TaskStep.ACTION_SWIPE -> "SWIPE: (${step.intParam("startX")}, ${step.intParam("startY")}) -> (${step.intParam("endX")}, ${step.intParam("endY")})"
+                TaskStep.ACTION_PRESS_BACK -> "NAVIGATE_BACK"
+                TaskStep.ACTION_PRESS_HOME -> "NAVIGATE_HOME"
+                TaskStep.ACTION_WAIT -> "WAIT: ${step.intParam("ms") ?: 1500}ms"
+                TaskStep.ACTION_LONG_PRESS -> "LONG_PRESS: (${step.intParam("x")}, ${step.intParam("y")})"
+                TaskStep.ACTION_PINCH -> "PINCH: ${(step.stringParam("direction") ?: "in").uppercase()} zoom"
+                TaskStep.ACTION_DONE -> "DONE"
+                else -> step.action.uppercase()
+            }
+            "${index + 1}. $rendered"
+        }
+        return "Plan (${steps.size} steps):\n" + lines.joinToString("\n")
+    }
 
     /**
      * Parses a plan response: {"steps": [{...}, ...]} or {"done": true}, or a
@@ -931,6 +971,8 @@ class TaskExecutor(
         TaskStep.ACTION_PRESS_ENTER -> "press Enter"
         TaskStep.ACTION_SCROLL -> "scroll ${step.stringParam("direction") ?: "down"}"
         TaskStep.ACTION_SWIPE -> "swipe on screen"
+        TaskStep.ACTION_LONG_PRESS -> "long-press at (${step.intParam("x")}, ${step.intParam("y")})"
+        TaskStep.ACTION_PINCH -> "pinch ${step.stringParam("direction") ?: "in"} to zoom"
         TaskStep.ACTION_PRESS_BACK -> "press Back"
         TaskStep.ACTION_PRESS_HOME -> "press Home"
         TaskStep.ACTION_WAIT -> "wait a moment"
@@ -1191,6 +1233,9 @@ class TaskExecutor(
         var parseFailures = 0
         var step = 0
         var lastStepHadNoEffect = false
+        // Best-of-all (Tapilot guardRepeatedGesture): stops a stuck loop
+        // fast instead of burning all 15 steps on a screen that never changes.
+        val loopGuard = LoopGuard()
         // Turn F(e): the previous step's verification dump is carried into
         // the next step's observe — one screen read per AI step instead of
         // two. Invalidated whenever anything else touches the screen.
@@ -1334,6 +1379,11 @@ class TaskExecutor(
                 lastStepHadNoEffect = true
                 val reason = lastActionError ?: "${decision.action} dispatch failed"
                 recordDiagnosis("Step $step: $reason")
+                loopGuard.observeNoEffect(decision.action, preSignature)?.let { loopReason ->
+                    recordDiagnosis(loopReason)
+                    logWarn(loopReason)
+                    return TaskResult(TaskStatus.FAILED, loopReason, step)
+                }
                 pushTurn(
                     history,
                     raw,
@@ -1368,6 +1418,7 @@ class TaskExecutor(
 
                 if (effectVerified) {
                     lastStepHadNoEffect = false
+                    loopGuard.reset()
                     executedSteps.add(decision)
                     pushTurn(
                         history,
@@ -1398,6 +1449,11 @@ class TaskExecutor(
                     }
                 } else {
                     lastStepHadNoEffect = true
+                    loopGuard.observeNoEffect(decision.action, postSignature)?.let { loopReason ->
+                        recordDiagnosis(loopReason)
+                        logWarn(loopReason)
+                        return TaskResult(TaskStatus.FAILED, loopReason, step)
+                    }
                     pushTurn(
                         history,
                         raw,
@@ -1531,6 +1587,30 @@ class TaskExecutor(
                     }
                     success
                 }
+                TaskStep.ACTION_LONG_PRESS -> {
+                    val x = step.intParam("x") ?: run { lastActionError = "long_press missing x coordinate"; return false }
+                    val y = step.intParam("y") ?: run { lastActionError = "long_press missing y coordinate"; return false }
+                    val duration = (step.intParam("durationMs") ?: 500).toLong()
+                    val success = automation.longPress(x.toFloat(), y.toFloat(), duration)
+                    if (!success) {
+                        lastActionError = "long_press ($x, $y) failed (gesture rejected or callback timed out)"
+                    }
+                    success
+                }
+                TaskStep.ACTION_PINCH -> {
+                    val cx = step.intParam("centerX") ?: step.intParam("x")
+                    val cy = step.intParam("centerY") ?: step.intParam("y")
+                    if (cx == null || cy == null) {
+                        lastActionError = "pinch missing centerX/centerY"
+                        return false
+                    }
+                    val zoomIn = (step.stringParam("direction") ?: "in").lowercase() != "out"
+                    val success = automation.pinch(cx.toFloat(), cy.toFloat(), zoomIn)
+                    if (!success) {
+                        lastActionError = "pinch failed (gesture rejected or callback timed out)"
+                    }
+                    success
+                }
                 TaskStep.ACTION_PRESS_BACK -> {
                     val success = automation.pressBack()
                     if (!success) lastActionError = "press_back failed"
@@ -1660,6 +1740,8 @@ class TaskExecutor(
                 TaskStep.ACTION_TYPE_TEXT,
                 TaskStep.ACTION_SCROLL,
                 TaskStep.ACTION_SWIPE,
+                TaskStep.ACTION_LONG_PRESS,
+                TaskStep.ACTION_PINCH,
                 TaskStep.ACTION_PRESS_BACK,
                 TaskStep.ACTION_PRESS_HOME,
                 TaskStep.ACTION_PRESS_ENTER -> {
@@ -1683,5 +1765,57 @@ class TaskExecutor(
             }
             return false
         }
+    }
+}
+
+/**
+ * Best-of-all (Tapilot): repeated-gesture / loop guard.
+ *
+ * Tapilot's adapter (tapilot-ai/tapilot, MIT © 2024-2026 Quanru,
+ * packages/android-accessibility/src/device.ts `guardRepeatedGesture` +
+ * screen-progress.ts fingerprint) stops an alternating swipe/drag loop and
+ * any identical gesture repeated past a cap, because returning to the same
+ * observed state is not progress. This is a DESIGN port to Kotlin, not a
+ * copy: Tapilot compares screenshot pixels; Mira compares the node-tree
+ * signature ([TaskExecutor.computeNodeSignature]) — the same "same screen"
+ * test without a screenshot. Only no-effect steps feed the guard; any
+ * verified effect resets it.
+ */
+internal class LoopGuard(private val maxIdenticalRepeats: Int = 3) {
+    private var lastKey: String? = null
+    private var repeatCount = 0
+    private val recentKeys = ArrayDeque<String>()
+
+    /** Any verified effect is progress — clear the guard. */
+    fun reset() {
+        lastKey = null
+        repeatCount = 0
+        recentKeys.clear()
+    }
+
+    /**
+     * Records a step that had NO verified effect. Returns a failure reason
+     * when this proves a loop, else null.
+     */
+    fun observeNoEffect(action: String, signature: Int): String? {
+        val key = "$action@$signature"
+        if (key == lastKey) repeatCount++ else {
+            lastKey = key
+            repeatCount = 1
+        }
+        recentKeys.addLast(key)
+        if (recentKeys.size > 4) recentKeys.removeFirst()
+        if (repeatCount >= maxIdenticalRepeats) {
+            return "Stopped: '$action' repeated $repeatCount times with no screen change — the screen is stuck; try a different approach."
+        }
+        if (recentKeys.size == 4) {
+            val (a, b, c, d) = recentKeys
+            if (a == c && b == d && a != b) {
+                val first = a.substringBefore('@')
+                val second = b.substringBefore('@')
+                return "Stopped: alternating '$first' / '$second' loop with no screen change — the screen is stuck; try a different approach."
+            }
+        }
+        return null
     }
 }

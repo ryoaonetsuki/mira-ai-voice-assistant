@@ -390,6 +390,7 @@ class MicService : Service() {
             ACTION_STOP -> {
                 userRequestedStop = true
                 callStateStore.setCallActive(false)
+                GoalToolTracker.reset()
                 autoRestartJob?.cancel()
                 autoRestartJob = null
                 stopLiveVoiceSession()
@@ -1046,6 +1047,7 @@ class MicService : Service() {
         connectingWatchdogJob = null
         handledTranscripts.clear()
         currentAutomationTarget = null
+        GoalToolTracker.reset()
 
         try {
             sessionManager?.stopSession()
@@ -1266,6 +1268,30 @@ private fun isWrongPackageChange(
     return false
 }
 
+internal fun isOffTargetForAction(
+    action: String,
+    currentPackage: String,
+    target: String?,
+    goalText: String?
+): Boolean {
+    if (action != TaskStep.ACTION_CLICK_TEXT && action != TaskStep.ACTION_TYPE_TEXT) {
+        return false
+    }
+    val effectiveTarget = target ?: goalText?.let { MiraAutomationBridge.extractTargetApp(it) }
+    if (effectiveTarget.isNullOrBlank()) {
+        val isWeb = TaskExecutor.isWebGoal(goalText)
+        if (isWeb) {
+            return !TaskExecutor.isBrowserPackage(currentPackage)
+        }
+        return false
+    }
+    val isWeb = TaskExecutor.isWebGoal(goalText) || TaskExecutor.isBrowserPackage(effectiveTarget)
+    if (isWeb && TaskExecutor.isBrowserPackage(currentPackage)) {
+        return false
+    }
+    return !TaskExecutor.matchesTarget(effectiveTarget, currentPackage)
+}
+
 internal suspend fun executeFunctionCall(
     automationPort: AutomationPort,
     context: Context?,
@@ -1279,13 +1305,97 @@ internal suspend fun executeFunctionCall(
     goal: String? = null,
     skillsService: SkillMemoryService? = null
 ): Value.Object {
-    val normName = name.lowercase(Locale.ROOT)
-    val resolvedTarget = targetApp
-        ?: (typedArgs["targetApp"]?.toString() ?: rawArgs["targetApp"] ?: typedArgs["target"]?.toString() ?: rawArgs["target"])
-        ?: goal?.let { MiraAutomationBridge.extractTargetApp(it) }
+    val startTimeMs = System.currentTimeMillis()
+    val argsSummary = (typedArgs.ifEmpty { rawArgs }).toString()
 
     val resolvedGoal = goal
         ?: (typedArgs["goal"]?.toString() ?: rawArgs["goal"])
+    val resolvedTarget = targetApp
+        ?: (typedArgs["targetApp"]?.toString() ?: rawArgs["targetApp"] ?: typedArgs["target"]?.toString() ?: rawArgs["target"])
+        ?: resolvedGoal?.let { MiraAutomationBridge.extractTargetApp(it) }
+
+    // Milestone 6: Per-goal tool-call cap (30) and 120s task timeout tracking
+    val trackerCheck = GoalToolTracker.onToolCall(resolvedGoal)
+    val currentGoalCount = GoalToolTracker.callCount
+    LiveVoiceDiagnostics.recordToolCall(name, argsSummary, startTimeMs, goalCallCount = currentGoalCount)
+
+    if (trackerCheck is GoalToolTracker.CheckResult.CapExceeded) {
+        val limitMsg = "Tool call limit reached (${trackerCheck.maxCalls} calls for this goal). Please summarize what was done and stop calling tools for this goal."
+        val postPackage = automationPort.getCurrentPackage().orEmpty()
+        val postNodes = automationPort.dumpScreen()
+        val response = buildActionResult(
+            automationPort = automationPort,
+            outcome = limitMsg,
+            success = false,
+            postPackage = postPackage,
+            postNodes = postNodes,
+            isStepOpenApp = false,
+            descriptionContext = resolvedGoal
+        )
+        val latencyMs = System.currentTimeMillis() - startTimeMs
+        LiveVoiceDiagnostics.recordToolResult(name, latencyMs, false)
+        return response
+    }
+
+    if (trackerCheck is GoalToolTracker.CheckResult.TimeoutExceeded) {
+        val limitMsg = "Task duration timeout reached (120s limit for this goal). Please summarize what was done and stop calling tools for this goal."
+        val postPackage = automationPort.getCurrentPackage().orEmpty()
+        val postNodes = automationPort.dumpScreen()
+        val response = buildActionResult(
+            automationPort = automationPort,
+            outcome = limitMsg,
+            success = false,
+            postPackage = postPackage,
+            postNodes = postNodes,
+            isStepOpenApp = false,
+            descriptionContext = resolvedGoal
+        )
+        val latencyMs = System.currentTimeMillis() - startTimeMs
+        LiveVoiceDiagnostics.recordToolResult(name, latencyMs, false)
+        return response
+    }
+
+    try {
+        val response = executeFunctionCallInternal(
+            automationPort = automationPort,
+            context = context,
+            name = name,
+            rawArgs = rawArgs,
+            typedArgs = typedArgs,
+            pollTimeoutMs = pollTimeoutMs,
+            pollIntervalMs = pollIntervalMs,
+            settleDelayMs = settleDelayMs,
+            resolvedTarget = resolvedTarget,
+            resolvedGoal = resolvedGoal,
+            skillsService = skillsService
+        )
+        val latencyMs = System.currentTimeMillis() - startTimeMs
+        val success = (response.value["success"] as? Value.Bool)?.value
+            ?: !response.value.containsKey("error")
+        LiveVoiceDiagnostics.recordToolResult(name, latencyMs, success)
+        return response
+    } catch (e: Throwable) {
+        val latencyMs = System.currentTimeMillis() - startTimeMs
+        LiveVoiceDiagnostics.recordToolError(name, e.message ?: "Function execution failed")
+        LiveVoiceDiagnostics.recordToolResult(name, latencyMs, false)
+        throw e
+    }
+}
+
+private suspend fun executeFunctionCallInternal(
+    automationPort: AutomationPort,
+    context: Context?,
+    name: String,
+    rawArgs: Map<String, String>,
+    typedArgs: Map<String, Any?> = emptyMap(),
+    pollTimeoutMs: Long = 4000L,
+    pollIntervalMs: Long = 200L,
+    settleDelayMs: Long = 100L,
+    resolvedTarget: String? = null,
+    resolvedGoal: String? = null,
+    skillsService: SkillMemoryService? = null
+): Value.Object {
+    val normName = name.lowercase(Locale.ROOT)
 
     val skills = skillsService ?: context?.let {
         try {
@@ -1382,6 +1492,24 @@ internal suspend fun executeFunctionCall(
                 return Value.Object("error" to Value.Str("Missing text argument for click_text"))
             }
 
+            val prePackage = automationPort.getCurrentPackage().orEmpty()
+
+            // Milestone 6 Off-target refusal guard: refuse BEFORE executing click_text
+            if (isOffTargetForAction("click_text", prePackage, resolvedTarget, resolvedGoal)) {
+                val postNodes = automationPort.dumpScreen()
+                val targetName = resolvedTarget ?: resolvedGoal?.let { MiraAutomationBridge.extractTargetApp(it) } ?: "target app"
+                val outcome = "Current screen package '$prePackage' is not on the target app '$targetName'. You must call open_app first before clicking."
+                return buildActionResult(
+                    automationPort = automationPort,
+                    outcome = outcome,
+                    success = false,
+                    postPackage = prePackage,
+                    postNodes = postNodes,
+                    isStepOpenApp = false,
+                    descriptionContext = resolvedGoal
+                )
+            }
+
             var fallbackX = when (val x = typedArgs["x"]) {
                 is Number -> x.toInt()
                 is String -> x.toIntOrNull()
@@ -1393,7 +1521,6 @@ internal suspend fun executeFunctionCall(
                 else -> rawArgs["y"]?.toIntOrNull()
             }
 
-            val prePackage = automationPort.getCurrentPackage().orEmpty()
             val preNodes = automationPort.dumpScreen()
             val preSignature = TaskExecutor.computeNodeSignature(preNodes)
 
@@ -1475,6 +1602,23 @@ internal suspend fun executeFunctionCall(
             }
 
             val prePackage = automationPort.getCurrentPackage().orEmpty()
+
+            // Milestone 6 Off-target refusal guard: refuse BEFORE executing type_text
+            if (isOffTargetForAction("type_text", prePackage, resolvedTarget, resolvedGoal)) {
+                val postNodes = automationPort.dumpScreen()
+                val targetName = resolvedTarget ?: resolvedGoal?.let { MiraAutomationBridge.extractTargetApp(it) } ?: "target app"
+                val outcome = "Current screen package '$prePackage' is not on the target app '$targetName'. You must call open_app first before typing."
+                return buildActionResult(
+                    automationPort = automationPort,
+                    outcome = outcome,
+                    success = false,
+                    postPackage = prePackage,
+                    postNodes = postNodes,
+                    isStepOpenApp = false,
+                    descriptionContext = resolvedGoal
+                )
+            }
+
             val preNodes = automationPort.dumpScreen()
             val preSignature = TaskExecutor.computeNodeSignature(preNodes)
 

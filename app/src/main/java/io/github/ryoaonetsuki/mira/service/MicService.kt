@@ -27,6 +27,7 @@ import io.github.ryoaonetsuki.mira.automation.agent.TaskExecutor
 import io.github.ryoaonetsuki.mira.automation.agent.TaskStatus
 import io.github.ryoaonetsuki.mira.automation.agent.TaskStep
 import io.github.ryoaonetsuki.mira.data.local.MiraDatabase
+import io.github.ryoaonetsuki.mira.data.local.entities.ChatMessageEntity
 import io.github.ryoaonetsuki.mira.data.local.entities.NotificationEntity
 import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
 import io.github.ryoaonetsuki.mira.data.preferences.UserPreferences
@@ -39,6 +40,7 @@ import io.github.ryoaonetsuki.mira.voice.pipecat.SessionManagerListener
 import io.github.ryoaonetsuki.mira.voice.pipecat.SessionManagerState
 import io.github.ryoaonetsuki.mira.voice.pipecat.VoiceEchoDetector
 import kotlinx.coroutines.*
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -181,6 +183,9 @@ class MicService : Service() {
     @Volatile private var lastBotSpeakingEndTimeMs: Long = 0L
     @Volatile private var isTtsPlaying: Boolean = false
     private val recentModelTranscripts = ArrayDeque<String>()
+    private var pendingModelTranscript = ""
+    private var lastSavedVoiceText = ""
+    private var lastSavedVoiceRole = ""
 
     private var cachedVoiceName: String = "Aoede"
     private var cachedLanguage: String = "Bangla (Bengali)"
@@ -582,6 +587,33 @@ class MicService : Service() {
             db.ruleDao().getActiveRules().joinToString(separator = "\n") { "- ${it.rule}" }
         }
 
+        val memorySection = try {
+            withContext(Dispatchers.IO) {
+                withTimeoutOrNull(2000L) {
+                    val rows = db.memoryDao().getAllMemoriesOnce().map {
+                        VoiceMemoryPreload.MemoryRow(it.id, it.content, it.category, it.importance, it.lastUsedAt)
+                    }
+                    val top = VoiceMemoryPreload.rankFactsForPreload(rows)
+                    val recent = db.chatDao().getRecentMessages(6).reversed().map { msg ->
+                        (if (msg.role == "user") "user" else "model") to msg.content
+                    }
+                    val section = VoiceMemoryPreload.buildMemorySection(
+                        top.map { Triple(it.id, it.text, it.category) },
+                        recent
+                    )
+                    top.forEach {
+                        runCatching {
+                            db.memoryDao().markMemoryUsed(it.id, System.currentTimeMillis())
+                        }
+                    }
+                    Log.i(TAG, "MIRA_LIVE_VOICE: Voice memory preload: ${top.size} facts, ${recent.size} recent lines")
+                    section
+                } ?: ""
+            }
+        } catch (_: Exception) {
+            ""
+        }
+
         if (generation != sessionGenerationToken.get()) {
             Log.w(TAG, "MIRA_LIVE_VOICE: Session start superseded before manager init (gen=$generation, current=${sessionGenerationToken.get()})")
             return
@@ -603,7 +635,8 @@ class MicService : Service() {
             secretMode = secretMode,
             dateLine = dateLine,
             customInstructions = customInstructions,
-            activeRules = activeRules
+            activeRules = activeRules,
+            memorySection = memorySection
         )
 
         val bcp47Language = LanguageUtils.mapLanguageToBcp47(language)
@@ -844,6 +877,8 @@ class MicService : Service() {
                     _voiceStage.value = VoiceStage.RECOGNISING
                 }
                 if (isFinal) {
+                    flushPendingModelTranscript()
+                    saveVoiceTranscript("user", text)
                     handleUserVoiceTurn(text)
                 }
             }
@@ -860,6 +895,12 @@ class MicService : Service() {
                 // Record/display only; the Live session speaks the model's audio directly.
                 _modelTranscript.value = sanitized
                 recordRecentModelTranscript(sanitized)
+                pendingModelTranscript = when {
+                    pendingModelTranscript.isBlank() -> sanitized
+                    sanitized.startsWith(pendingModelTranscript) -> sanitized
+                    pendingModelTranscript.startsWith(sanitized) -> pendingModelTranscript
+                    else -> (pendingModelTranscript + " " + sanitized).trim()
+                }
             }
 
             override fun onReconnecting(attempt: Int, maxAttempts: Int) {
@@ -887,6 +928,7 @@ class MicService : Service() {
                 // reason is now kept in diagnostics so the next phone test
                 // can tell which suspect fired.
                 LiveVoiceDiagnostics.recordDropReason("session-ended: $reason")
+                flushPendingModelTranscript()
             }
 
             override fun onSessionResumed(resumed: Boolean) {
@@ -1101,6 +1143,34 @@ class MicService : Service() {
             while (recentModelTranscripts.size > 5) {
                 recentModelTranscripts.removeFirst()
             }
+        }
+    }
+
+    private fun saveVoiceTranscript(role: String, text: String) {
+        val clean = text.trim()
+        if (clean.isBlank()) return
+        if (clean == lastSavedVoiceText && role == lastSavedVoiceRole) return
+        lastSavedVoiceText = clean
+        lastSavedVoiceRole = role
+        serviceScope.launch(Dispatchers.IO) {
+            try {
+                val db = MiraDatabase.getInstance(applicationContext)
+                db.chatDao().insertMessageEnsuringConversation(
+                    ChatMessageEntity(conversationId = "voice", role = role, content = clean),
+                    defaultTitle = "Voice"
+                )
+                db.chatDao().getConversationById("voice")?.let {
+                    db.chatDao().updateConversation(it.copy(updatedAt = System.currentTimeMillis()))
+                }
+            } catch (_: Exception) {}
+        }
+    }
+
+    private fun flushPendingModelTranscript() {
+        val text = pendingModelTranscript
+        pendingModelTranscript = ""
+        if (text.isNotBlank()) {
+            saveVoiceTranscript("model", text)
         }
     }
 
@@ -1956,6 +2026,16 @@ private suspend fun executeFunctionCallInternal(
                 "result" to Value.Str(resultString),
                 "success" to Value.Bool(true)
             )
+        }
+
+        "remember_fact", "recall_memory", "forget_memory" -> {
+            if (context == null) return Value.Object("error" to Value.Str("Memory unavailable: no context"))
+            val db = MiraDatabase.getInstance(context)
+            val toolArgs = (rawArgs.keys + typedArgs.keys).associateWith { key ->
+                (typedArgs[key]?.toString()?.takeIf { it.isNotBlank() } ?: rawArgs[key] ?: "").trim()
+            }
+            val res = executeMemoryTool(db, normName, toolArgs)
+            return res ?: Value.Object("error" to Value.Str("Memory tool failed"))
         }
 
         else -> {

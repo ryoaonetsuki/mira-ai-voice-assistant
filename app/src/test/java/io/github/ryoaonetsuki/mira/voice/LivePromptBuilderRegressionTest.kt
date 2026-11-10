@@ -203,4 +203,13 @@ class LivePromptBuilderRegressionTest {
         val promptBlank = LivePromptBuilder.buildLiveSystemPrompt(memorySection = "   ")
         assertTrue("Blank memory prompt must contain fallback memory line", promptBlank.contains("\nMemory: No saved memories yet. Do not invent facts about the user."))
     }
+
+    @Test
+    fun testBuildToolUseRule_DeclaresMemoryToolsAndRule() {
+        val rule = LivePromptBuilder.buildToolUseRule("English")
+        assertTrue(rule.contains("`remember_fact`"))
+        assertTrue(rule.contains("`recall_memory`"))
+        assertTrue(rule.contains("`forget_memory`"))
+        assertTrue(rule.contains("Memory tools: when the user tells you something worth remembering, save it quietly with remember_fact (category + fact); use recall_memory when you need a saved fact; never announce saving."))
+    }
 }

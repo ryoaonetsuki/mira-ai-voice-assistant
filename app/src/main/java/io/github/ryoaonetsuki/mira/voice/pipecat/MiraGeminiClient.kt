@@ -700,6 +700,7 @@ class MiraGeminiClient private constructor(
 
                             if (event.interrupted) {
                                 Log.i(TAG, "User interrupted model output")
+                                LiveVoiceDiagnostics.recordInterrupted()
                                 userTurnBuffer.reset()
                                 listenerRef.get()?.onTurnComplete()
                                 echoRouter.onInterrupted()

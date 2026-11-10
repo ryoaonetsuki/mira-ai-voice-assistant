@@ -75,12 +75,6 @@ fun SkillsScreen(
 
     val dateFormat = remember { SimpleDateFormat("dd MMM, HH:mm", Locale.getDefault()) }
 
-    LaunchedEffect(runningGoal) {
-        if (runningGoal == null) {
-            isTaskPausedUi = false
-        }
-    }
-
     var isAccessibilityEnabled by remember {
         mutableStateOf(MiraAccessibilityService.isEnabled(context))
     }
@@ -91,6 +85,12 @@ fun SkillsScreen(
     var runningGoal by remember { mutableStateOf<String?>(null) }
     var runningDetail by remember { mutableStateOf<String?>(null) }
     var statusMessage by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(runningGoal) {
+        if (runningGoal == null) {
+            isTaskPausedUi = false
+        }
+    }
 
     var skillToRename by remember { mutableStateOf<Skill?>(null) }
     var renameInput by remember { mutableStateOf("") }

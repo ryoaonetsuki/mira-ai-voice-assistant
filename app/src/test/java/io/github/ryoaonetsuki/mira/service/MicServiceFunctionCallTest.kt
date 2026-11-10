@@ -53,6 +53,13 @@ class MicServiceFunctionCallTest {
         var pressBackCalled: Boolean = false
         var pressHomeCalled: Boolean = false
         var pkgChangeOnAction: String? = null
+        var tapNumbersToShow: List<Pair<Int, ScreenNode>> = emptyList()
+        var hideTapNumbersCalled: Boolean = false
+
+        override fun showTapNumbers(): List<Pair<Int, ScreenNode>> = tapNumbersToShow
+        override fun hideTapNumbers() {
+            hideTapNumbersCalled = true
+        }
 
         override fun isServiceEnabled(): Boolean = true
 
@@ -539,6 +546,9 @@ class MicServiceFunctionCallTest {
         val expected = listOf(
             "open_app",
             "click_text",
+            "tap_number",
+            "show_numbers",
+            "hide_numbers",
             "type_text",
             "scroll",
             "press_back",
@@ -552,7 +562,7 @@ class MicServiceFunctionCallTest {
             "recall_memory",
             "forget_memory"
         )
-        assertEquals("defaultPhoneTools must declare exactly the 14 tools", expected, toolNames)
+        assertEquals("defaultPhoneTools must declare exactly the 17 tools", expected, toolNames)
     }
 
     @Test
@@ -776,5 +786,152 @@ class MicServiceFunctionCallTest {
         assertEquals("Search YouTube", lastStep?.params?.get("text"))
         assertEquals("fallbackX must resolve from preNodes centerX (55)", 55, lastStep?.fallbackX)
         assertEquals("fallbackY must resolve from preNodes centerY (30)", 30, lastStep?.fallbackY)
+    }
+
+    @Test
+    fun testTapNumber_ValidNumber_Success() = runBlocking {
+        val fakePort = TestAutomationPort(
+            currentPkg = "com.google.android.youtube"
+        )
+
+        MicService.lastExecutedStep = null
+        val response = executeFunctionCall(
+            automationPort = fakePort,
+            context = null,
+            name = "tap_number",
+            rawArgs = mapOf("number" to "1"),
+            typedArgs = mapOf("number" to 1),
+            settleDelayMs = 0L,
+            targetApp = "com.google.android.youtube"
+        )
+
+        val resultMap = response.value
+        assertEquals("Success must be true on verified tap_number", true, (resultMap["success"] as? Value.Bool)?.value)
+        val resultStr = (resultMap["result"] as? Value.Str)?.value.orEmpty()
+        assertTrue("Result message must indicate successful tap: $resultStr", resultStr.contains("Successfully tapped number 1"))
+        assertNotNull("clickAt coordinates must be recorded", fakePort.lastClickedCoords)
+        assertEquals(55f, fakePort.lastClickedCoords!!.first)
+        assertEquals(30f, fakePort.lastClickedCoords!!.second)
+        val lastStep = MicService.lastExecutedStep
+        assertNotNull("lastExecutedStep must be recorded", lastStep)
+        assertEquals(TaskStep.ACTION_CLICK_NUMBER, lastStep?.action)
+        assertEquals(1, lastStep?.params?.get("number"))
+    }
+
+    @Test
+    fun testTapNumber_OutOfRange_Fails() = runBlocking {
+        val fakePort = TestAutomationPort(
+            currentPkg = "com.google.android.youtube"
+        )
+
+        val response = executeFunctionCall(
+            automationPort = fakePort,
+            context = null,
+            name = "tap_number",
+            rawArgs = mapOf("number" to "99"),
+            typedArgs = mapOf("number" to 99),
+            settleDelayMs = 0L,
+            targetApp = "com.google.android.youtube"
+        )
+
+        val resultMap = response.value
+        assertEquals("Success must be false on out-of-range number", false, (resultMap["success"] as? Value.Bool)?.value)
+        val resultStr = (resultMap["result"] as? Value.Str)?.value.orEmpty()
+        assertTrue("Result message must indicate no tappable element: $resultStr", resultStr.contains("tap_number 99 failed (no tappable element with that number)"))
+    }
+
+    @Test
+    fun testTapNumber_MissingOrInvalidNumber_ReturnsError() = runBlocking {
+        val fakePort = TestAutomationPort(
+            currentPkg = "com.google.android.youtube"
+        )
+
+        val responseMissing = executeFunctionCall(
+            automationPort = fakePort,
+            context = null,
+            name = "tap_number",
+            rawArgs = emptyMap(),
+            typedArgs = emptyMap()
+        )
+        val errMissing = (responseMissing.value["error"] as? Value.Str)?.value
+        assertEquals("Missing or invalid number argument for tap_number", errMissing)
+
+        val responseZero = executeFunctionCall(
+            automationPort = fakePort,
+            context = null,
+            name = "tap_number",
+            rawArgs = mapOf("number" to "0"),
+            typedArgs = mapOf("number" to 0)
+        )
+        val errZero = (responseZero.value["error"] as? Value.Str)?.value
+        assertEquals("Missing or invalid number argument for tap_number", errZero)
+    }
+
+    @Test
+    fun testShowNumbers_ReturnsNumberedList() = runBlocking {
+        val fakePort = TestAutomationPort(
+            currentPkg = "com.google.android.youtube"
+        )
+        val testNode = fakePort.testNodes[0]
+        fakePort.tapNumbersToShow = listOf(1 to testNode)
+
+        val response = executeFunctionCall(
+            automationPort = fakePort,
+            context = null,
+            name = "show_numbers",
+            rawArgs = emptyMap(),
+            typedArgs = emptyMap(),
+            settleDelayMs = 0L,
+            targetApp = "com.google.android.youtube"
+        )
+
+        val resultMap = response.value
+        assertEquals("Success must be true when tap numbers shown", true, (resultMap["success"] as? Value.Bool)?.value)
+        val resultStr = (resultMap["result"] as? Value.Str)?.value.orEmpty()
+        assertTrue("Result text must contain the formatted list: $resultStr", resultStr.contains("[1]"))
+        assertTrue("Result text must contain element label: $resultStr", resultStr.contains("Search YouTube"))
+    }
+
+    @Test
+    fun testShowNumbers_EmptyList_ReturnsError() = runBlocking {
+        val fakePort = TestAutomationPort(
+            currentPkg = "com.google.android.youtube"
+        )
+        fakePort.tapNumbersToShow = emptyList()
+
+        val response = executeFunctionCall(
+            automationPort = fakePort,
+            context = null,
+            name = "show_numbers",
+            rawArgs = emptyMap(),
+            typedArgs = emptyMap()
+        )
+
+        val resultMap = response.value
+        val err = (resultMap["error"] as? Value.Str)?.value
+        assertEquals("Could not show tap numbers: no tappable elements found, or the \"Display over other apps\" permission is not granted - enable it in setup.", err)
+    }
+
+    @Test
+    fun testHideNumbers_CallsHideAndReturnsSuccess() = runBlocking {
+        val fakePort = TestAutomationPort(
+            currentPkg = "com.google.android.youtube"
+        )
+
+        val response = executeFunctionCall(
+            automationPort = fakePort,
+            context = null,
+            name = "hide_numbers",
+            rawArgs = emptyMap(),
+            typedArgs = emptyMap(),
+            settleDelayMs = 0L,
+            targetApp = "com.google.android.youtube"
+        )
+
+        val resultMap = response.value
+        assertEquals("Success must be true", true, (resultMap["success"] as? Value.Bool)?.value)
+        val resultStr = (resultMap["result"] as? Value.Str)?.value.orEmpty()
+        assertEquals("Tap numbers hidden", resultStr)
+        assertTrue("hideTapNumbers must have been called", fakePort.hideTapNumbersCalled)
     }
 }

@@ -38,6 +38,8 @@ class GeminiSessionManagerTest {
         val userSpeakingStates = mutableListOf<Boolean>()
         val reconnectingAttempts = mutableListOf<Pair<Int, Int>>()
         val endedReasons = mutableListOf<String>()
+        val micErrors = mutableListOf<String>()
+        val resumedFlags = mutableListOf<Boolean>()
         val functionCalls = mutableListOf<Triple<String, String, Map<String, String>>>()
 
         override fun onStateChanged(state: SessionManagerState) {
@@ -74,6 +76,14 @@ class GeminiSessionManagerTest {
 
         override fun onError(message: String) {
             errors.add(message)
+        }
+
+        override fun onMicError(reason: String) {
+            micErrors.add(reason)
+        }
+
+        override fun onSessionResumed(resumed: Boolean) {
+            resumedFlags.add(resumed)
         }
 
         override fun onFunctionCall(id: String, name: String, args: Value.Array, rawArgs: Map<String, String>) {
@@ -267,8 +277,12 @@ class GeminiSessionManagerTest {
         // Old client must be closed before opening reconnect socket
         assertTrue("Previous client must be closed", client1.isClosed)
 
-        // Handle must be consumed (single-use guarantee)
-        assertNull("Handle must be consumed from store during reconnection", store.getHandle())
+        // Turn G: the handle is PEEKED, not consumed, at reconnect start —
+        // a failed attempt must not burn a handle the server never saw.
+        assertEquals(
+            "Handle must survive until the server accepts the resumed session",
+            "handle_goaway_resume", store.getHandle()
+        )
 
         // Second client created with resumption handle
         assertEquals(2, fakeFactory.createdClients.size)
@@ -283,6 +297,17 @@ class GeminiSessionManagerTest {
         client2.sessionListener.onSetupComplete()
         runCurrent()
         assertEquals(SessionManagerState.CONNECTED, manager.state.value)
+
+        // The server accepted the resumed session: the single-use handle is
+        // now consumed (cleared from the store).
+        assertNull(
+            "Handle must be cleared once the server accepts the resumed session",
+            store.getHandle()
+        )
+        assertEquals(
+            "First connect is fresh (false), resumed connect reports true",
+            listOf(false, true), listener.resumedFlags
+        )
     }
 
     @Test
@@ -520,8 +545,12 @@ class GeminiSessionManagerTest {
         assertEquals(1, listener.reconnectingAttempts.size)
         assertEquals(1 to 5, listener.reconnectingAttempts[0])
 
-        // Assert: stored handle was consumed exactly once (second client's options carry it)
-        assertNull("Stored handle must be consumed from store", store.getHandle())
+        // Assert: the handle is PEEKED at reconnect start (Turn G) — it
+        // survives until the server accepts the resumed session.
+        assertEquals(
+            "Stored handle must still be present until setupComplete",
+            "valid_handle_round19_task3", store.getHandle()
+        )
         val modelConfigObj = client2.options.modelConfig as Value.Object
         val sessionResumption = modelConfigObj.value["sessionResumption"] as Value.Object
         val handleValue = (sessionResumption.value["handle"] as Value.Str).value
@@ -532,6 +561,12 @@ class GeminiSessionManagerTest {
         client2.sessionListener.onSetupComplete()
         runCurrent()
         assertEquals(SessionManagerState.CONNECTED, manager.state.value)
+
+        // The server accepted the resumed session: handle now consumed.
+        assertNull(
+            "Handle must be cleared once the server accepts the resumed session",
+            store.getHandle()
+        )
 
         // 5. Advance 60s of virtual time
         advanceTimeBy(60_000L)
@@ -841,5 +876,140 @@ class GeminiSessionManagerTest {
         runCurrent()
         assertEquals("Manager must not be revived after stopSession()", SessionManagerState.STOPPED, manager.state.value)
         assertEquals(0, GeminiSessionManager.getLiveSessionsCount())
+    }
+
+    // =========================================================================
+    // Turn G — mic-error restart, CONFIGURING resumption handles, watchdog reconnect
+    // =========================================================================
+
+    @Test
+    fun test21_MicError_TriggersReconnectWithNewClient() = runTest {
+        val manager = createManager(this)
+        manager.startSession()
+        runCurrent()
+        val client1 = fakeFactory.createdClients[0]
+        client1.sessionListener.onWebSocketOpen()
+        client1.sessionListener.onSetupComplete()
+        runCurrent()
+        assertEquals(SessionManagerState.CONNECTED, manager.state.value)
+
+        // The mic capture thread gave up after its bounded internal retries.
+        client1.sessionListener.onMicError("mic capture failed: record.read returned -3")
+        runCurrent()
+
+        assertEquals("Mic death must restart the session, never go silently deaf",
+            SessionManagerState.RECONNECTING, manager.state.value)
+        assertEquals(1, listener.micErrors.size)
+
+        advanceTimeBy(1_000L)
+        runCurrent()
+        assertEquals(2, fakeFactory.createdClients.size)
+
+        val client2 = fakeFactory.createdClients[1]
+        client2.sessionListener.onWebSocketOpen()
+        client2.sessionListener.onSetupComplete()
+        runCurrent()
+        assertEquals(SessionManagerState.CONNECTED, manager.state.value)
+        assertEquals("Recovered session is fresh (no handle was stored)",
+            listOf(false, false), listener.resumedFlags)
+    }
+
+    @Test
+    fun test22_ResumptionHandle_SavedDuringConfiguring() = runTest {
+        val manager = createManager(this)
+        manager.startSession()
+        runCurrent()
+        val client = fakeFactory.createdClients[0]
+        client.sessionListener.onWebSocketOpen()
+        runCurrent()
+        assertEquals(SessionManagerState.CONFIGURING, manager.state.value)
+
+        // Turn G (verified bug): a handle arriving before setupComplete used
+        // to be dropped as "ignored outside CONNECTED state", so every
+        // reconnect was a fresh session with no context.
+        client.sessionListener.onSessionResumptionUpdate("handle_during_configuring", resumable = true)
+        assertEquals("handle_during_configuring", store.getHandle())
+
+        client.sessionListener.onSetupComplete()
+        runCurrent()
+        assertEquals(SessionManagerState.CONNECTED, manager.state.value)
+        assertEquals("handle_during_configuring", store.getHandle())
+    }
+
+    @Test
+    fun test23_RequestReconnect_RestartsLiveSession_AndIgnoresStopped() = runTest {
+        val manager = createManager(this)
+        manager.startSession()
+        runCurrent()
+        val client1 = fakeFactory.createdClients[0]
+        client1.sessionListener.onWebSocketOpen()
+        client1.sessionListener.onSetupComplete()
+        runCurrent()
+        assertEquals(SessionManagerState.CONNECTED, manager.state.value)
+
+        // Liveness watchdog: no mic frames while live -> force reconnect.
+        manager.requestReconnect("no-audio-frames")
+        runCurrent()
+        assertEquals(SessionManagerState.RECONNECTING, manager.state.value)
+
+        // A second request while already reconnecting is a no-op.
+        manager.requestReconnect("no-audio-frames")
+        runCurrent()
+        assertEquals(SessionManagerState.RECONNECTING, manager.state.value)
+
+        advanceTimeBy(1_000L)
+        runCurrent()
+        assertEquals(2, fakeFactory.createdClients.size)
+        val client2 = fakeFactory.createdClients[1]
+        client2.sessionListener.onWebSocketOpen()
+        client2.sessionListener.onSetupComplete()
+        runCurrent()
+        assertEquals(SessionManagerState.CONNECTED, manager.state.value)
+
+        // After an explicit stop, a watchdog reconnect must not revive it.
+        manager.stopSession()
+        runCurrent()
+        manager.requestReconnect("no-audio-frames")
+        runCurrent()
+        assertEquals(SessionManagerState.STOPPED, manager.state.value)
+        assertEquals(2, fakeFactory.createdClients.size)
+    }
+
+    @Test
+    fun test24_FailedReconnect_DoesNotBurnUnusedHandle() = runTest {
+        val manager = createManager(this)
+        manager.startSession()
+        runCurrent()
+        val client1 = fakeFactory.createdClients[0]
+        client1.sessionListener.onWebSocketOpen()
+        client1.sessionListener.onSetupComplete()
+        runCurrent()
+        store.saveHandle("handle_survives_failed_attempt")
+
+        // Drop -> reconnect attempt #1 starts with the handle...
+        client1.sessionListener.onSessionEnded("network drop", null)
+        runCurrent()
+        assertEquals(SessionManagerState.RECONNECTING, manager.state.value)
+        advanceTimeBy(1_000L)
+        runCurrent()
+        assertEquals(2, fakeFactory.createdClients.size)
+        val client2 = fakeFactory.createdClients[1]
+
+        // ...but the attempt dies in CONFIGURING (server rejects / never
+        // answers). The handle must be cleared only because the server
+        // rejected it — and the NEXT attempt falls back to a fresh session.
+        client2.sessionListener.onWebSocketOpen()
+        runCurrent()
+        client2.sessionListener.onSessionEnded("setup handshake rejected", null)
+        runCurrent()
+        assertNull("Rejected handle must be cleared after CONFIGURING failure", store.getHandle())
+
+        advanceTimeBy(2_000L)
+        runCurrent()
+        assertEquals(3, fakeFactory.createdClients.size)
+        val client3 = fakeFactory.createdClients[2]
+        val modelConfigObj = client3.options.modelConfig as Value.Object
+        val sessionResumption = modelConfigObj.value["sessionResumption"] as Value.Object
+        assertFalse("Fresh fallback session must NOT carry a handle", sessionResumption.value.containsKey("handle"))
     }
 }

@@ -183,4 +183,24 @@ class LivePromptBuilderRegressionTest {
         assertTrue(prompt.contains("stay silent and wait for the user to speak first"))
         assertFalse("No EXACTLY recitation", prompt.uppercase().contains("EXACTLY"))
     }
+
+    @Test
+    fun testLivePromptBuilder_IncludesMemorySection_WhenPassed() {
+        val memorySection = "Saved memories:\n- [Preference] User likes black coffee"
+        val prompt = LivePromptBuilder.buildLiveSystemPrompt(
+            memorySection = memorySection
+        )
+        assertTrue("Prompt must contain 'Memory:' header", prompt.contains("\nMemory:\n"))
+        assertTrue("Prompt must contain injected memory content", prompt.contains(memorySection))
+        assertFalse("Prompt must not contain fallback when memorySection provided", prompt.contains("No saved memories yet"))
+    }
+
+    @Test
+    fun testLivePromptBuilder_IncludesFallbackMemory_WhenMemorySectionBlank() {
+        val promptDefault = LivePromptBuilder.buildLiveSystemPrompt()
+        assertTrue("Default prompt must contain fallback memory line", promptDefault.contains("\nMemory: No saved memories yet. Do not invent facts about the user."))
+
+        val promptBlank = LivePromptBuilder.buildLiveSystemPrompt(memorySection = "   ")
+        assertTrue("Blank memory prompt must contain fallback memory line", promptBlank.contains("\nMemory: No saved memories yet. Do not invent facts about the user."))
+    }
 }

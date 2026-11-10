@@ -102,11 +102,91 @@ private data class ParsedTurnPart(
     val pcmBytes: ByteArray? = null
 )
 
-private data class ParsedFunctionCall(
+internal data class ParsedFunctionCall(
     val id: String,
     val name: String,
-    val args: Map<String, String>
-)
+    val args: Map<String, Any?> = emptyMap(),
+    val rawStringArgs: Map<String, String> = emptyMap()
+) {
+    val stringArgs: Map<String, String> get() = rawStringArgs
+}
+
+internal fun parseJsonValue(value: Any?): Any? {
+    return when (value) {
+        null, JSONObject.NULL -> null
+        is JSONObject -> {
+            val map = mutableMapOf<String, Any?>()
+            val keys = value.keys()
+            while (keys.hasNext()) {
+                val k = keys.next()
+                map[k] = parseJsonValue(value.get(k))
+            }
+            map
+        }
+        is JSONArray -> {
+            val list = mutableListOf<Any?>()
+            for (i in 0 until value.length()) {
+                list.add(parseJsonValue(value.get(i)))
+            }
+            list
+        }
+        is Boolean -> value
+        is Number -> value
+        is String -> value
+        else -> value.toString()
+    }
+}
+
+internal fun parseFunctionCall(fc: JSONObject): ParsedFunctionCall {
+    val id = fc.optString("id", "")
+    val name = fc.optString("name", "")
+    val argsObj = fc.optJSONObject("args")
+    val typedArgs = mutableMapOf<String, Any?>()
+    val stringArgs = mutableMapOf<String, String>()
+    if (argsObj != null) {
+        val keys = argsObj.keys()
+        while (keys.hasNext()) {
+            val k = keys.next()
+            val raw = argsObj.opt(k)
+            typedArgs[k] = parseJsonValue(raw)
+            stringArgs[k] = when (raw) {
+                null, JSONObject.NULL -> ""
+                is String -> raw
+                else -> raw.toString()
+            }
+        }
+    }
+    return ParsedFunctionCall(
+        id = id,
+        name = name,
+        args = typedArgs,
+        rawStringArgs = stringArgs
+    )
+}
+
+internal fun Any?.toPipecatValue(): Value {
+    return when (this) {
+        null -> Value.Null
+        is Value -> this
+        is Boolean -> Value.Bool(this)
+        is Number -> Value.Number(this.toDouble())
+        is String -> Value.Str(this)
+        is Map<*, *> -> {
+            val pairs = this.entries.mapNotNull { (k, v) ->
+                val key = k?.toString() ?: return@mapNotNull null
+                key to v.toPipecatValue()
+            }
+            Value.Object(pairs.toMap())
+        }
+        is Collection<*> -> {
+            Value.Array(this.map { it.toPipecatValue() })
+        }
+        is Array<*> -> {
+            Value.Array(this.map { it.toPipecatValue() })
+        }
+        else -> Value.Str(this.toString())
+    }
+}
 
 internal class UserTurnTranscriptBuffer {
     private val buffer = StringBuilder()
@@ -200,6 +280,9 @@ class MiraGeminiClient private constructor(
         fun onFunctionCall(id: String, name: String, args: Value.Array) {}
         fun onFunctionCall(id: String, name: String, args: Value.Array, rawArgs: Map<String, String>) {
             onFunctionCall(id, name, args)
+        }
+        fun onFunctionCall(id: String, name: String, args: Value.Array, rawArgs: Map<String, String>, typedArgs: Map<String, Any?>) {
+            onFunctionCall(id, name, args, rawArgs)
         }
         fun onSessionResumptionUpdate(handle: String, resumable: Boolean)
         fun onGoAway(timeLeft: String)
@@ -439,18 +522,7 @@ class MiraGeminiClient private constructor(
                                     val parsedCalls = mutableListOf<ParsedFunctionCall>()
                                     for (i in 0 until functionCalls.length()) {
                                         val fc = functionCalls.getJSONObject(i)
-                                        val id = fc.optString("id", "")
-                                        val name = fc.optString("name", "")
-                                        val argsObj = fc.optJSONObject("args")
-                                        val argsMap = mutableMapOf<String, String>()
-                                        if (argsObj != null) {
-                                            val keys = argsObj.keys()
-                                            while (keys.hasNext()) {
-                                                val k = keys.next()
-                                                argsMap[k] = argsObj.optString(k, "")
-                                            }
-                                        }
-                                        parsedCalls.add(ParsedFunctionCall(id = id, name = name, args = argsMap))
+                                        parsedCalls.add(parseFunctionCall(fc))
                                     }
                                     postEvent(ClientThreadEvent.ToolCallReceived(parsedCalls))
                                 }
@@ -733,8 +805,9 @@ class MiraGeminiClient private constructor(
                                 listenerRef.get()?.onFunctionCall(
                                     id = call.id,
                                     name = call.name,
-                                    args = Value.Array(call.args.values.map { Value.Str(it) }),
-                                    rawArgs = call.args
+                                    args = Value.Array(call.args.values.map { it.toPipecatValue() }),
+                                    rawArgs = call.stringArgs,
+                                    typedArgs = call.args
                                 )
                             }
                         }

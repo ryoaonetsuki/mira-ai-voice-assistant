@@ -152,6 +152,24 @@ class MicService : Service() {
     private var liveSearchJob: Job? = null
     private var connectingWatchdogJob: Job? = null
     private var startVoiceSessionJob: Job? = null
+    /**
+     * Turn G: the call is owned by "call active" state, not by one WebSocket.
+     * [autoRestartJob] re-starts a fresh session after a terminal error
+     * while the user has not tapped End; [livenessWatchdogJob] watches for
+     * a live-but-deaf session; [callStateStore] persists "call active"
+     * across a service/process kill so a recreated service resumes the call.
+     */
+    private var autoRestartJob: Job? = null
+    private var autoRestartAttempt: Int = 0
+    private var livenessWatchdogJob: Job? = null
+    @Volatile private var lastAudioFrameElapsedMs: Long = 0L
+    @Volatile private var userRequestedStop: Boolean = false
+    @Volatile private var connectsThisCall: Int = 0
+    @Volatile private var lastAutomationGoal: String? = null
+    /** Turn G: voice + language captured once at call start, reused for every reconnect in the call. */
+    @Volatile private var callVoiceName: String? = null
+    @Volatile private var callLanguage: String? = null
+    private val callStateStore by lazy { LiveCallStateStore(applicationContext) }
     private val sessionGenerationToken = java.util.concurrent.atomic.AtomicLong(0L)
     @Volatile private var lastBotSpeakingEndTimeMs: Long = 0L
     @Volatile private var isTtsPlaying: Boolean = false
@@ -206,7 +224,11 @@ class MicService : Service() {
 
     /**
      * Guarantees terminal ERROR state and complete resource cleanup on every failure path.
-     * Stops session manager, resets mic amplitude to 0, cancels watchdogs, and allows Home to return to idle.
+     * Turn G: a terminal error is terminal ONLY when the user ended the call
+     * or the failure can never succeed (no key / no permission / free-tier
+     * limit). Otherwise the call is expected live, so the old session is
+     * torn down and a fresh one is auto-started silently on a capped
+     * backoff — the UI honestly shows reconnecting, never a dead ERROR.
      */
     private fun handleTerminalError(message: String) {
         sessionGenerationToken.incrementAndGet()
@@ -218,6 +240,31 @@ class MicService : Service() {
         connectorJob = null
         liveSearchJob?.cancel()
         liveSearchJob = null
+        livenessWatchdogJob?.cancel()
+        livenessWatchdogJob = null
+
+        if (!userRequestedStop && callStateStore.isCallActive() &&
+            !CallRestartPolicy.isTerminalFailure(message)
+        ) {
+            Log.w(TAG, "MIRA_LIVE_VOICE: Terminal error while call expected live — auto-restarting: $message")
+            LiveVoiceDiagnostics.recordDropReason("terminal-error: $message")
+            try {
+                sessionManager?.stopSession()
+            } catch (e: Exception) {
+                Log.w(TAG, "Error stopping session manager on terminal error: ${e.message}")
+            }
+            sessionManager = null
+            activeSessionManager = null
+            _errorMessage.value = null
+            _lastVoiceDiagnostic.value = "Reconnecting… ($message)"
+            _liveState.value = LiveState.CONNECTING
+            _voiceStage.value = VoiceStage.CONNECTING
+            _isReconnecting.value = true
+            _micAmplitude.value = 0f
+            postCallNotificationIfForeground()
+            scheduleAutoRestart(message)
+            return
+        }
 
         _errorMessage.value = message
         _lastVoiceDiagnostic.value = message
@@ -236,6 +283,63 @@ class MicService : Service() {
         }
         sessionManager = null
         activeSessionManager = null
+    }
+
+    /** Turn G: schedule a fresh session start on the capped restart backoff. */
+    private fun scheduleAutoRestart(reason: String) {
+        autoRestartJob?.cancel()
+        autoRestartAttempt++
+        val delayMs = CallRestartPolicy.delayForAttempt(autoRestartAttempt)
+        _reconnectAttempt.value = autoRestartAttempt
+        LiveVoiceDiagnostics.recordAutoRestart(reason)
+        Log.i(TAG, "MIRA_LIVE_VOICE: Auto-restarting call in ${delayMs}ms (attempt $autoRestartAttempt, reason=$reason)")
+        autoRestartJob = serviceScope.launch {
+            delay(delayMs)
+            if (userRequestedStop || !callStateStore.isCallActive()) {
+                Log.i(TAG, "MIRA_LIVE_VOICE: Auto-restart cancelled — call no longer expected live")
+                return@launch
+            }
+            // Let startLiveVoiceSession's duplicate-start guard pass.
+            _liveState.value = LiveState.IDLE
+            _isReconnecting.value = false
+            startLiveVoiceSession(isAutoRestart = true)
+        }
+    }
+
+    /** Turn G: a mic frame arrived — the capture path and transport are alive. */
+    private fun noteAudioFrame() {
+        lastAudioFrameElapsedMs = android.os.SystemClock.elapsedRealtime()
+    }
+
+    /**
+     * Turn G liveness watchdog: while the call is live and unmuted, mic
+     * frames arrive ~every 100 ms even in silence. A long gap means the
+     * session is CONNECTED-but-deaf (mic died / transport dead) — force a
+     * reconnect instead of leaving the user talking to a dead call.
+     */
+    private fun startLivenessWatchdog() {
+        livenessWatchdogJob?.cancel()
+        livenessWatchdogJob = serviceScope.launch {
+            while (isActive) {
+                delay(VoiceLivenessPolicy.CHECK_INTERVAL_MS)
+                val live = _liveState.value == LiveState.LISTENING ||
+                    _liveState.value == LiveState.SPEAKING
+                if (VoiceLivenessPolicy.shouldTriggerRestart(
+                        lastAudioFrameElapsedMs,
+                        android.os.SystemClock.elapsedRealtime(),
+                        _isMuted.value, live, _isReconnecting.value
+                    )
+                ) {
+                    Log.w(TAG, "MIRA_LIVE_VOICE: Liveness watchdog fired — no mic frames for ${VoiceLivenessPolicy.MAX_SILENT_MS}ms while live; requesting reconnect")
+                    LiveVoiceDiagnostics.recordDropReason(
+                        "watchdog-no-audio-frames: no mic frames for ${VoiceLivenessPolicy.MAX_SILENT_MS}ms"
+                    )
+                    // Avoid a tight loop while the reconnect is in flight.
+                    noteAudioFrame()
+                    sessionManager?.requestReconnect("no-audio-frames")
+                }
+            }
+        }
     }
 
     private fun handlePlaybackSpeakingChanged(isSpeaking: Boolean) {
@@ -278,10 +382,15 @@ class MicService : Service() {
         val action = intent?.action
         when (action) {
             ACTION_START -> {
+                userRequestedStop = false
                 startForegroundWithNotification()
                 startLiveVoiceSession()
             }
             ACTION_STOP -> {
+                userRequestedStop = true
+                callStateStore.setCallActive(false)
+                autoRestartJob?.cancel()
+                autoRestartJob = null
                 stopLiveVoiceSession()
                 dismissNotification()
                 stopSelf()
@@ -289,14 +398,28 @@ class MicService : Service() {
             ACTION_TOGGLE_MUTE -> {
                 toggleMute()
             }
+            null -> {
+                // Turn G START_STICKY restart: the system killed the service
+                // while a call was active — resume it with no tap from the
+                // user. (onDestroy deliberately does NOT clear the flag.)
+                if (callStateStore.isCallActive() && !userRequestedStop) {
+                    Log.i(TAG, "MIRA_LIVE_VOICE: Service recreated with an active call — resuming session")
+                    LiveVoiceDiagnostics.recordDropReason("service-killed: service recreated, resuming call")
+                    startForegroundWithNotification()
+                    startLiveVoiceSession()
+                } else {
+                    stopSelf()
+                }
+            }
         }
-        return START_NOT_STICKY
+        return START_STICKY
     }
 
     private fun toggleMute() {
         val next = !_isMuted.value
         _isMuted.value = next
         Log.i(TAG, "MIRA_LIVE_VOICE: Mic mute toggled to $next")
+        if (!next) noteAudioFrame() // unmuted: frames resume now, not 20s ago
         sessionManager?.enableMic(!next)
         postCallNotificationIfForeground()
     }
@@ -329,14 +452,29 @@ class MicService : Service() {
         notificationController.startForegroundWithNotification(buildCallNotification(), NOTIFICATION_ID)
     }
 
-    private fun startLiveVoiceSession() {
+    private fun startLiveVoiceSession(isAutoRestart: Boolean = false) {
         // Prevent duplicate sessions from repeated taps
         if (_liveState.value != LiveState.IDLE && _liveState.value != LiveState.ERROR) {
             Log.w(TAG, "MIRA_LIVE_VOICE: Voice button tapped while session active (${_liveState.value}) — ignoring duplicate tap")
             return
         }
 
+        // Turn G: the call is expected live from here until the user taps
+        // End. An auto-restart keeps the same call (same connect count and
+        // task context); a fresh user start begins a new one.
+        callStateStore.setCallActive(true)
+        userRequestedStop = false
+        autoRestartJob?.cancel()
+        autoRestartJob = null
+        if (!isAutoRestart) {
+            connectsThisCall = 0
+            lastAutomationGoal = null
+            callVoiceName = null
+            callLanguage = null
+        }
+
         stopLiveVoiceSessionInternal()
+        startLivenessWatchdog()
         _userTranscript.value = ""
         _modelTranscript.value = ""
         _errorMessage.value = null
@@ -354,6 +492,8 @@ class MicService : Service() {
         Log.i(TAG, "MIRA_LIVE_VOICE: Voice button tapped — mic permission status: $hasMicPermission")
         if (!hasMicPermission) {
             Log.e(TAG, "MIRA_LIVE_VOICE: Microphone permission not granted at session start — aborting")
+            // Turn G: a call that can never start must not be resumed later.
+            callStateStore.setCallActive(false)
             _liveState.value = LiveState.ERROR
             _voiceStage.value = VoiceStage.ERROR
             val permErr = "Microphone permission not granted — allow it in Settings"
@@ -393,6 +533,8 @@ class MicService : Service() {
                 startPrimaryGeminiLiveSession(resolver.anonKey, currentGeneration)
             } else {
                 Log.w(TAG, "MIRA_LIVE_VOICE: No Gemini API key available for voice session")
+                // Turn G: a call that can never start must not be resumed later.
+                callStateStore.setCallActive(false)
                 _liveState.value = LiveState.ERROR
                 _voiceStage.value = VoiceStage.ERROR
                 val noKeyErr = "Gemini key missing — add it in Settings"
@@ -407,10 +549,15 @@ class MicService : Service() {
 
     private suspend fun startPrimaryGeminiLiveSession(geminiKey: String, generation: Long) {
         val userPrefs = UserPreferences(applicationContext)
-        val voiceName = userPrefs.voiceNameFlow.first()
+        // Turn G: ONE voice for the whole call. The voice + language are
+        // captured ONCE at call start and reused for every reconnect inside
+        // the call — a rebuild that re-read Settings mid-call could switch
+        // voices (the "another voice" the owner hears). Only a new call
+        // (callVoiceName reset in startLiveVoiceSession) may change it.
+        val voiceName = callVoiceName ?: userPrefs.voiceNameFlow.first().also { callVoiceName = it }
         val personaName = userPrefs.personaFlow.first()
         val customInstructions = userPrefs.customInstructionsFlow.first()
-        val language = userPrefs.languageFlow.first()
+        val language = callLanguage ?: userPrefs.languageFlow.first().also { callLanguage = it }
         val secretMode = userPrefs.secretModeFlow.first()
         val echoGuard = userPrefs.echoGuardFlow.first()
         val userName = userPrefs.userNameFlow.first()
@@ -452,7 +599,7 @@ class MicService : Service() {
 
         val bcp47Language = LanguageUtils.mapLanguageToBcp47(language)
 
-        Log.i(TAG, "MIRA_LIVE_VOICE: Initializing GeminiSessionManager with voice=$voiceName, language=$bcp47Language, echoGuard=$echoGuard (gen=$generation)")
+        Log.i(TAG, "MIRA_LIVE_VOICE: Initializing GeminiSessionManager with voice=$voiceName, language=$bcp47Language, echoGuard=$echoGuard (gen=$generation, resumedVoice=${callVoiceName != null})")
 
         _liveState.value = LiveState.CONNECTING
         _voiceStage.value = VoiceStage.CONNECTING
@@ -497,6 +644,7 @@ class MicService : Service() {
         // Connect manager.audioLevel to _micAmplitude (the orb driver)
         serviceScope.launch {
             manager.audioLevel.collect { level ->
+                noteAudioFrame() // mic frames flowing = capture path alive
                 if (!_isMuted.value && (_liveState.value == LiveState.LISTENING || _liveState.value == LiveState.SPEAKING)) {
                     _micAmplitude.value = level
                 } else {
@@ -561,22 +709,35 @@ class MicService : Service() {
                         _isReconnecting.value = false
                         _errorMessage.value = null
                         _lastVoiceDiagnostic.value = null
+                        // Turn G: a connect that recovered the call resets
+                        // the restart backoff; the liveness clock restarts now.
+                        autoRestartAttempt = 0
+                        _reconnectAttempt.value = 0
+                        noteAudioFrame()
+                        connectsThisCall++
+                        Log.i(TAG, "MIRA_LIVE_VOICE: Connected (connect #$connectsThisCall of this call, voice=$cachedVoiceName)")
 
                         _liveState.value = LiveState.LISTENING
                         _voiceStage.value = VoiceStage.LISTENING
 
-                        serviceScope.launch(Dispatchers.IO) {
-                            try {
-                                val notifDb = MiraDatabase.getInstance(applicationContext)
-                                notifDb.notificationDao().insertNotification(
-                                    NotificationEntity(
-                                        title = "Voice Session Started",
-                                        message = "Connected to Gemini Live ($cachedVoiceName)",
-                                        type = "voice"
+                        // Turn G: "Voice Session Started" on EVERY connect
+                        // made each reconnect feel like a fresh call. Announce
+                        // only the first connect of the call; reconnects are
+                        // silent continuity, not a new call.
+                        if (connectsThisCall == 1) {
+                            serviceScope.launch(Dispatchers.IO) {
+                                try {
+                                    val notifDb = MiraDatabase.getInstance(applicationContext)
+                                    notifDb.notificationDao().insertNotification(
+                                        NotificationEntity(
+                                            title = "Voice Session Started",
+                                            message = "Connected to Gemini Live ($cachedVoiceName)",
+                                            type = "voice"
+                                        )
                                     )
-                                )
-                            } catch (e: Exception) {
-                                Log.w(TAG, "MIRA_LIVE_VOICE: Could not record notification: ${e.message}")
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "MIRA_LIVE_VOICE: Could not record notification: ${e.message}")
+                                }
                             }
                         }
                     }
@@ -617,6 +778,7 @@ class MicService : Service() {
             }
 
             override fun onAudioLevel(level: Float) {
+                noteAudioFrame()
                 if (!_isMuted.value && (_liveState.value == LiveState.LISTENING || _liveState.value == LiveState.SPEAKING)) {
                     _micAmplitude.value = level
                 } else {
@@ -651,6 +813,7 @@ class MicService : Service() {
             }
 
             override fun onUserTranscript(text: String, isFinal: Boolean) {
+                noteAudioFrame()
                 Log.i(TAG, "MIRA_LIVE_VOICE: User transcript (final=$isFinal): $text")
                 val now = android.os.SystemClock.elapsedRealtime()
                 val isSpeakingOrDraining = _liveState.value == LiveState.SPEAKING ||
@@ -681,6 +844,7 @@ class MicService : Service() {
             }
 
             override fun onModelTranscript(text: String) {
+                noteAudioFrame()
                 Log.i(TAG, "MIRA_LIVE_VOICE: Model transcript: $text")
                 val sanitized = io.github.ryoaonetsuki.mira.identity.MiraOutputFilter.sanitizeForVoice(text)
                 if (sanitized != text) {
@@ -712,6 +876,28 @@ class MicService : Service() {
 
             override fun onSessionEnded(reason: String, error: Throwable?) {
                 Log.i(TAG, "MIRA_LIVE_VOICE: Session ended (reason=$reason, error=${error?.message})")
+                // Turn G: a bare log line used to be the whole record. The
+                // reason is now kept in diagnostics so the next phone test
+                // can tell which suspect fired.
+                LiveVoiceDiagnostics.recordDropReason("session-ended: $reason")
+            }
+
+            override fun onSessionResumed(resumed: Boolean) {
+                Log.i(TAG, "MIRA_LIVE_VOICE: Session (re)connect resumed=$resumed (connect #$connectsThisCall of this call, voice=$cachedVoiceName)")
+                if (resumed) return
+                if (connectsThisCall <= 1) return // first connect: nothing to re-seed
+                // Turn G: the resume failed, so this is a FRESH session in
+                // the same call — re-seed the task context instead of
+                // starting blank. One short note; Live treats it as context.
+                val goal = lastAutomationGoal
+                val lastModel = _modelTranscript.value
+                if (goal.isNullOrBlank() && lastModel.isBlank()) return
+                val note = buildString {
+                    append("[Context: the previous voice session dropped and this is a fresh session in the same call. ")
+                    if (!goal.isNullOrBlank()) append("The user was working on: \"$goal\". ")
+                    append("Continue naturally; a follow-up from the user refers to that task. Do not announce this note.]")
+                }
+                sessionManager?.sendUserMessage(note)
             }
 
             override fun onFunctionCall(id: String, name: String, args: Value.Array, rawArgs: Map<String, String>) {
@@ -905,6 +1091,7 @@ class MicService : Service() {
      */
     private fun handleAutomationCommand(cleanText: String) {
         val token = sessionGenerationToken.get()
+        lastAutomationGoal = cleanText
         _statusText.value = "Running: $cleanText..."
         _modelTranscript.value = "Running: $cleanText..."
         val serviceEnabled = MiraAccessibilityService.isEnabled(applicationContext)
@@ -1030,6 +1217,10 @@ class MicService : Service() {
         _statusText.value = ""
         startVoiceSessionJob?.cancel()
         startVoiceSessionJob = null
+        autoRestartJob?.cancel()
+        autoRestartJob = null
+        livenessWatchdogJob?.cancel()
+        livenessWatchdogJob = null
         isTtsPlaying = false
         turnDispatchedToAutomation = false
         connectingWatchdogJob?.cancel()

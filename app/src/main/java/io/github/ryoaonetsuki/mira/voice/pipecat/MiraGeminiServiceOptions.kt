@@ -47,6 +47,34 @@ data class MiraGeminiServiceOptions(
         const val DEFAULT_AUTH_HEADER_NAME = "x-goog-api-key"
 
         /**
+         * Default phone tools declared in Gemini Live setup frame (Milestone 1).
+         * Declares ONE function: open_app with args {app: string}.
+         * Note: google_search grounding is NOT combined with function calling (prohibited by Live API).
+         */
+        fun defaultPhoneTools(): Value.Array {
+            return Value.Array(
+                Value.Object(
+                    "functionDeclarations" to Value.Array(
+                        Value.Object(
+                            "name" to Value.Str("open_app"),
+                            "description" to Value.Str("Opens an installed application on the user's phone by name or package (e.g. WhatsApp, YouTube, Settings, Chrome)."),
+                            "parameters" to Value.Object(
+                                "type" to Value.Str("OBJECT"),
+                                "properties" to Value.Object(
+                                    "app" to Value.Object(
+                                        "type" to Value.Str("STRING"),
+                                        "description" to Value.Str("The application name or package to open")
+                                    )
+                                ),
+                                "required" to Value.Array(Value.Str("app"))
+                            )
+                        )
+                    )
+                )
+            )
+        }
+
+        /**
          * Builds the modelConfig Value.Object for Gemini Live setup frame
          * EXACTLY per ROUND19_PLAN.md section 1 and voice-fix spec:
          *
@@ -59,6 +87,7 @@ data class MiraGeminiServiceOptions(
          * - sessionResumption: {} (fresh) or { "handle": storedHandle } (resumption)
          * - contextWindowCompression: { "slidingWindow": {} }
          * - systemInstruction: parts (if provided) or Value.Null
+         * - tools: function declarations (open_app)
          * - NEVER top-level transparent
          */
         fun buildPipecatModelConfig(
@@ -66,7 +95,8 @@ data class MiraGeminiServiceOptions(
             voiceName: String = "Aoede",
             languageCode: String = "bn-BD",
             systemInstructionText: String = "",
-            resumptionHandle: String? = null
+            resumptionHandle: String? = null,
+            tools: Value? = defaultPhoneTools()
         ): Value.Object {
             val speechConfig = Value.Object(
                 "voiceConfig" to Value.Object(
@@ -109,7 +139,7 @@ data class MiraGeminiServiceOptions(
                 Value.Null
             }
 
-            return Value.Object(
+            val configMap = mutableMapOf<String, Value>(
                 "model" to Value.Str(model),
                 "generationConfig" to generationConfig,
                 "realtimeInputConfig" to realtimeInputConfig,
@@ -119,6 +149,11 @@ data class MiraGeminiServiceOptions(
                 "contextWindowCompression" to contextCompression,
                 "systemInstruction" to systemInstruction
             )
+            if (tools != null) {
+                configMap["tools"] = tools
+            }
+
+            return Value.Object(configMap)
         }
 
         fun forDirect(
@@ -128,6 +163,7 @@ data class MiraGeminiServiceOptions(
             languageCode: String = "bn-BD",
             systemInstructionText: String = "",
             resumptionHandle: String? = null,
+            tools: Value? = defaultPhoneTools(),
             initialUserMessage: String? = null,
             headers: Map<String, String> = emptyMap(),
             echoGuardEnabled: Boolean = true
@@ -141,7 +177,8 @@ data class MiraGeminiServiceOptions(
                 voiceName = voiceName,
                 languageCode = languageCode,
                 systemInstructionText = systemInstructionText,
-                resumptionHandle = resumptionHandle
+                resumptionHandle = resumptionHandle,
+                tools = tools
             ),
             initialUserMessage = initialUserMessage,
             echoGuardEnabled = echoGuardEnabled
@@ -157,11 +194,13 @@ fun buildPipecatModelConfig(
     voiceName: String = "Aoede",
     languageCode: String = "bn-BD",
     systemInstructionText: String = "",
-    resumptionHandle: String? = null
+    resumptionHandle: String? = null,
+    tools: Value? = MiraGeminiServiceOptions.defaultPhoneTools()
 ): Value.Object = MiraGeminiServiceOptions.buildPipecatModelConfig(
     model = model,
     voiceName = voiceName,
     languageCode = languageCode,
     systemInstructionText = systemInstructionText,
-    resumptionHandle = resumptionHandle
+    resumptionHandle = resumptionHandle,
+    tools = tools
 )

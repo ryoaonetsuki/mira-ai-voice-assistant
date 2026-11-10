@@ -844,13 +844,9 @@ class MiraGeminiClient private constructor(
                     postEvent(ClientThreadEvent.StopAudioPlayback)
                 },
                 onSetOutputSuppressed = { suppressed ->
-                    // Turn G (verified cut): the interrupt used to fire on
-                    // BOTH paths, so every task-completion announcement
-                    // (task completion previously called setOutputSuppressed(false))
-                    // cut whatever the model was saying mid-sentence — the
-                    // voice kept "cutting" on commands. Interrupt ONLY when
-                    // actually suppressing; releasing the gate just lets
-                    // audio flow again without touching live speech.
+                    // Turn G: interrupt audio playback ONLY when actually suppressing;
+                    // releasing the output gate lets live audio flow freely without
+                    // interrupting the model's ongoing speech.
                     if (suppressed) {
                         outputGate.suppress()
                         postEvent(ClientThreadEvent.StopAudioPlayback)

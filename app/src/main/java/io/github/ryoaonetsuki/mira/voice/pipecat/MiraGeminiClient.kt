@@ -209,6 +209,8 @@ class MiraGeminiClient private constructor(
         }
         fun onTurnComplete() {}
         fun onModelTranscript(text: String)
+        /** Turn G: mic capture died after its bounded internal retries — the session must restart, never go silently deaf. */
+        fun onMicError(reason: String) {}
     }
 
     private sealed interface ClientThreadEvent {
@@ -221,6 +223,8 @@ class MiraGeminiClient private constructor(
         data object SetupCompleteReceived : ClientThreadEvent
         class SessionResumptionUpdateReceived(val handle: String, val resumable: Boolean) : ClientThreadEvent
         class GoAwayReceived(val timeLeft: String) : ClientThreadEvent
+        /** Turn G: the mic capture thread gave up after bounded retries. */
+        class MicErrorReceived(val error: Throwable) : ClientThreadEvent
         class UserTranscriptReceived(val text: String, val finished: Boolean = false) : ClientThreadEvent
         class ModelTranscriptReceived(val text: String) : ClientThreadEvent
         class ToolCallReceived(val functionCalls: List<ParsedFunctionCall>) : ClientThreadEvent
@@ -269,7 +273,13 @@ class MiraGeminiClient private constructor(
                     sampleRateHz = inputSampleRate,
                     onAudioCaptured = { audioInCallback.get()?.invoke(it) },
                     onAudioLevelUpdate = listener::onUserAudioLevel,
-                    onError = { Log.e(TAG, "AudioIn error: ${it.message}") },
+                    // Turn G: a dead mic must restart the session, not just
+                    // log. AudioIn already retried internally; this fires
+                    // only when its retries are exhausted.
+                    onError = { error ->
+                        Log.e(TAG, "AudioIn error (retries exhausted): ${error.message}")
+                        postEvent(ClientThreadEvent.MicErrorReceived(error))
+                    },
                     onStopped = {},
                     initialMicEnabled = config.initialMicEnabled
                 )
@@ -530,6 +540,13 @@ class MiraGeminiClient private constructor(
                             doSendFunctionResponse(event.id, event.name, event.response)
                         }
 
+                        is ClientThreadEvent.MicErrorReceived -> {
+                            Log.e(TAG, "Mic capture failed permanently: ${event.error.message}")
+                            listenerRef.get()?.onMicError(
+                                "mic capture failed: ${event.error.message ?: event.error.javaClass.simpleName}"
+                            )
+                        }
+
                         ClientThreadEvent.Stop -> {
                             stopAudio()
                             val closedCleanly = ws.close(1000, "user requested close")
@@ -753,8 +770,19 @@ class MiraGeminiClient private constructor(
                     postEvent(ClientThreadEvent.StopAudioPlayback)
                 },
                 onSetOutputSuppressed = { suppressed ->
-                    if (suppressed) outputGate.suppress() else outputGate.release()
-                    postEvent(ClientThreadEvent.StopAudioPlayback)
+                    // Turn G (verified cut): the interrupt used to fire on
+                    // BOTH paths, so every task-completion announcement
+                    // (announceOutcome calls setOutputSuppressed(false))
+                    // cut whatever the model was saying mid-sentence — the
+                    // voice kept "cutting" on commands. Interrupt ONLY when
+                    // actually suppressing; releasing the gate just lets
+                    // audio flow again without touching live speech.
+                    if (suppressed) {
+                        outputGate.suppress()
+                        postEvent(ClientThreadEvent.StopAudioPlayback)
+                    } else {
+                        outputGate.release()
+                    }
                 }
             )
         }

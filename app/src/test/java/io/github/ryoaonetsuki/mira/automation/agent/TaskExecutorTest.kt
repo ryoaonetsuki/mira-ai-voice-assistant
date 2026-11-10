@@ -1,5 +1,6 @@
 package io.github.ryoaonetsuki.mira.automation.agent
 
+import io.github.ryoaonetsuki.mira.automation.AppKnowledge
 import io.github.ryoaonetsuki.mira.automation.MiraAutomationBridge
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
@@ -177,6 +178,20 @@ class TaskExecutorTest {
             if (!actionSuccess) return false
             actionsPerformed.add("swipe:$startX,$startY->$endX,$endY")
             mutateScreenState("swipe")
+            return true
+        }
+
+        override fun longPress(x: Float, y: Float, durationMs: Long): Boolean {
+            if (!actionSuccess) return false
+            actionsPerformed.add("longPress:$x:$y")
+            mutateScreenState("longPress:$x:$y")
+            return true
+        }
+
+        override fun pinch(centerX: Float, centerY: Float, zoomIn: Boolean): Boolean {
+            if (!actionSuccess) return false
+            actionsPerformed.add("pinch:$centerX:$centerY:$zoomIn")
+            mutateScreenState("pinch:$centerX:$centerY:$zoomIn")
             return true
         }
 
@@ -1912,5 +1927,191 @@ class TaskExecutorTest {
             elapsed < 5_000L
         )
         assertFalse("Executor slot must clear after the timeout", bridge.isRunning)
+    }
+
+    // --- Best-of-all: Tapilot loop guard (design port of guardRepeatedGesture) ---
+
+    @Test
+    fun testLoopGuard_IdenticalNoEffect_StopsAtThree() {
+        val guard = LoopGuard()
+        assertNull(guard.observeNoEffect("scroll", 123))
+        assertNull(guard.observeNoEffect("scroll", 123))
+        val reason = guard.observeNoEffect("scroll", 123)
+        assertNotNull("Same action + same screen 3x with no effect must stop", reason)
+        assertTrue(reason!!.contains("repeated 3 times"))
+    }
+
+    @Test
+    fun testLoopGuard_AlternatingLoop_StopsAtFour() {
+        val guard = LoopGuard()
+        assertNull(guard.observeNoEffect("scroll", 123))
+        assertNull(guard.observeNoEffect("swipe", 123))
+        assertNull(guard.observeNoEffect("scroll", 123))
+        val reason = guard.observeNoEffect("swipe", 123)
+        assertNotNull("A/B/A/B with no effect must stop as an alternating loop", reason)
+        assertTrue(reason!!.contains("alternating"))
+    }
+
+    @Test
+    fun testLoopGuard_ResetsOnEffect() {
+        val guard = LoopGuard()
+        assertNull(guard.observeNoEffect("scroll", 123))
+        assertNull(guard.observeNoEffect("scroll", 123))
+        guard.reset() // a verified effect is progress — the count restarts
+        assertNull(guard.observeNoEffect("scroll", 123))
+        assertNull(guard.observeNoEffect("scroll", 123))
+        assertNotNull(guard.observeNoEffect("scroll", 123))
+    }
+
+    @Test
+    fun testLoopGuard_AiLoop_StopsStuckScrollAtStep3() = runBlocking {
+        // The AI keeps scrolling a screen that never changes (simulateEffect
+        // = false: dispatch succeeds, nothing moves). Without the guard this
+        // burns all 15 steps; with it, the task fails at step 3.
+        val fakePort = FakeAutomationPort(serviceEnabled = true, simulateEffect = false)
+        val skills = SkillMemoryService(InMemorySkillStore())
+        var thinkTurns = 0
+        val executor = TaskExecutor(
+            automation = fakePort,
+            skills = skills,
+            think = { _, _, _ ->
+                thinkTurns++
+                """{"action": "scroll", "params": {"direction": "down"}}"""
+            },
+            maxSteps = 15,
+            stepDelayMs = 0
+        )
+
+        val result = executor.executeGoal("explore the page then scroll down")
+        assertEquals(TaskStatus.FAILED, result.status)
+        assertEquals("Guard must stop at step 3, not burn all 15", 3, result.stepsUsed)
+        assertEquals(3, thinkTurns)
+        assertTrue(result.message.contains("repeated 3 times"))
+    }
+
+    // --- Best-of-all: flutter_automate long_press / pinch ---
+
+    @Test
+    fun testTaskStep_LongPressAndPinchAliases() {
+        val longPress = TaskStep.tryParse(
+            """{"action": "long_click", "params": {"x": 500, "y": 800, "durationMs": 600}}"""
+        )
+        assertNotNull(longPress)
+        assertEquals(TaskStep.ACTION_LONG_PRESS, longPress!!.action)
+        assertEquals(500, longPress.intParam("x"))
+
+        val pinchOut = TaskStep.tryParse(
+            """{"action": "zoom_out", "params": {"centerX": 540, "centerY": 960}}"""
+        )
+        assertNotNull(pinchOut)
+        assertEquals(TaskStep.ACTION_PINCH, pinchOut!!.action)
+        assertEquals("out", pinchOut.stringParam("direction"))
+
+        val pinchIn = TaskStep.tryParse(
+            """{"action": "pinch_in", "params": {"centerX": 540, "centerY": 960}}"""
+        )
+        assertNotNull(pinchIn)
+        assertEquals(TaskStep.ACTION_PINCH, pinchIn!!.action)
+        assertEquals("in", pinchIn.stringParam("direction"))
+
+        assertTrue(TaskStep.supportedActions.contains(TaskStep.ACTION_LONG_PRESS))
+        assertTrue(TaskStep.supportedActions.contains(TaskStep.ACTION_PINCH))
+    }
+
+    @Test
+    fun testPlanOnce_LongPressAndPinch_ExecuteDirectly() = runBlocking {
+        val fakePort = FakeAutomationPort(serviceEnabled = true)
+        val skills = SkillMemoryService(InMemorySkillStore())
+        var thinkTurns = 0
+        val executor = TaskExecutor(
+            automation = fakePort,
+            skills = skills,
+            think = { _, _, _ ->
+                thinkTurns++
+                """{"action": "done", "is_complete": true}"""
+            },
+            plan = { _, _ ->
+                """{"steps": [{"action": "long_press", "params": {"x": 500, "y": 800, "durationMs": 600}}, {"action": "pinch", "params": {"centerX": 540, "centerY": 960, "direction": "out"}}]}"""
+            },
+            stepDelayMs = 0
+        )
+
+        val result = executor.executeGoal("zoom out the map then long press the pin")
+        assertEquals(TaskStatus.SUCCESS, result.status)
+        assertEquals("Plan-once path uses zero per-step think calls", 0, thinkTurns)
+        assertTrue(fakePort.actionsPerformed.contains("longPress:500.0:800.0"))
+        assertTrue(fakePort.actionsPerformed.contains("pinch:540.0:960.0:false"))
+    }
+
+    // --- Best-of-all: flutter_automate UiSelector matching semantics ---
+
+    @Test
+    fun testUiNodeMatcher_FindByViewIdAndClass() {
+        val nodes = listOf(
+            ScreenNode(0, "", "", "android.widget.ImageButton", "com.example.app:id/search_button", isClickable = true, isEditable = false, isScrollable = false, isCheckable = false, isEnabled = true, 0, 0, 10, 10, 5, 5),
+            ScreenNode(1, "OK", "", "android.widget.Button", "", isClickable = true, isEditable = false, isScrollable = false, isCheckable = false, isEnabled = true, 0, 0, 10, 10, 5, 5)
+        )
+
+        // :id/ suffix rule: short query matches the full resource-id.
+        val byId = UiNodeMatcher.findByViewId(nodes, "search_button")
+        assertNotNull(byId)
+        assertEquals("com.example.app:id/search_button", byId!!.viewId)
+        // Exact full id also matches.
+        assertNotNull(UiNodeMatcher.findByViewId(nodes, "com.example.app:id/search_button"))
+        assertNull(UiNodeMatcher.findByViewId(nodes, "missing_button"))
+
+        // android.widget.<ShortName> rule: "Button" matches android.widget.Button.
+        val byClass = UiNodeMatcher.findByClass(nodes, "Button")
+        assertNotNull(byClass)
+        assertEquals("OK", byClass!!.text)
+        assertNull(UiNodeMatcher.findByClass(nodes, "TextView"))
+
+        // findBest falls back to viewId when no visible text matches.
+        val best = UiNodeMatcher.findBest(nodes, "search_button")
+        assertNotNull(best)
+        assertEquals("com.example.app:id/search_button", best!!.viewId)
+        assertNull(UiNodeMatcher.findBest(nodes, "nothing here"))
+    }
+
+    // --- Best-of-all: Mika per-app knowledge files ---
+
+    @Test
+    fun testAppKnowledge_NoteLookup() {
+        val notes = mapOf(
+            "automation/knowledge/youtube.md" to "YouTube notes",
+            "automation/knowledge/facebook.md" to "Facebook notes"
+        )
+        val knowledge = AppKnowledge { path -> notes[path] }
+
+        assertEquals("YouTube notes", knowledge.noteForTarget("com.google.android.youtube"))
+        assertEquals("YouTube notes", knowledge.noteForTarget("youtube"))
+        assertEquals("Facebook notes", knowledge.noteForTarget("com.facebook.katana"))
+        assertNull("Unknown apps have no note — never a failure", knowledge.noteForTarget("unknown.app"))
+        assertNull(knowledge.noteForTarget(null))
+        assertEquals("youtube", AppKnowledge.slugFor("com.google.android.youtube"))
+        assertNull(AppKnowledge.slugFor("unknown.app"))
+    }
+
+    // --- Best-of-all: Automator-style human-readable plan format ---
+
+    @Test
+    fun testFormatPlan_AutomatorStyle() {
+        val executor = TaskExecutor(
+            automation = FakeAutomationPort(),
+            skills = SkillMemoryService(InMemorySkillStore()),
+            stepDelayMs = 0
+        )
+
+        val steps = listOf(
+            TaskStep("open_app", mapOf("app" to "youtube")),
+            TaskStep("click_text", mapOf("text" to "Search")),
+            TaskStep("type_text", mapOf("text" to "lofi"))
+        )
+        val formatted = executor.formatPlan(steps)
+        assertEquals(
+            "Plan (3 steps):\n1. OPEN_APP: youtube\n2. CLICK_ELEMENT: \"Search\"\n3. TYPE_TEXT: \"lofi\"",
+            formatted
+        )
+        assertEquals("Plan (0 steps): nothing to do.", executor.formatPlan(emptyList()))
     }
 }

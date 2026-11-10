@@ -157,6 +157,9 @@ class MiraAutomationBridge(
         /** Tap a visible label ("tap Settings") — matched against the live node tree, no overlay. */
         data class TapLabel(val label: String) : DirectAction()
 
+        /** Tap a numbered element on screen ("tap 3", "tap number 5"). */
+        data class TapNumber(val number: Int) : DirectAction()
+
         /** Search [query]; in [targetApp] when known (YouTube), else web search. */
         data class Search(val query: String, val targetApp: String?) : DirectAction()
 
@@ -824,6 +827,36 @@ class MiraAutomationBridge(
                 .joinToString(" ")
         }
 
+        /**
+         * "tap <number>" — true when a tap verb is present and the remaining tokens
+         * after removing particles, tap words, and the filler "number" form exactly one
+         * token in ASCII, Bengali, or Devanagari digits.
+         */
+        private fun extractTapNumber(lower: String): Int? {
+            val hasTap = hasAnyLatin(lower, TAP_WORDS_LATIN) ||
+                hasAnySubstring(lower, TAP_WORDS_SUBSTRING)
+            if (!hasTap) return null
+            val tokens = tokenize(lower).filter { token ->
+                token !in PARTICLE_TOKENS &&
+                    token !in TAP_WORDS_LATIN &&
+                    TAP_WORDS_SUBSTRING.none { token.contains(it) } &&
+                    token != "number"
+            }
+            if (tokens.size != 1) return null
+            val token = tokens[0]
+            val sb = StringBuilder()
+            for (ch in token) {
+                when (ch) {
+                    in '0'..'9' -> sb.append(ch)
+                    in '\u09E6'..'\u09EF' -> sb.append((ch - '\u09E6' + '0'.code).toChar())
+                    in '\u0966'..'\u096F' -> sb.append((ch - '\u0966' + '0'.code).toChar())
+                    else -> return null
+                }
+            }
+            if (sb.isEmpty()) return null
+            return sb.toString().toIntOrNull()
+        }
+
         /** "tap <label>" — the label is whatever remains after the tap verb and particles. */
         private fun extractTapLabel(lower: String): String? {
             val hasTap = hasAnyLatin(lower, TAP_WORDS_LATIN) ||
@@ -854,6 +887,9 @@ class MiraAutomationBridge(
             if (isBackCommand(lower)) return DirectAction.PressBack
             scrollDirection(lower)?.let { dir ->
                 return DirectAction.Scroll(dir, isABit(lower))
+            }
+            extractTapNumber(lower)?.let { number ->
+                return DirectAction.TapNumber(number)
             }
             extractTapLabel(lower)?.let { label ->
                 return DirectAction.TapLabel(label)

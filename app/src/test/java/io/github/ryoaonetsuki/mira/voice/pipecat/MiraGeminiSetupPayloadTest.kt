@@ -111,7 +111,7 @@ class MiraGeminiSetupPayloadTest {
         assertNotNull("tools[0] must be Value.Object", toolDeclObj)
         val funcDecls = toolDeclObj!!.value["functionDeclarations"] as? Value.Array
         assertNotNull("functionDeclarations must be present", funcDecls)
-        assertEquals("Must declare all 10 phone tools", 10, funcDecls!!.value.size)
+        assertEquals("Must declare all 11 phone tools", 11, funcDecls!!.value.size)
 
         val declaredNames = funcDecls.value.mapNotNull {
             ((it as? Value.Object)?.value?.get("name") as? Value.Str)?.value
@@ -126,7 +126,8 @@ class MiraGeminiSetupPayloadTest {
             "wait",
             "get_screen",
             "web_search",
-            "run_connector_command"
+            "run_connector_command",
+            "run_skill"
         )
         assertEquals("Declared tools list must match expected", expectedTools, declaredNames)
 
@@ -191,6 +192,18 @@ class MiraGeminiSetupPayloadTest {
         val connectorReq = connectorParams.value["required"] as Value.Array
         assertTrue(connectorReq.value.contains(Value.Str("command")))
 
+        // Verify run_skill
+        val runSkillDecl = funcDecls.value.first {
+            ((it as? Value.Object)?.value?.get("name") as? Value.Str)?.value == "run_skill"
+        } as Value.Object
+        val runSkillParams = runSkillDecl.value["parameters"] as Value.Object
+        val runSkillProps = runSkillParams.value["properties"] as Value.Object
+        assertEquals(Value.Str("STRING"), (runSkillProps.value["goal"] as Value.Object).value["type"])
+        assertEquals(Value.Str("STRING"), (runSkillProps.value["skill"] as Value.Object).value["type"])
+        val runSkillReq = runSkillParams.value["required"] as Value.Array
+        assertTrue(runSkillReq.value.contains(Value.Str("goal")))
+        assertFalse(runSkillReq.value.contains(Value.Str("skill")))
+
         // Verify serialized JSON format and exclusion of google_search grounding
         val jsonString = modelConfig.toJsonString(json)
         val jsonObj = JSONObject(jsonString)
@@ -198,7 +211,7 @@ class MiraGeminiSetupPayloadTest {
         val jsonTools = jsonObj.getJSONArray("tools")
         assertEquals(1, jsonTools.length())
         val jsonFuncDecls = jsonTools.getJSONObject(0).getJSONArray("functionDeclarations")
-        assertEquals(10, jsonFuncDecls.length())
+        assertEquals(11, jsonFuncDecls.length())
 
         // Live API requirement: google_search grounding must NOT be combined with function calling
         assertFalse("google_search grounding MUST NOT be in setup alongside function calling", jsonString.contains("google_search") || jsonString.contains("googleSearch"))

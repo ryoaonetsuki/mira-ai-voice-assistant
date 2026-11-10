@@ -106,6 +106,8 @@ class MiraGeminiLiveTransport(
         fun onModelTranscript(text: String) {}
         fun onSetupComplete() {}
         fun onSessionEnded(reason: String, t: Throwable?) {}
+        /** Turn G: mic capture died after its bounded internal retries. */
+        fun onMicError(reason: String) {}
         fun onBotStartedSpeaking() {}
         fun onBotStoppedSpeaking() {}
         fun onUserStartedSpeaking() {}
@@ -316,6 +318,13 @@ class MiraGeminiLiveTransport(
                                 t?.let {
                                     Log.e(TAG, "Session ended with exception", it)
                                 }
+                            }
+                        }
+
+                        override fun onMicError(reason: String) {
+                            thread.runOnThread {
+                                Log.e(TAG, "onMicError: $reason")
+                                sessionListener?.onMicError(reason)
                             }
                         }
 

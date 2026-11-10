@@ -116,4 +116,34 @@ class SkillsStoreTest {
 
         assertFalse(service.deleteSkill("non-existent-id"))
     }
+
+    @Test
+    fun testBanglaRephraseMatching_ExamplePairsMatch() {
+        val store = InMemorySkillStore()
+        val service = SkillMemoryService(store)
+
+        // Turn G Item 6: "ফেসবুকটা ওপেন করো" vs "ফেসবুক খুলো" and "ফেসবুকটা ওপেন করো" vs "ফেসবুক ওপেন করো"
+        val step = TaskStep(action = TaskStep.ACTION_OPEN_APP, params = mapOf("app" to "com.facebook.katana"))
+        service.saveOrUpdate("ফেসবুকটা ওপেন করো", listOf(step))
+
+        // Check similarity threshold
+        val sim1 = Skill.similarity("ফেসবুকটা ওপেন করো", "ফেসবুক খুলো")
+        assertTrue("Similarity between 'ফেসবুকটা ওপেন করো' and 'ফেসবুক খুলো' was $sim1", sim1 >= SkillMemoryService.MATCH_THRESHOLD)
+
+        val sim2 = Skill.similarity("ফেসবুকটা ওপেন করো", "ফেসবুক ওপেন করো")
+        assertTrue("Similarity between 'ফেসবুকটা ওপেন করো' and 'ফেসবুক ওপেন করো' was $sim2", sim2 >= SkillMemoryService.MATCH_THRESHOLD)
+
+        // Check findMatch on rephrased commands
+        val match1 = service.findMatch("ফেসবুক খুলো")
+        assertNotNull("Rephrased command 'ফেসবুক খুলো' must match saved skill", match1)
+        assertEquals("ফেসবুকটা ওপেন করো", match1?.goal)
+
+        val match2 = service.findMatch("ফেসবুক ওপেন করো")
+        assertNotNull("Rephrased command 'ফেসবুক ওপেন করো' must match saved skill", match2)
+        assertEquals("ফেসবুকটা ওপেন করো", match2?.goal)
+
+        // Verify English matching behaviour is untouched
+        assertEquals(1.0, Skill.similarity("open youtube", "open youtube"), 0.001)
+        assertEquals(0.0, Skill.similarity("open youtube", "play spotify"), 0.001)
+    }
 }

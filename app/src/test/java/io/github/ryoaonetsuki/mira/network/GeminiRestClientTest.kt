@@ -279,4 +279,169 @@ class GeminiRestClientTest {
         job.join()
         assertTrue("CancellationException must propagate out when coroutine is cancelled", caughtCancellation)
     }
+
+    // =========================================================================
+    // Round 25 Fix Turn F — Automation Think: fast, single-attempt, bounded
+    // =========================================================================
+
+    @Test
+    fun testAutomationThink_SingleAttemptLiteModel_NoLadderNoRetry() = runBlocking {
+        var callCount = 0
+        var seenUrl = ""
+        val mockClient = createMockClient { url, _ ->
+            callCount++
+            seenUrl = url
+            Response.Builder()
+                .code(429)
+                .message("Too Many Requests")
+                .protocol(Protocol.HTTP_1_1)
+                .body("{\"error\": {\"message\": \"Resource exhausted\"}}".toResponseBody(jsonMedia))
+                .request(okhttp3.Request.Builder().url(url).build())
+                .build()
+        }
+
+        val restClient = GeminiRestClient()
+        val result = restClient.generateAutomationThink(
+            apiKey = "AIzaSyTestKey123",
+            history = emptyList(),
+            systemPrompt = "",
+            httpClient = mockClient
+        )
+
+        assertTrue("Automation think on 429 must fail fast, got: $result", result.isFailure)
+        assertEquals("Automation think must make exactly ONE attempt (no ladder, no retry)", 1, callCount)
+        assertTrue("Automation think must use the fastest model first, url was: $seenUrl", seenUrl.contains("gemini-3.5-flash-lite"))
+    }
+
+    @Test
+    fun testThinkClient_DefaultCallTimeout_Is40s() {
+        val restClient = GeminiRestClient()
+        assertEquals(
+            "Production think client must bound a hung call at 40s, inside the 45s think deadline",
+            40_000,
+            restClient.thinkClient.callTimeoutMillis()
+        )
+        assertEquals(
+            "Automation think model must be the fastest suitable model",
+            "gemini-3.5-flash-lite",
+            GeminiRestClient.AUTOMATION_THINK_MODEL
+        )
+    }
+
+    /** Minimal local HTTP server that sends a partial 200 response, then stalls mid-body. */
+    private class StalledServer {
+        private val serverSocket = java.net.ServerSocket(0)
+        val port: Int get() = serverSocket.localPort
+        private val executor = java.util.concurrent.Executors.newCachedThreadPool { r ->
+            Thread(r).apply { isDaemon = true }
+        }
+        @Volatile private var running = true
+
+        fun start() {
+            executor.execute {
+                while (running) {
+                    try {
+                        val socket = serverSocket.accept()
+                        executor.execute { handle(socket) }
+                    } catch (_: IOException) {
+                        break
+                    }
+                }
+            }
+        }
+
+        private fun handle(socket: java.net.Socket) {
+            try {
+                socket.soTimeout = 20_000
+                val reader = socket.getInputStream().bufferedReader()
+                var line: String?
+                do {
+                    line = reader.readLine()
+                } while (line != null && line.isNotEmpty())
+                val out = socket.getOutputStream()
+                out.write(
+                    ("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n" +
+                        "Content-Length: 1000\r\nConnection: close\r\n\r\n{\"candidates\": [")
+                        .toByteArray()
+                )
+                out.flush()
+                Thread.sleep(12_000L)
+            } catch (_: Throwable) {
+                // Client closed the socket (callTimeout) or test ended — expected.
+            } finally {
+                try { socket.close() } catch (_: Throwable) {}
+            }
+        }
+
+        fun stop() {
+            running = false
+            try { serverSocket.close() } catch (_: Throwable) {}
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun testAutomationThink_HungCall_BoundedByCallTimeout() = runBlocking {
+        val server = StalledServer()
+        server.start()
+        try {
+            val rewriteToLocal = Interceptor { chain ->
+                val req = chain.request()
+                val local = req.url.newBuilder().scheme("http").host("127.0.0.1").port(server.port).build()
+                chain.proceed(req.newBuilder().url(local).build())
+            }
+
+            // FAIL-ON-OLD: a blocking section inside the think call (here a
+            // blocking interceptor, standing in for the blocking body read)
+            // is NOT killed by the coroutine deadline — the call is still
+            // alive after it. This is the hole the 40s callTimeout plugs.
+            val blockingClient = OkHttpClient.Builder()
+                .addInterceptor(Interceptor { _ ->
+                    Thread.sleep(4_000L)
+                    Response.Builder()
+                        .code(200)
+                        .message("OK")
+                        .protocol(Protocol.HTTP_1_1)
+                        .body("{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"{\\\"action\\\": \\\"done\\\"}\"}]}}]}".toResponseBody(jsonMedia))
+                        .request(okhttp3.Request.Builder().url("http://127.0.0.1/").build())
+                        .build()
+                })
+                .build()
+            val restClient = GeminiRestClient()
+            val hung = kotlinx.coroutines.withTimeoutOrNull(1_500L) {
+                restClient.executeGenerateContentSingleAttempt(
+                    apiKey = "AIzaSyTestKey123",
+                    history = emptyList(),
+                    systemPrompt = "",
+                    model = "gemini-3.5-flash-lite",
+                    httpClient = blockingClient
+                )
+            }
+            assertNull("Old client without callTimeout must still be hung at 1.5s (deadline cannot interrupt blocking code)", hung)
+
+            // PASS-ON-NEW: the think client dies fast on a server that
+            // stalls mid-body — the exact production hang.
+            val fastThinkClient = OkHttpClient.Builder()
+                .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+                .writeTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+                .callTimeout(500, java.util.concurrent.TimeUnit.MILLISECONDS)
+                .addInterceptor(rewriteToLocal)
+                .build()
+            val startMs = System.currentTimeMillis()
+            val result = restClient.generateAutomationThink(
+                apiKey = "AIzaSyTestKey123",
+                history = emptyList(),
+                systemPrompt = "",
+                httpClient = fastThinkClient
+            )
+            val elapsedMs = System.currentTimeMillis() - startMs
+            assertTrue("Think call on a stalled server must fail, got: $result", result.isFailure)
+            val errMsg = result.exceptionOrNull()?.message ?: ""
+            assertTrue("Failure must name the timeout but was: $errMsg", errMsg.contains("timeout", ignoreCase = true))
+            assertTrue("CallTimeout must fail fast (was ${elapsedMs}ms)", elapsedMs < 5_000L)
+        } finally {
+            server.stop()
+        }
+    }
 }

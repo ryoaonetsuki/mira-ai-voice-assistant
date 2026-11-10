@@ -240,6 +240,18 @@ class TaskExecutor(
         return ((now - start) - (totalPausedMs + currentPauseSpan)).coerceAtLeast(0L)
     }
 
+    fun pausedDurationMs(): Long {
+        val now = clockMs()
+        return synchronized(pauseLock) {
+            val currentPauseSpan = if (_isPaused && pauseStartMs > 0L) {
+                (now - pauseStartMs).coerceAtLeast(0L)
+            } else {
+                0L
+            }
+            totalPausedMs + currentPauseSpan
+        }
+    }
+
     private suspend fun awaitIfPaused(): Boolean {
         while (_isPaused) {
             if (_cancelRequested) return false
@@ -570,6 +582,7 @@ class TaskExecutor(
             if (!awaitIfPaused() || _cancelRequested) {
                 return ReplayOutcome(success = false, failedStepIndex = stepIndex, stepsCompleted = stepCount)
             }
+            recordStepDescription(describeStep(step))
             stepCount++
             _currentStep = stepNumber
             enterPhase("replaying step $stepNumber", stepNumber, "Replaying: ${step.action}")
@@ -720,7 +733,6 @@ class TaskExecutor(
 
     private suspend fun _performAction(step: TaskStep, nodes: List<ScreenNode>): Boolean {
         if (!awaitIfPaused() || _cancelRequested) return false
-        recordStepDescription(describeStep(step))
         lastActionError = null
         return try {
             when (step.action) {

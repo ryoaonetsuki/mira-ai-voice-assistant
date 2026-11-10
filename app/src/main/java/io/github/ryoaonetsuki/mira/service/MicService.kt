@@ -27,7 +27,6 @@ import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
 import io.github.ryoaonetsuki.mira.data.preferences.UserPreferences
 import io.github.ryoaonetsuki.mira.network.ConnectorIntentHandler
 import io.github.ryoaonetsuki.mira.network.FreeWebSearch
-import io.github.ryoaonetsuki.mira.network.MiraChatSearchHeuristic
 import io.github.ryoaonetsuki.mira.network.currentDateTimeLine
 import io.github.ryoaonetsuki.mira.voice.*
 import io.github.ryoaonetsuki.mira.voice.pipecat.GeminiSessionManager
@@ -152,8 +151,6 @@ class MicService : Service() {
 
     private var sessionManager: GeminiSessionManager? = null
     private val handledTranscripts = Collections.synchronizedSet(mutableSetOf<String>())
-    private var connectorJob: Job? = null
-    private var liveSearchJob: Job? = null
     private var connectingWatchdogJob: Job? = null
     private var startVoiceSessionJob: Job? = null
     /**
@@ -170,6 +167,7 @@ class MicService : Service() {
     @Volatile private var userRequestedStop: Boolean = false
     @Volatile private var connectsThisCall: Int = 0
     @Volatile private var lastAutomationGoal: String? = null
+    @Volatile private var currentAutomationTarget: String? = null
     /** Turn G: voice + language captured once at call start, reused for every reconnect in the call. */
     @Volatile private var callVoiceName: String? = null
     @Volatile private var callLanguage: String? = null
@@ -245,10 +243,6 @@ class MicService : Service() {
         startVoiceSessionJob = null
         connectingWatchdogJob?.cancel()
         connectingWatchdogJob = null
-        connectorJob?.cancel()
-        connectorJob = null
-        liveSearchJob?.cancel()
-        liveSearchJob = null
         livenessWatchdogJob?.cancel()
         livenessWatchdogJob = null
 
@@ -602,7 +596,6 @@ class MicService : Service() {
         }
 
         val dateLine = currentDateTimeLine(language)
-        val searchAckPhrase = MiraChatSearchHeuristic.getAcknowledgementPhrase(language)
 
         val fullSystemPrompt = LivePromptBuilder.buildLiveSystemPrompt(
             language = language,
@@ -611,7 +604,6 @@ class MicService : Service() {
             assistantName = assistantName,
             secretMode = secretMode,
             dateLine = dateLine,
-            searchAckPhrase = searchAckPhrase,
             customInstructions = customInstructions,
             activeRules = activeRules
         )
@@ -951,7 +943,9 @@ class MicService : Service() {
                     context = applicationContext,
                     name = name,
                     rawArgs = rawArgs,
-                    typedArgs = typedArgs
+                    typedArgs = typedArgs,
+                    targetApp = currentAutomationTarget,
+                    goal = lastAutomationGoal
                 )
                 sessionManager?.sendFunctionResponse(id, name, responseObj)
             } catch (e: Exception) {
@@ -972,7 +966,9 @@ class MicService : Service() {
         typedArgs: Map<String, Any?> = emptyMap(),
         pollTimeoutMs: Long = 4000L,
         pollIntervalMs: Long = 200L,
-        settleDelayMs: Long = 100L
+        settleDelayMs: Long = 100L,
+        targetApp: String? = null,
+        goal: String? = null
     ): Value.Object = io.github.ryoaonetsuki.mira.service.executeFunctionCall(
         automationPort = automationPort,
         context = context,
@@ -981,8 +977,18 @@ class MicService : Service() {
         typedArgs = typedArgs,
         pollTimeoutMs = pollTimeoutMs,
         pollIntervalMs = pollIntervalMs,
-        settleDelayMs = settleDelayMs
-    )
+        settleDelayMs = settleDelayMs,
+        targetApp = targetApp ?: currentAutomationTarget,
+        goal = goal ?: lastAutomationGoal
+    ).also { response ->
+        val success = (response.value["success"] as? Value.Bool)?.value == true
+        if (success && name.equals("open_app", ignoreCase = true)) {
+            val pkg = (response.value["package"] as? Value.Str)?.value
+            if (!pkg.isNullOrBlank()) {
+                currentAutomationTarget = pkg
+            }
+        }
+    }
 
     private fun handleUserVoiceTurn(text: String) {
         val cleanText = text.trim()
@@ -1044,74 +1050,6 @@ class MicService : Service() {
                 return
             }
             io.github.ryoaonetsuki.mira.voice.VoiceTurnRoute.LIVE_ANSWERS -> Unit
-        }
-
-        // Debounce connector command execution
-        connectorJob?.cancel()
-        if (words.size >= 2) {
-            val lowerCmd = cleanText.lowercase(Locale.ROOT)
-            if (!handledTranscripts.contains(lowerCmd) && ConnectorIntentHandler.isConnectorCommand(cleanText)) {
-                connectorJob = serviceScope.launch(Dispatchers.IO) {
-                    delay(600)
-                    if (handledTranscripts.add(lowerCmd)) {
-                        try {
-                            val commandResult = ConnectorIntentHandler.handleCommand(applicationContext, cleanText)
-                            if (commandResult != null) {
-                                sessionManager?.sendUserMessage("User command result: $commandResult. Please inform the user clearly and concisely in voice.")
-                                _modelTranscript.value = commandResult
-                                val db = MiraDatabase.getInstance(applicationContext)
-                                db.notificationDao().insertNotification(
-                                    NotificationEntity(
-                                        title = "Connector Action",
-                                        message = commandResult,
-                                        type = "connector"
-                                    )
-                                )
-                            }
-                        } catch (e: Exception) {
-                            Log.e(TAG, "MIRA_LIVE_VOICE: Error running voice connector command: ${e.message}", e)
-                        }
-                    }
-                }
-            }
-        }
-
-        // Debounced live web search injection with spoken acknowledgement
-        liveSearchJob?.cancel()
-        if (words.size >= 2 && MiraChatSearchHeuristic.isSearchRequest(cleanText)) {
-            val ackKey = "ack:search_turn"
-            if (handledTranscripts.add(ackKey) && sessionManager?.state?.value == SessionManagerState.CONNECTED) {
-                val ackPhrase = MiraChatSearchHeuristic.getAcknowledgementPhrase(cachedLanguage)
-                val ackInstruction = "[Search request detected. Say aloud immediately in $cachedLanguage: \"$ackPhrase\". Do not answer yet; fresh search results are being retrieved.]"
-                sessionManager?.sendUserMessage(ackInstruction)
-                Log.i(TAG, "MIRA_LIVE_VOICE: Sent immediate search acknowledgement instruction: $ackPhrase")
-            }
-
-            val searchKey = "search:" + cleanText.lowercase(Locale.ROOT)
-            if (!handledTranscripts.contains(searchKey)) {
-                liveSearchJob = serviceScope.launch(Dispatchers.IO) {
-                    delay(600)
-                    if (handledTranscripts.add(searchKey) && sessionManager?.state?.value == SessionManagerState.CONNECTED) {
-                        try {
-                            val searchResults = FreeWebSearch.search(cleanText, maxResults = 5)
-                            if (searchResults.isNotEmpty() && sessionManager?.state?.value == SessionManagerState.CONNECTED) {
-                                val dateLine = currentDateTimeLine(cachedLanguage)
-                                val searchLines = searchResults.mapIndexed { idx, res ->
-                                    "${idx + 1}. ${res.title} — ${res.snippet} (${res.url})"
-                                }.joinToString("\n")
-                                val payload = "[Live web search — searched just now, $dateLine:\n$searchLines\nAnswer ONLY from these fresh results, briefly, in $cachedLanguage. Do not repeat the acknowledgement.]"
-                                sessionManager?.sendUserMessage(payload)
-                                Log.i(TAG, "MIRA_LIVE_VOICE: Injected live search results into active session for query: $cleanText")
-                            } else if (sessionManager?.state?.value == SessionManagerState.CONNECTED) {
-                                val payload = "[No fresh web results found for \"$cleanText\". Briefly inform the user in $cachedLanguage that you could not find current information on this.]"
-                                sessionManager?.sendUserMessage(payload)
-                            }
-                        } catch (e: Exception) {
-                            Log.w(TAG, "MIRA_LIVE_VOICE: Error performing live web search: ${e.message}")
-                        }
-                    }
-                }
-            }
         }
     }
 
@@ -1265,11 +1203,8 @@ class MicService : Service() {
         turnDispatchedToAutomation = false
         connectingWatchdogJob?.cancel()
         connectingWatchdogJob = null
-        connectorJob?.cancel()
-        connectorJob = null
-        liveSearchJob?.cancel()
-        liveSearchJob = null
         handledTranscripts.clear()
+        currentAutomationTarget = null
 
         try {
             sessionManager?.stopSession()
@@ -1425,6 +1360,72 @@ class MicService : Service() {
     }
 }
 
+private suspend fun buildActionResult(
+    automationPort: AutomationPort,
+    outcome: String,
+    success: Boolean,
+    postPackage: String,
+    postNodes: List<ScreenNode>,
+    isStepOpenApp: Boolean,
+    descriptionContext: String
+): Value.Object {
+    val screenText = if (postNodes.isNotEmpty()) {
+        automationPort.getCompressedScreenDescription(postNodes, descriptionContext)
+    } else {
+        "Screen has no accessible UI elements (empty node tree)"
+    }
+
+    val attachScreenshot = TaskExecutor.shouldAttachScreenshot(
+        nodes = postNodes,
+        lastStepHadNoEffect = !success,
+        lastStepWasOpenApp = isStepOpenApp
+    )
+
+    var screenshotBase64: String? = null
+    if (attachScreenshot) {
+        try {
+            val jpegBytes = automationPort.takeScreenshotJpeg(720)
+            if (jpegBytes != null && jpegBytes.isNotEmpty()) {
+                screenshotBase64 = java.util.Base64.getEncoder().encodeToString(jpegBytes)
+            }
+        } catch (e: Exception) {
+            Log.w("MicService", "Failed to capture screenshot for action result: ${e.message}")
+        }
+    }
+
+    val resultMap = mutableMapOf<String, Value>(
+        "result" to Value.Str(outcome),
+        "success" to Value.Bool(success),
+        "package" to Value.Str(postPackage),
+        "screen" to Value.Str(screenText),
+        "screen_text" to Value.Str(screenText)
+    )
+    if (screenshotBase64 != null) {
+        resultMap["screenshot"] = Value.Str(screenshotBase64)
+    }
+    return Value.Object(resultMap)
+}
+
+private fun isWrongPackageChange(
+    action: String,
+    prePackage: String,
+    postPackage: String,
+    target: String?,
+    goalText: String?
+): Boolean {
+    if (postPackage == prePackage || postPackage.isEmpty()) return false
+    if (action == TaskStep.ACTION_PRESS_HOME && TaskExecutor.isLauncherPackage(postPackage)) return false
+    if (action == TaskStep.ACTION_PRESS_BACK && TaskExecutor.isLauncherPackage(postPackage)) return false
+
+    val isWeb = TaskExecutor.isWebGoal(goalText) || (target != null && TaskExecutor.isBrowserPackage(target))
+    if (isWeb && TaskExecutor.isBrowserPackage(postPackage)) return false
+
+    if (target != null) {
+        return !TaskExecutor.matchesTarget(target, postPackage)
+    }
+    return false
+}
+
 internal suspend fun executeFunctionCall(
     automationPort: AutomationPort,
     context: Context?,
@@ -1433,104 +1434,449 @@ internal suspend fun executeFunctionCall(
     typedArgs: Map<String, Any?> = emptyMap(),
     pollTimeoutMs: Long = 4000L,
     pollIntervalMs: Long = 200L,
-    settleDelayMs: Long = 100L
+    settleDelayMs: Long = 100L,
+    targetApp: String? = null,
+    goal: String? = null
 ): Value.Object {
-    if (name.equals("open_app", ignoreCase = true)) {
-        val appTarget = (typedArgs["app"]?.toString() ?: rawArgs["app"] ?: rawArgs["package"] ?: rawArgs["name"] ?: "").trim()
-        if (appTarget.isEmpty()) {
-            return Value.Object("error" to Value.Str("Missing app argument"))
+    val normName = name.lowercase(Locale.ROOT)
+    val resolvedTarget = targetApp
+        ?: (typedArgs["targetApp"]?.toString() ?: rawArgs["targetApp"] ?: typedArgs["target"]?.toString() ?: rawArgs["target"])
+        ?: goal?.let { MiraAutomationBridge.extractTargetApp(it) }
+
+    val resolvedGoal = goal
+        ?: (typedArgs["goal"]?.toString() ?: rawArgs["goal"])
+
+    when (normName) {
+        "open_app" -> {
+            val appTarget = (typedArgs["app"]?.toString() ?: rawArgs["app"] ?: rawArgs["package"] ?: rawArgs["name"] ?: "").trim()
+            if (appTarget.isEmpty()) {
+                return Value.Object("error" to Value.Str("Missing app argument"))
+            }
+
+            val prePackage = automationPort.getCurrentPackage().orEmpty()
+            automationPort.openApp(appTarget)
+
+            // Poll for target app foreground (fix #3 form: wait for foreground package before returning screen)
+            val step = TaskStep(action = TaskStep.ACTION_OPEN_APP, params = mapOf("app" to appTarget))
+            val deadline = System.currentTimeMillis() + pollTimeoutMs
+            var currentPackage = automationPort.getCurrentPackage().orEmpty()
+            while (System.currentTimeMillis() < deadline) {
+                if (TaskExecutor.openAppTargetReached(step, prePackage, currentPackage)) break
+                delay(pollIntervalMs)
+                currentPackage = automationPort.getCurrentPackage().orEmpty()
+            }
+            if (settleDelayMs > 0L) {
+                delay(settleDelayMs)
+            }
+
+            val postPackage = automationPort.getCurrentPackage().orEmpty()
+            val targetReached = TaskExecutor.openAppTargetReached(step, prePackage, postPackage)
+            val postNodes = automationPort.dumpScreen()
+
+            val outcome = if (targetReached) {
+                "Successfully opened $appTarget (package: $postPackage)"
+            } else {
+                "Dispatched open for $appTarget (current package: $postPackage)"
+            }
+
+            return buildActionResult(
+                automationPort = automationPort,
+                outcome = outcome,
+                success = targetReached,
+                postPackage = postPackage,
+                postNodes = postNodes,
+                isStepOpenApp = true,
+                descriptionContext = "Opened $appTarget"
+            )
         }
 
-        val prePackage = automationPort.getCurrentPackage().orEmpty()
-        automationPort.openApp(appTarget)
+        "click_text" -> {
+            val text = (typedArgs["text"]?.toString() ?: rawArgs["text"] ?: "").trim()
+            if (text.isEmpty()) {
+                return Value.Object("error" to Value.Str("Missing text argument for click_text"))
+            }
 
-        // Poll for target app foreground (fix #3 form: wait for foreground package before returning screen)
-        val step = TaskStep(action = TaskStep.ACTION_OPEN_APP, params = mapOf("app" to appTarget))
-        val deadline = System.currentTimeMillis() + pollTimeoutMs
-        var currentPackage = automationPort.getCurrentPackage().orEmpty()
-        while (System.currentTimeMillis() < deadline) {
-            if (TaskExecutor.openAppTargetReached(step, prePackage, currentPackage)) break
-            delay(pollIntervalMs)
-            currentPackage = automationPort.getCurrentPackage().orEmpty()
-        }
-        if (settleDelayMs > 0L) {
-            delay(settleDelayMs)
-        }
+            val fallbackX = when (val x = typedArgs["x"]) {
+                is Number -> x.toInt()
+                is String -> x.toIntOrNull()
+                else -> rawArgs["x"]?.toIntOrNull()
+            }
+            val fallbackY = when (val y = typedArgs["y"]) {
+                is Number -> y.toInt()
+                is String -> y.toIntOrNull()
+                else -> rawArgs["y"]?.toIntOrNull()
+            }
 
-        val postPackage = automationPort.getCurrentPackage().orEmpty()
-        val targetReached = TaskExecutor.openAppTargetReached(step, prePackage, postPackage)
+            val prePackage = automationPort.getCurrentPackage().orEmpty()
+            val preNodes = automationPort.dumpScreen()
+            val preSignature = TaskExecutor.computeNodeSignature(preNodes)
 
-        // Fresh screen context attached: node-tree text always
-        val nodes = automationPort.dumpScreen()
-        val screenText = if (nodes.isNotEmpty()) {
-            automationPort.getCompressedScreenDescription(nodes, "Opened $appTarget")
-        } else {
-            "Screen has no accessible UI elements (empty node tree)"
-        }
+            val actionSuccess = automationPort.clickText(text, preNodes, fallbackX, fallbackY)
+            if (settleDelayMs > 0L) {
+                delay(settleDelayMs)
+            }
 
-        // Screenshot only at existing shouldAttachScreenshot decision points (after open_app, empty node trees, no-effect + insufficient text)
-        val attachScreenshot = TaskExecutor.shouldAttachScreenshot(
-            nodes = nodes,
-            lastStepHadNoEffect = !targetReached,
-            lastStepWasOpenApp = true
-        )
-        var screenshotBase64: String? = null
-        if (attachScreenshot) {
-            try {
-                val jpegBytes = automationPort.takeScreenshotJpeg(720)
-                if (jpegBytes != null && jpegBytes.isNotEmpty()) {
-                    screenshotBase64 = java.util.Base64.getEncoder().encodeToString(jpegBytes)
+            val postPackage = automationPort.getCurrentPackage().orEmpty()
+            val postNodes = automationPort.dumpScreen()
+            val postSignature = TaskExecutor.computeNodeSignature(postNodes)
+
+            val stepParams = mutableMapOf<String, Any?>("text" to text).apply {
+                if (fallbackX != null) put("fallbackX", fallbackX)
+                if (fallbackY != null) put("fallbackY", fallbackY)
+            }
+            val step = TaskStep(action = TaskStep.ACTION_CLICK_TEXT, params = stepParams)
+
+            val effectiveTarget = resolvedTarget ?: if (prePackage.isNotEmpty() && !TaskExecutor.isLauncherPackage(prePackage) && prePackage != "io.github.ryoaonetsuki.mira") prePackage else null
+            val wrongPackage = isWrongPackageChange(step.action, prePackage, postPackage, effectiveTarget, resolvedGoal)
+
+            val effectVerified = !wrongPackage && actionSuccess && TaskExecutor.verifyEffect(
+                step = step,
+                prePackage = prePackage,
+                preSignature = preSignature,
+                postPackage = postPackage,
+                postSignature = postSignature,
+                goal = resolvedGoal,
+                targetApp = effectiveTarget
+            )
+
+            val outcome = if (wrongPackage) {
+                "Action click_text '$text' changed package from '$prePackage' to '$postPackage' which does not match target '$effectiveTarget' (wrong-package change failure)"
+            } else if (effectVerified) {
+                "Successfully clicked '$text'"
+            } else if (!actionSuccess) {
+                if (fallbackX != null && fallbackY != null) {
+                    "click_text '$text' not found and fallback coordinate tap ($fallbackX, $fallbackY) failed"
+                } else {
+                    "click_text '$text' not found on screen and no fallback coordinates"
                 }
-            } catch (e: Exception) {
-                Log.w("MicService", "Failed to capture screenshot for open_app tool result: ${e.message}")
+            } else {
+                "click_text '$text' dispatched but had no verified effect on screen"
             }
+
+            return buildActionResult(
+                automationPort = automationPort,
+                outcome = outcome,
+                success = effectVerified,
+                postPackage = postPackage,
+                postNodes = postNodes,
+                isStepOpenApp = false,
+                descriptionContext = "Clicked $text"
+            )
         }
 
-        val outcome = if (targetReached) {
-            "Successfully opened $appTarget (package: $postPackage)"
-        } else {
-            "Dispatched open for $appTarget (current package: $postPackage)"
+        "type_text" -> {
+            val text = (typedArgs["text"]?.toString() ?: rawArgs["text"] ?: "").trim()
+            if (text.isEmpty()) {
+                return Value.Object("error" to Value.Str("Missing text argument for type_text"))
+            }
+
+            val prePackage = automationPort.getCurrentPackage().orEmpty()
+            val preNodes = automationPort.dumpScreen()
+            val preSignature = TaskExecutor.computeNodeSignature(preNodes)
+
+            val actionSuccess = automationPort.typeText(text)
+            if (settleDelayMs > 0L) {
+                delay(settleDelayMs)
+            }
+
+            val postPackage = automationPort.getCurrentPackage().orEmpty()
+            val postNodes = automationPort.dumpScreen()
+            val postSignature = TaskExecutor.computeNodeSignature(postNodes)
+
+            val step = TaskStep(action = TaskStep.ACTION_TYPE_TEXT, params = mapOf("text" to text))
+            val effectiveTarget = resolvedTarget ?: if (prePackage.isNotEmpty() && !TaskExecutor.isLauncherPackage(prePackage) && prePackage != "io.github.ryoaonetsuki.mira") prePackage else null
+            val wrongPackage = isWrongPackageChange(step.action, prePackage, postPackage, effectiveTarget, resolvedGoal)
+
+            val effectVerified = !wrongPackage && actionSuccess && TaskExecutor.verifyEffect(
+                step = step,
+                prePackage = prePackage,
+                preSignature = preSignature,
+                postPackage = postPackage,
+                postSignature = postSignature,
+                goal = resolvedGoal,
+                targetApp = effectiveTarget
+            )
+
+            val outcome = if (wrongPackage) {
+                "Action type_text changed package from '$prePackage' to '$postPackage' which does not match target '$effectiveTarget' (wrong-package change failure)"
+            } else if (effectVerified) {
+                "Successfully typed '$text'"
+            } else if (!actionSuccess) {
+                "type_text '$text' failed (no focused editable field)"
+            } else {
+                "type_text '$text' dispatched but had no verified effect on screen"
+            }
+
+            return buildActionResult(
+                automationPort = automationPort,
+                outcome = outcome,
+                success = effectVerified,
+                postPackage = postPackage,
+                postNodes = postNodes,
+                isStepOpenApp = false,
+                descriptionContext = "Typed $text"
+            )
         }
 
-        val resultMap = mutableMapOf<String, Value>(
-            "result" to Value.Str(outcome),
-            "success" to Value.Bool(targetReached),
-            "package" to Value.Str(postPackage),
-            "screen" to Value.Str(screenText),
-            "screen_text" to Value.Str(screenText)
-        )
-        if (screenshotBase64 != null) {
-            resultMap["screenshot"] = Value.Str(screenshotBase64)
-        }
-        return Value.Object(resultMap)
-    }
+        "scroll" -> {
+            val direction = (typedArgs["direction"]?.toString() ?: rawArgs["direction"] ?: "down").trim().lowercase(Locale.ROOT).ifEmpty { "down" }
 
-    // Existing search/web_search and connector handling (preserve rawArgs keys)
-    val query = (rawArgs["query"] ?: rawArgs["text"] ?: rawArgs["command"] ?: rawArgs.values.firstOrNull() ?: "").trim()
-    var resultString: String? = null
-    if (query.isNotBlank() && ConnectorIntentHandler.isConnectorCommand(query)) {
-        if (context != null) {
-            resultString = ConnectorIntentHandler.handleCommand(context, query)
-            if (resultString != null) {
-                val db = MiraDatabase.getInstance(context)
-                db.notificationDao().insertNotification(
-                    NotificationEntity(
-                        title = "Connector Action",
-                        message = resultString,
-                        type = "connector"
+            val prePackage = automationPort.getCurrentPackage().orEmpty()
+            val preNodes = automationPort.dumpScreen()
+            val preSignature = TaskExecutor.computeNodeSignature(preNodes)
+
+            val actionSuccess = automationPort.scroll(direction)
+            if (settleDelayMs > 0L) {
+                delay(settleDelayMs)
+            }
+
+            val postPackage = automationPort.getCurrentPackage().orEmpty()
+            val postNodes = automationPort.dumpScreen()
+            val postSignature = TaskExecutor.computeNodeSignature(postNodes)
+
+            val step = TaskStep(action = TaskStep.ACTION_SCROLL, params = mapOf("direction" to direction))
+            val effectiveTarget = resolvedTarget ?: if (prePackage.isNotEmpty() && !TaskExecutor.isLauncherPackage(prePackage) && prePackage != "io.github.ryoaonetsuki.mira") prePackage else null
+            val wrongPackage = isWrongPackageChange(step.action, prePackage, postPackage, effectiveTarget, resolvedGoal)
+
+            val effectVerified = !wrongPackage && actionSuccess && TaskExecutor.verifyEffect(
+                step = step,
+                prePackage = prePackage,
+                preSignature = preSignature,
+                postPackage = postPackage,
+                postSignature = postSignature,
+                goal = resolvedGoal,
+                targetApp = effectiveTarget
+            )
+
+            val outcome = if (wrongPackage) {
+                "Action scroll $direction changed package from '$prePackage' to '$postPackage' which does not match target '$effectiveTarget' (wrong-package change failure)"
+            } else if (effectVerified) {
+                "Successfully scrolled $direction"
+            } else if (!actionSuccess) {
+                "scroll $direction failed (gesture rejected)"
+            } else {
+                "scroll $direction dispatched but screen did not scroll"
+            }
+
+            return buildActionResult(
+                automationPort = automationPort,
+                outcome = outcome,
+                success = effectVerified,
+                postPackage = postPackage,
+                postNodes = postNodes,
+                isStepOpenApp = false,
+                descriptionContext = "Scrolled $direction"
+            )
+        }
+
+        "press_back" -> {
+            val prePackage = automationPort.getCurrentPackage().orEmpty()
+            val preNodes = automationPort.dumpScreen()
+            val preSignature = TaskExecutor.computeNodeSignature(preNodes)
+
+            val actionSuccess = automationPort.pressBack()
+            if (settleDelayMs > 0L) {
+                delay(settleDelayMs)
+            }
+
+            val postPackage = automationPort.getCurrentPackage().orEmpty()
+            val postNodes = automationPort.dumpScreen()
+            val postSignature = TaskExecutor.computeNodeSignature(postNodes)
+
+            val step = TaskStep(action = TaskStep.ACTION_PRESS_BACK)
+            val effectiveTarget = resolvedTarget ?: if (prePackage.isNotEmpty() && !TaskExecutor.isLauncherPackage(prePackage) && prePackage != "io.github.ryoaonetsuki.mira") prePackage else null
+            val wrongPackage = isWrongPackageChange(step.action, prePackage, postPackage, effectiveTarget, resolvedGoal)
+
+            val effectVerified = !wrongPackage && actionSuccess && TaskExecutor.verifyEffect(
+                step = step,
+                prePackage = prePackage,
+                preSignature = preSignature,
+                postPackage = postPackage,
+                postSignature = postSignature,
+                goal = resolvedGoal,
+                targetApp = effectiveTarget
+            )
+
+            val outcome = if (wrongPackage) {
+                "Action press_back changed package from '$prePackage' to '$postPackage' which does not match target '$effectiveTarget' (wrong-package change failure)"
+            } else if (effectVerified) {
+                "Successfully pressed Back"
+            } else if (!actionSuccess) {
+                "press_back failed"
+            } else {
+                "press_back dispatched (package: $postPackage)"
+            }
+
+            return buildActionResult(
+                automationPort = automationPort,
+                outcome = outcome,
+                success = effectVerified,
+                postPackage = postPackage,
+                postNodes = postNodes,
+                isStepOpenApp = false,
+                descriptionContext = "Pressed Back"
+            )
+        }
+
+        "press_home" -> {
+            val prePackage = automationPort.getCurrentPackage().orEmpty()
+            val preNodes = automationPort.dumpScreen()
+            val preSignature = TaskExecutor.computeNodeSignature(preNodes)
+
+            val actionSuccess = automationPort.pressHome()
+            if (settleDelayMs > 0L) {
+                delay(settleDelayMs)
+            }
+
+            val postPackage = automationPort.getCurrentPackage().orEmpty()
+            val postNodes = automationPort.dumpScreen()
+            val postSignature = TaskExecutor.computeNodeSignature(postNodes)
+
+            val step = TaskStep(action = TaskStep.ACTION_PRESS_HOME)
+            val homeReached = TaskExecutor.isLauncherPackage(postPackage)
+            val effectVerified = actionSuccess && (homeReached || TaskExecutor.verifyEffect(
+                step = step,
+                prePackage = prePackage,
+                preSignature = preSignature,
+                postPackage = postPackage,
+                postSignature = postSignature,
+                goal = resolvedGoal,
+                targetApp = resolvedTarget
+            ))
+
+            val outcome = if (homeReached) {
+                "Successfully pressed Home (returned to home screen)"
+            } else if (effectVerified) {
+                "Successfully pressed Home"
+            } else if (!actionSuccess) {
+                "press_home failed"
+            } else {
+                "press_home dispatched (package: $postPackage)"
+            }
+
+            return buildActionResult(
+                automationPort = automationPort,
+                outcome = outcome,
+                success = effectVerified,
+                postPackage = postPackage,
+                postNodes = postNodes,
+                isStepOpenApp = false,
+                descriptionContext = "Pressed Home"
+            )
+        }
+
+        "wait" -> {
+            val msRaw = typedArgs["ms"] ?: rawArgs["ms"]
+            val ms = when (msRaw) {
+                is Number -> msRaw.toLong()
+                is String -> msRaw.toLongOrNull() ?: 1000L
+                else -> 1000L
+            }.coerceIn(100L, 10000L)
+
+            delay(ms)
+
+            val postPackage = automationPort.getCurrentPackage().orEmpty()
+            val postNodes = automationPort.dumpScreen()
+
+            return buildActionResult(
+                automationPort = automationPort,
+                outcome = "Waited ${ms}ms",
+                success = true,
+                postPackage = postPackage,
+                postNodes = postNodes,
+                isStepOpenApp = false,
+                descriptionContext = "Waited ${ms}ms"
+            )
+        }
+
+        "get_screen" -> {
+            val postPackage = automationPort.getCurrentPackage().orEmpty()
+            val postNodes = automationPort.dumpScreen()
+
+            return buildActionResult(
+                automationPort = automationPort,
+                outcome = "Current screen inspected",
+                success = true,
+                postPackage = postPackage,
+                postNodes = postNodes,
+                isStepOpenApp = false,
+                descriptionContext = "Current screen"
+            )
+        }
+
+        "web_search", "search" -> {
+            val query = (typedArgs["query"]?.toString() ?: rawArgs["query"] ?: typedArgs["text"]?.toString() ?: rawArgs["text"] ?: rawArgs["command"] ?: "").trim()
+            val searchResults = if (query.isNotBlank()) {
+                FreeWebSearch.search(query, maxResults = 3)
+            } else {
+                emptyList()
+            }
+            val resultString = if (searchResults.isNotEmpty()) {
+                searchResults.joinToString("\n") { "${it.title}: ${it.snippet}" }
+            } else {
+                "No web search results found for query: $query"
+            }
+            return Value.Object(
+                "result" to Value.Str(resultString),
+                "success" to Value.Bool(true)
+            )
+        }
+
+        "run_connector_command" -> {
+            val command = (typedArgs["command"]?.toString() ?: rawArgs["command"] ?: typedArgs["query"]?.toString() ?: rawArgs["query"] ?: typedArgs["text"]?.toString() ?: rawArgs["text"] ?: "").trim()
+            val resultString = if (command.isNotBlank() && context != null) {
+                val res = ConnectorIntentHandler.handleCommand(context, command)
+                if (res != null) {
+                    val db = MiraDatabase.getInstance(context)
+                    db.notificationDao().insertNotification(
+                        NotificationEntity(
+                            title = "Connector Action",
+                            message = res,
+                            type = "connector"
+                        )
                     )
-                )
+                    res
+                } else {
+                    "Executed connector command: $command"
+                }
+            } else if (command.isNotBlank()) {
+                "Executed connector command: $command"
+            } else {
+                "Executed run_connector_command"
             }
-        } else {
-            resultString = "Executed connector command: $query"
+            return Value.Object(
+                "result" to Value.Str(resultString),
+                "success" to Value.Bool(true)
+            )
         }
-    } else if (name.equals("search", ignoreCase = true) || name.equals("web_search", ignoreCase = true)) {
-        val searchResults = FreeWebSearch.search(query, maxResults = 3)
-        resultString = searchResults.joinToString("\n") { "${it.title}: ${it.snippet}" }
-    }
 
-    val finalResult = resultString ?: "Executed $name"
-    return Value.Object(
-        "result" to Value.Str(finalResult)
-    )
+        else -> {
+            // Fallback for search or connector intents by command text
+            val query = (typedArgs["command"]?.toString() ?: typedArgs["query"]?.toString() ?: rawArgs["query"] ?: rawArgs["text"] ?: rawArgs["command"] ?: rawArgs.values.firstOrNull() ?: "").trim()
+            var resultString: String? = null
+            if (query.isNotBlank() && ConnectorIntentHandler.isConnectorCommand(query)) {
+                if (context != null) {
+                    resultString = ConnectorIntentHandler.handleCommand(context, query)
+                    if (resultString != null) {
+                        val db = MiraDatabase.getInstance(context)
+                        db.notificationDao().insertNotification(
+                            NotificationEntity(
+                                title = "Connector Action",
+                                message = resultString,
+                                type = "connector"
+                            )
+                        )
+                    }
+                } else {
+                    resultString = "Executed connector command: $query"
+                }
+            }
+
+            val finalResult = resultString ?: "Executed $name"
+            return Value.Object(
+                "result" to Value.Str(finalResult),
+                "success" to Value.Bool(true)
+            )
+        }
+    }
 }

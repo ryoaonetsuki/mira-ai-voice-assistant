@@ -45,51 +45,81 @@ data class Skill(
         "গুলো", "গুলা", "খানি", "খানা", "দের", "ের", "এর", "তে", "টা", "টি", "কে", "র", "ে", "এ"
     )
 
-    private fun stripBanglaSuffix(token: String): String {
-        if (!token.any { it in '\u0980'..'\u09FF' }) return token
+    private val STANDALONE_PARTICLES = setOf(
+        "তো", "না", "গো", "প্লিজ", "দয়া", "দয়া", "করে", "please", "pls"
+    )
+
+    private fun stripSuffix(token: String): String {
         for (suffix in BANGLA_SUFFIXES) {
             if (token.endsWith(suffix) && token.length - suffix.length >= 3) {
                 return token.substring(0, token.length - suffix.length)
             }
         }
+        if (token.endsWith("ta") && token.length - 2 >= 3) {
+            return token.substring(0, token.length - 2)
+        }
         return token
     }
 
     fun normalize(input: String): String {
-        var text = input.lowercase().trim().replace(Regex("\\s+"), " ")
-        if (text.any { it in '\u0980'..'\u09FF' }) {
-            // Turn G: Bangla normalization — treat verb equivalents as same intent token
-            text = text
-                .replace("ওপেন করো", "খুলো")
-                .replace("ওপেন কর", "খুলো")
-                .replace("খোলো", "খুলো")
-                .replace("চালু করো", "খুলো")
-                .replace("চালু কর", "খুলো")
-                .replace("সার্চ করো", "খুঁজো")
-                .replace("সার্চ কর", "খুঁজো")
-                .replace("খুজো", "খুঁজো")
-                .replace("প্লে করো", "চালাও")
-                .replace("প্লে কর", "চালাও")
-                .replace("বাজাও", "চালাও")
-                .replace("সেন্ড করো", "পাঠাও")
-                .replace("সেন্ড কর", "পাঠাও")
-                .replace("ফোন করো", "কল")
-                .replace("কল করো", "কল")
-                .replace("বন্ধ করো", "বন্ধ")
-                .replace("বন্ধ কর", "বন্ধ")
+        var text = input.lowercase().trim().replace("-", " ").replace(Regex("\\s+"), " ")
 
-            // Strip particles and suffixes from nouns/tokens
-            text = text.split(" ").joinToString(" ") { word ->
-                stripBanglaSuffix(word)
-            }
-        }
-        return text
+        // Treat verb equivalents (open / khulo, search / khojo, play / chalao, etc.) as identical intent tokens
+        text = text
+            .replace("ওপেন করো", "খুলো")
+            .replace("ওপেন কর", "খুলো")
+            .replace("খোলো", "খুলো")
+            .replace("খোল", "খুলো")
+            .replace("চালু করো", "খুলো")
+            .replace("চালু কর", "খুলো")
+            .replace("চালু", "খুলো")
+            .replace("open koro", "খুলো")
+            .replace("open kor", "খুলো")
+            .replace("open", "খুলো")
+            .replace("khulo", "খুলো")
+            .replace("kholo", "খুলো")
+            .replace("khol", "খুলো")
+            .replace("ওপেন", "খুলো")
+            .replace("সার্চ করো", "খুঁজো")
+            .replace("সার্চ কর", "খুঁজো")
+            .replace("সার্চ", "খুঁজো")
+            .replace("খুজো", "খুঁজো")
+            .replace("search koro", "খুঁজো")
+            .replace("search kor", "খুঁজো")
+            .replace("search", "খুঁজো")
+            .replace("প্লে করো", "চালাও")
+            .replace("প্লে কর", "চালাও")
+            .replace("প্লে", "চালাও")
+            .replace("বাজাও", "চালাও")
+            .replace("play koro", "চালাও")
+            .replace("play", "চালাও")
+            .replace("সেন্ড করো", "পাঠাও")
+            .replace("সেন্ড কর", "পাঠাও")
+            .replace("সেন্ড", "পাঠাও")
+            .replace("send koro", "পাঠাও")
+            .replace("send", "পাঠাও")
+            .replace("ফোন করো", "কল")
+            .replace("কল করো", "কল")
+            .replace("call koro", "কল")
+            .replace("call", "কল")
+            .replace("বন্ধ করো", "বন্ধ")
+            .replace("বন্ধ কর", "বন্ধ")
+            .replace("close koro", "বন্ধ")
+            .replace("close", "বন্ধ")
+
+        // Strip particles and suffixes from tokens
+        val words = text.split(" ")
+            .map { it.trim() }
+            .filter { it.isNotBlank() && it !in STANDALONE_PARTICLES }
+            .map { stripSuffix(it) }
+
+        return words.joinToString(" ")
     }
 
     private fun tokens(normalizedOrRaw: String): Set<String> {
       return normalize(normalizedOrRaw)
         .split(" ")
-        .filter { it.length > 2 || (it.length >= 2 && it.any { c -> c in '\u0980'..'\u09FF' }) }
+        .filter { it.isNotBlank() && (it.length > 2 || (it.length >= 2 && it.any { c -> c in '\u0980'..'\u09FF' }) || it == "কল" || it == "বন্ধ") }
         .toSet()
     }
 

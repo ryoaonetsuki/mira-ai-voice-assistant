@@ -382,6 +382,65 @@ class MiraAccessibilityService : AccessibilityService() {
     }
 
     /**
+     * Long-press at absolute screen coordinates: one stationary stroke held
+     * for [durationMs]. (flutter_automate GestureEngine.longClick, MIT —
+     * same single-point stroke; Mira's own dispatch + clamping, no
+     * runBlocking.)
+     */
+    fun longPress(x: Float, y: Float, durationMs: Long): Boolean {
+        return try {
+            val metrics = runCatching { resources?.displayMetrics }.getOrNull()
+            val (cx, cy) = if (metrics != null && metrics.widthPixels > 0 && metrics.heightPixels > 0) {
+                clampClickCoordinates(x, y, metrics.widthPixels, metrics.heightPixels)
+            } else {
+                Pair(x.coerceAtLeast(0f), y.coerceAtLeast(0f))
+            }
+            val path = Path().apply { moveTo(cx, cy) }
+            val held = durationMs.coerceIn(200L, 5000L)
+            val stroke = GestureDescription.StrokeDescription(path, 0L, held)
+            dispatch(GestureDescription.Builder().addStroke(stroke).build())
+        } catch (e: Throwable) {
+            Log.e(TAG, "longPress failed", e)
+            false
+        }
+    }
+
+    /**
+     * Two-finger pinch at ([centerX], [centerY]). (flutter_automate
+     * GestureEngine.pinchIn/pinchOut, MIT — two strokes moving together for
+     * zoom-out / apart for zoom-in, 500ms; adapted to Mira's dispatch +
+     * clamping, no runBlocking.) [zoomIn] moves the fingers apart.
+     */
+    fun pinch(centerX: Float, centerY: Float, zoomIn: Boolean): Boolean {
+        return try {
+            val metrics = runCatching { resources?.displayMetrics }.getOrNull()
+            val w = metrics?.widthPixels?.takeIf { it > 0 } ?: 1080
+            val h = metrics?.heightPixels?.takeIf { it > 0 } ?: 1920
+            val cx = centerX.coerceIn(0f, w.toFloat())
+            val cy = centerY.coerceIn(0f, h.toFloat())
+            // Fingers start 300px apart and end 100px apart (zoom out), or
+            // the reverse (zoom in) — the GestureEngine defaults.
+            val (startDistance, endDistance) = if (zoomIn) 100f to 300f else 300f to 100f
+            val path1 = Path().apply {
+                moveTo(cx - startDistance / 2, cy)
+                lineTo(cx - endDistance / 2, cy)
+            }
+            val path2 = Path().apply {
+                moveTo(cx + startDistance / 2, cy)
+                lineTo(cx + endDistance / 2, cy)
+            }
+            val gesture = GestureDescription.Builder()
+                .addStroke(GestureDescription.StrokeDescription(path1, 0L, 500L))
+                .addStroke(GestureDescription.StrokeDescription(path2, 0L, 500L))
+                .build()
+            dispatch(gesture)
+        } catch (e: Throwable) {
+            Log.e(TAG, "pinch failed", e)
+            false
+        }
+    }
+
+    /**
      * Scrolls the screen. Direction is the content direction to reveal:
      * "down" reveals content further down (swipes up).
      * Prefers native scroll action on first scrollable node, then gesture fallback.

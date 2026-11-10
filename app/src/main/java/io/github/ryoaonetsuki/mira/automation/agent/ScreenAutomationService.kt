@@ -99,8 +99,12 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
                 node.isScrollable
         }
 
+        // \p{M} kept: Indic vowel signs / hasant are combining marks, not
+        // letters — without it Bengali/Hindi goal words shatter into bare
+        // consonants and node ranking by shared word breaks (same fix as
+        // MiraAutomationBridge.tokenize).
         val goalWords = goal.lowercase()
-            .split(Regex("[^\\p{L}\\p{N}]+"))
+            .split(Regex("[^\\p{L}\\p{M}\\p{N}]+"))
             .filter { it.isNotBlank() }
             .toSet()
 
@@ -129,7 +133,7 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
     private fun sharesWordWithGoal(node: ScreenNode, goalWords: Set<String>): Boolean {
         if (goalWords.isEmpty()) return false
         val nodeWords = (node.text + " " + node.contentDescription).lowercase()
-            .split(Regex("[^\\p{L}\\p{N}]+"))
+            .split(Regex("[^\\p{L}\\p{M}\\p{N}]+"))
             .filter { it.isNotBlank() }
             .toSet()
         return goalWords.any { it in nodeWords }

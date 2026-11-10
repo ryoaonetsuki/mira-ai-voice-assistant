@@ -159,6 +159,32 @@ class MiraAutomationBridge(
             }
         }
 
+    /**
+     * Turn F plan-once: ONE planning call per goal that returns the FULL
+     * command list as JSON. Fastest model, single attempt, same 45s deadline
+     * as the per-step think calls — the plan is one structured output, not a
+     * conversation.
+     */
+    private fun buildPlanLambda(
+        restClient: GeminiRestClient
+    ): suspend (String, String) -> String =
+        { currentGoal, screenDescription ->
+            val key = apiKey()
+            val entities = buildHistoryEntities(currentGoal, screenDescription, emptyList())
+            val planResult = withTimeout(TaskExecutor.DEFAULT_THINK_TIMEOUT_MS) {
+                restClient.generateAutomationThink(
+                    apiKey = key,
+                    history = entities,
+                    systemPrompt = PLAN_SYSTEM_PROMPT
+                )
+            }
+            if (planResult.isSuccess) {
+                planResult.getOrNull()?.text ?: ""
+            } else {
+                throw planResult.exceptionOrNull() ?: Exception("LLM call failed")
+            }
+        }
+
     private fun createDefaultExecutor(onProgress: ((step: Int, description: String) -> Unit)? = null): TaskExecutor {
         executorFactory?.let {
             val exec = it()
@@ -174,6 +200,7 @@ class MiraAutomationBridge(
             skills = skills,
             think = buildThinkLambda(restClient),
             thinkWithVision = buildThinkVisionLambda(restClient),
+            plan = buildPlanLambda(restClient),
             taskTimeoutMs = taskTimeoutMs,
             onProgress = onProgress
         )
@@ -245,9 +272,54 @@ class MiraAutomationBridge(
         }
     }
 
+    /**
+     * Turn F-direct (Voice Access model): a fixed local grammar that resolves
+     * known voice commands WITHOUT any Gemini call. The grammar IS the
+     * matcher: the verb/app tables decide what "open Facebook" means — no
+     * LLM decides it. Only commands the grammar can prove are a single
+     * fixed action take the direct path; everything else returns null and
+     * falls through to skill replay / the AI loop.
+     */
+    sealed class DirectAction {
+        /** Open a known app (canonical package/label from extractTargetApp). */
+        data class OpenApp(val target: String) : DirectAction()
+
+        /** Go to the home screen. */
+        object PressHome : DirectAction()
+
+        /** Go back one screen. */
+        object PressBack : DirectAction()
+
+        /** Scroll the current screen ("down" or "up"); [small] = "a bit" (short swipe). */
+        data class Scroll(val direction: String, val small: Boolean = false) : DirectAction()
+
+        /** Tap a visible label ("tap Settings") — matched against the live node tree, no overlay. */
+        data class TapLabel(val label: String) : DirectAction()
+
+        /** Search [query]; in [targetApp] when known (YouTube), else web search. */
+        data class Search(val query: String, val targetApp: String?) : DirectAction()
+
+        /** Open the dialer with [number] prefilled (the user confirms the call). */
+        data class Dial(val number: String) : DirectAction()
+    }
+
+    /** Pure local check for MicService: true when the goal takes the direct path (zero think calls). */
+    fun isDirectGoal(goal: String): Boolean = parseDirectAction(goal) != null
+
     companion object {
         private const val SYSTEM_PROMPT =
             "You control an Android phone. Reply with ONLY one JSON action object {action, params, reasoning, is_complete}. Actions: click_text, click_at, type_text, press_enter, scroll, swipe, press_back, press_home, open_app, wait, done. Screen description and goal are provided. Never invent coordinates outside the screen. If the goal is complete, reply done."
+        /**
+         * Plan-once prompt (Turn F): ONE planning call per goal. The model
+         * returns the COMPLETE command list up front — the executor then runs
+         * it directly with no further LLM calls. Reply with ONLY one JSON
+         * object: {"steps": [{"action": ..., "params": {...}}, ...]} using the
+         * same 11 actions as the single-step prompt, or {"done": true} when
+         * the goal is already complete on the current screen.
+         */
+        private const val PLAN_SYSTEM_PROMPT =
+            "You plan Android phone tasks. Given the goal and the current screen, reply with ONLY one JSON object: {\"steps\": [{\"action\": \"<action>\", \"params\": {...}}, ...]} listing EVERY action needed to complete the goal, in order, from the current screen. Actions: click_text, click_at, type_text, press_enter, scroll, swipe, press_back, press_home, open_app, wait, done. Use click_text with the visible label when possible; use open_app with the app name to launch an app. Never invent coordinates outside the screen. Keep the list short (at most 10 steps). If the goal is already complete on the current screen, reply {\"done\": true}."
+
         @Volatile
         private var instance: MiraAutomationBridge? = null
 
@@ -588,42 +660,313 @@ class MiraAutomationBridge(
             return STRONG_ACTION.none { it.containsMatchIn(lower) }
         }
 
-        fun isAutomationIntent(text: String): Boolean {
-            val trimmed = text.trim()
-            if (trimmed.isEmpty()) return false
-            // A question about whether she CAN control the phone is answered by the Live model, never run as a goal.
-            if (isCapabilityQuestion(trimmed)) return false
-            val lower = trimmed.lowercase()
+        // ------------------------------------------------------------------
+        // Turn F-direct: fixed local grammar (Voice Access model) in all 30
+        // supported languages. The matcher is TOLERANT by design: filler
+        // words ("তো"), softeners ("একটু"), polite forms and word-order
+        // variants all resolve locally — natural phrasing, not rigid commands.
+        // Latin-script words use word-boundary matching; non-Latin / no-word-
+        // boundary scripts use substring matching (same rule as the verb tables).
+        // ------------------------------------------------------------------
 
-            // 1. Explicit pattern matches ("play <song> on youtube", "message <name> on whatsapp", "phone control")
-            for (pattern in INTENT_PATTERNS) {
-                if (pattern.containsMatchIn(lower)) return true
+        /** Open/play verbs (Latin word-boundary). */
+        private val OPEN_PLAY_VERBS_LATIN = setOf("open", "launch", "start", "play")
+
+        /** Open/play verbs (substring: bn/hi/ur/ar/ja/ko/ru/th/ta/te/mr/gu/pa/ml/kn/uk/el/zh + Roman bn). */
+        private val OPEN_PLAY_VERBS_SUBSTRING = listOf(
+            "খুলো", "খোলো", "খুলে", "চালাও", "ওপেন", "চালু", "বাজাও", "প্লে", "শোনাও",
+            "kholo", "khulo", "chalao", "bajao"
+        )
+
+        /** Home / homepage nouns. */
+        private val HOME_WORDS_LATIN = listOf(
+            "home", "homepage", "home screen", "inicio", "pantalla principal",
+            "accueil", "écran d'accueil", "startbildschirm", "startseite",
+            "início", "tela inicial", "ana sayfa", "beranda", "layar utama",
+            "trang chủ", "màn hình chính", "schermata iniziale", "startscherm",
+            "thuisscherm", "ekran główny", "strona główna", "hemskärm", "startsida"
+        )
+        private val HOME_WORDS_SUBSTRING = listOf(
+            "হোমপেজ", "হোমস্ক্রিন", "হোম", "होमपेज", "होम", "ہوم پیج", "ہوم",
+            "الشاشة الرئيسية", "الرئيسية", "ホーム画面", "ホーム", "홈 화면", "홈",
+            "главный экран", "домой", "หน้าหลัก", "முகப்பு", "హోమ్", "હોમ", "ਹੋਮ",
+            "ഹോം", "ಮುಖಪುಟ", "головний екран", "додому", "αρχική", "主页", "首页"
+        )
+
+        /** Go / come / move verbs. */
+        private val GO_WORDS_LATIN = listOf(
+            "go", "come", "move", "ve", "ir", "ven", "va", "aller", "viens",
+            "geh", "gehen", "komm", "vá", "vem", "git", "gel", "pergi", "datang",
+            "đi", "đến", "vai", "andare", "vieni", "ga", "gaan", "kom", "idź",
+            "iść", "chodź", "gå", "jao", "asho"
+        )
+        private val GO_WORDS_SUBSTRING = listOf(
+            "যাও", "আসো", "যান", "আসুন", "जाओ", "आओ", "जा", "ये", "જા", "આવ",
+            "ਜਾ", "ਆ", "جاؤ", "آؤ", "اذهب", "تعال", "行って", "来て", "가", "와",
+            "иди", "приходи", "போ", "வா", "వెళ్ళు", "రా", "പോകൂ", "വാ",
+            "ಹೋಗು", "ಬಾ", "ไป", "มา", "іди", "приходь", "πήγαινε", "έλα", "去", "来"
+        )
+
+        /** Back / return words. */
+        private val BACK_WORDS_LATIN = listOf(
+            "back", "return", "atrás", "vuelve", "volver", "retour", "en arrière",
+            "zurück", "voltar", "para trás", "geri", "dön", "kembali", "quay lại",
+            "indietro", "torna", "terug", "wróć", "wstecz", "tillbaka",
+            "pichone", "fire"
+        )
+        private val BACK_WORDS_SUBSTRING = listOf(
+            "পিছনে", "ফিরে", "वापस", "पीछे", "واپس", "پیچھے", "رجوع", "للخلف",
+            "戻って", "後ろ", "돌아가", "뒤로", "назад", "вернись", "กลับ", "ข้างหลัง",
+            "பின்னால்", "திரும்பி", "వెనక్కి", "తిరిగి", "मागे", "પાછા", "ਪਿੱਛੇ",
+            "തിരിച്ചു", "ಹಿಂದೆ", "πίσω", "επιστροφή", "返回", "回去"
+        )
+
+        /** Up / down direction words. */
+        private val UP_WORDS_LATIN = listOf(
+            "up", "upwards", "arriba", "en haut", "nach oben", "para cima",
+            "yukarı", "ke atas", "lên trên", "su", "omhoog", "w górę", "upp",
+            "upore", "uporer"
+        )
+        private val UP_WORDS_SUBSTRING = listOf(
+            "উপরের", "উপরে", "ऊपर", "اوپر", "للأعلى", "上へ", "上に", "위로",
+            "вверх", "ขึ้น", "மேலே", "పైన", "वर", "ઉપર", "ਉੱਪਰ", "മുകളിലേക്ക്",
+            "ಮೇಲೆ", "вгору", "πάνω", "向上"
+        )
+        private val DOWN_WORDS_LATIN = listOf(
+            "down", "downwards", "abajo", "en bas", "nach unten", "para baixo",
+            "aşağı", "ke bawah", "xuống dưới", "giù", "omlaag", "w dół", "ner",
+            "niche", "nicher"
+        )
+        private val DOWN_WORDS_SUBSTRING = listOf(
+            "নিচের", "নিচে", "नीचे", "نیچے", "للأسفل", "下へ", "下に", "아래로",
+            "вниз", "ลง", "கீழே", "క్రింద", "खाली", "નીચે", "ਥੱਲੇ", "താഴേക്ക്",
+            "ಕೆಳಗೆ", "κάτω", "向下"
+        )
+
+        /** Scroll / swipe verbs. */
+        private val SCROLL_WORDS_LATIN = listOf(
+            "scroll", "swipe", "desplázate", "desplazar", "défiler", "scrolle",
+            "scrollen", "role", "rolar", "kaydır", "gulir", "cuộn", "scorri",
+            "scorrere", "scrolla", "przewiń"
+        )
+        private val SCROLL_WORDS_SUBSTRING = listOf(
+            "স্ক্রল", "स्क्रॉल", "اسکرول", "مرر", "スクロール", "스크롤", "прокрути",
+            "เลื่อน", "ஸ்க்ரோல்", "స్క్రోల్", "સ્ક્રોલ", "ਸਕਰੋਲ", "സ്ക്രോൾ",
+            "ಸ್ಕ್ರೋಲ್", "κύλιση", "滚动"
+        )
+
+        /** "A bit" / "a little" softeners — a small relative amount, not a full scroll. */
+        private val A_BIT_WORDS_LATIN = listOf(
+            "a bit", "a little", "un poco", "un peu", "ein bisschen", "um pouco",
+            "biraz", "sedikit", "một chút", "un po'", "een beetje", "trochę",
+            "lite", "ektu"
+        )
+        private val A_BIT_WORDS_SUBSTRING = listOf(
+            "একটু", "थोड़ा", "تھوڑا", "قليلاً", "少し", "조금", "немного",
+            "นิดหน่อย", "கொஞ்சம்", "కొంచెం", "थोडं", "થોડું", "ਥੋੜਾ",
+            "കുറച്ച്", "ಸ್ವಲ್ಪ", "трохи", "λίγο", "一点"
+        )
+
+        /** Tap / click / press verbs. */
+        private val TAP_WORDS_LATIN = listOf(
+            "tap", "click", "press", "touch", "toca", "tocar", "clique",
+            "touche", "tippe", "klik", "tocca", "tik", "kliknij", "tryck"
+        )
+        private val TAP_WORDS_SUBSTRING = listOf(
+            "ট্যাপ", "ক্লিক", "टैप", "क्लिक", "اضغط", "タップ", "탭", "нажми",
+            "แตะ", "தட்டு", "ట్యాప్", "ટેપ", "ਟੈਪ", "ടാപ്പ്", "ಟ್ಯಾಪ್", "πάτα", "点"
+        )
+
+        /** Filler / particle / politeness tokens ignored when judging "open-only". */
+        private val PARTICLE_TOKENS = setOf(
+            "তো", "না", "রে", "প্লিজ", "দয়া", "করে", "দাও", "দিন",
+            "টা", "টি", "করো", "কর", "করুন", "করেন",
+            "the", "a", "an", "please"
+        )
+
+        /** Second-action conjunctions — a goal with one stays with the AI loop. */
+        private val SECOND_ACTION_TOKENS = setOf("and", "then", "এবং", "তারপর")
+
+        private fun hasLatinWord(lower: String, word: String): Boolean =
+            Regex("""(?<![\p{L}\p{N}])${Regex.escape(word)}(?![\p{L}\p{N}])""")
+                .containsMatchIn(lower)
+
+        private fun hasAnyLatin(lower: String, words: Collection<String>): Boolean =
+            words.any { hasLatinWord(lower, it) }
+
+        private fun hasAnySubstring(lower: String, words: Collection<String>): Boolean =
+            words.any { lower.contains(it) }
+
+        private fun tokenize(lower: String): List<String> =
+            lower.split(Regex("[^\\p{L}\\p{N}]+")).filter { it.isNotBlank() }
+
+        private fun hasOpenOrPlayVerb(lower: String): Boolean =
+            hasAnyLatin(lower, OPEN_PLAY_VERBS_LATIN) ||
+                hasAnySubstring(lower, OPEN_PLAY_VERBS_SUBSTRING)
+
+        private fun hasSecondAction(lower: String): Boolean =
+            tokenize(lower).any { it in SECOND_ACTION_TOKENS }
+
+        /**
+         * True when the goal asks for nothing more than opening/playing one
+         * thing: an open/play verb plus at most one remaining word (the
+         * app/media name). "open Facebook" → true; "play lofi on Spotify" →
+         * false ("lofi", "on" remain). Particles and fillers are ignored.
+         */
+        fun isOpenOnlyGoal(text: String): Boolean {
+            val lower = text.trim().lowercase()
+            if (lower.isEmpty()) return false
+            if (hasSecondAction(lower)) return false
+            if (!hasOpenOrPlayVerb(lower)) return false
+            val remaining = tokenize(lower).filter { token ->
+                token !in PARTICLE_TOKENS &&
+                    token !in OPEN_PLAY_VERBS_LATIN &&
+                    OPEN_PLAY_VERBS_SUBSTRING.none { token.contains(it) }
             }
+            return remaining.size <= 1
+        }
 
-            // 2. Automation verb check across all 30 languages:
-            //    Latin-script verbs use Unicode word-boundary regex; non-Latin / no-word-boundary scripts use substring contains.
-            val hasLatinVerb = LATIN_VERBS.any { verb ->
-                if (verb.contains(" ")) {
-                    Regex("""(?<![\p{L}\p{N}])${Regex.escape(verb)}(?![\p{L}\p{N}])""").containsMatchIn(lower)
-                } else {
-                    Regex("""(?<![\p{L}\p{N}])${Regex.escape(verb)}(?![\p{L}\p{N}])""").containsMatchIn(lower)
+        private fun isHomeCommand(lower: String): Boolean {
+            val hasHome = hasAnyLatin(lower, HOME_WORDS_LATIN) ||
+                hasAnySubstring(lower, HOME_WORDS_SUBSTRING)
+            if (!hasHome) return false
+            if (hasAnyLatin(lower, GO_WORDS_LATIN) || hasAnySubstring(lower, GO_WORDS_SUBSTRING)) return true
+            return tokenize(lower).size <= 2
+        }
+
+        private fun isBackCommand(lower: String): Boolean {
+            val hasBack = hasAnyLatin(lower, BACK_WORDS_LATIN) ||
+                hasAnySubstring(lower, BACK_WORDS_SUBSTRING)
+            if (!hasBack) return false
+            if (hasAnyLatin(lower, GO_WORDS_LATIN) || hasAnySubstring(lower, GO_WORDS_SUBSTRING)) return true
+            return tokenize(lower).size <= 2
+        }
+
+        /** "up"/"down"/null. A scroll verb + direction, or a go verb + direction ("উপরের দিকে যাও"). */
+        private fun scrollDirection(lower: String): String? {
+            val hasScroll = hasAnyLatin(lower, SCROLL_WORDS_LATIN) ||
+                hasAnySubstring(lower, SCROLL_WORDS_SUBSTRING)
+            val hasGo = hasAnyLatin(lower, GO_WORDS_LATIN) ||
+                hasAnySubstring(lower, GO_WORDS_SUBSTRING)
+            val up = hasAnyLatin(lower, UP_WORDS_LATIN) ||
+                hasAnySubstring(lower, UP_WORDS_SUBSTRING)
+            val down = hasAnyLatin(lower, DOWN_WORDS_LATIN) ||
+                hasAnySubstring(lower, DOWN_WORDS_SUBSTRING)
+            if (hasScroll) return if (down) "down" else if (up) "up" else "down"
+            if (hasGo) {
+                if (up) return "up"
+                if (down) return "down"
+            }
+            return null
+        }
+
+        private fun isABit(lower: String): Boolean =
+            hasAnyLatin(lower, A_BIT_WORDS_LATIN) ||
+                hasAnySubstring(lower, A_BIT_WORDS_SUBSTRING)
+
+        private val PHONE_PATTERN = Regex("""\+?\d[\d\s\-()]{5,}\d""")
+
+        private fun extractPhoneNumber(lower: String): String? {
+            val match = PHONE_PATTERN.find(lower) ?: return null
+            val digits = match.value.filter { it.isDigit() }
+            if (digits.length < 7 || digits.length > 15) return null
+            return digits
+        }
+
+        private fun hasCallVerb(lower: String): Boolean =
+            hasLatinWord(lower, "call") || hasLatinWord(lower, "dial") ||
+                lower.contains("কল")
+
+        private fun stripTrailingAppClause(raw: String): String {
+            var s = raw
+            for (prep in listOf(" on ", " in ", " এ ", " তে ")) {
+                val idx = s.lastIndexOf(prep)
+                if (idx >= 0) {
+                    s = s.substring(0, idx).trim()
+                    break
                 }
             }
-            val hasSubstringVerb = SUBSTRING_VERBS.any { lower.contains(it) }
-            val hasVerb = hasLatinVerb || hasSubstringVerb
+            return s
+        }
 
-            if (!hasVerb) return false
-
-            // 3. Target app/media noun check (prefix word boundary for Latin tokens to support suffixes like -e, -এ, -te, or CJK prefixes)
-            val hasApp = KNOWN_APPS.any { app ->
-                if (isLatinWordToken(app)) {
-                    Regex("""(?:^|\b|(?<=[^\p{IsLatin}\p{N}]))${Regex.escape(app)}""").containsMatchIn(lower)
-                } else {
-                    lower.contains(app)
+        /** "search <query> [on <app>]" / "<query> খুঁজো". Null when the query is blank or just an app name. */
+        private fun extractSearchQuery(text: String, lower: String): DirectAction.Search? {
+            val verbFirst = Regex("""\b(search|find)\b\s+(.+)""").find(lower)
+            if (verbFirst != null) {
+                val query = stripTrailingAppClause(verbFirst.groupValues[2].trim())
+                if (query.isNotBlank() && !isBareAppName(query)) {
+                    return DirectAction.Search(query, extractTargetApp(text))
                 }
             }
+            if (lower.contains("খুঁজো")) {
+                val before = lower.substringBefore("খুঁজো").trim()
+                val query = stripAppWords(before)
+                if (query.isNotBlank() && !isBareAppName(query)) {
+                    return DirectAction.Search(query, extractTargetApp(text))
+                }
+            }
+            return null
+        }
 
-            return hasApp
+        private fun isBareAppName(query: String): Boolean {
+            val tokens = tokenize(query)
+            if (tokens.size != 1) return false
+            return extractTargetApp(query) != null
+        }
+
+        private fun stripAppWords(text: String): String {
+            var s = " $text "
+            for (app in KNOWN_APPS) {
+                s = if (isLatinWordToken(app)) {
+                    s.replace(Regex("""(?<![\p{L}\p{N}])${Regex.escape(app)}(?![\p{L}\p{N}])"""), " ")
+                } else {
+                    s.replace(app, " ")
+                }
+            }
+            return tokenize(s).filter { it !in setOf("এ", "তে", "on", "in") }
+                .joinToString(" ")
+        }
+
+        /** "tap <label>" — the label is whatever remains after the tap verb and particles. */
+        private fun extractTapLabel(lower: String): String? {
+            val hasTap = hasAnyLatin(lower, TAP_WORDS_LATIN) ||
+                hasAnySubstring(lower, TAP_WORDS_SUBSTRING)
+            if (!hasTap) return null
+            val label = tokenize(lower).filter { token ->
+                token !in PARTICLE_TOKENS &&
+                    token !in TAP_WORDS_LATIN &&
+                    TAP_WORDS_SUBSTRING.none { token.contains(it) }
+            }.joinToString(" ")
+            return label.ifBlank { null }
+        }
+
+        /**
+         * The fixed local grammar. Returns null when the goal is not a single
+         * fixed action — the caller falls through to skill replay / plan-once /
+         * the AI loop. No LLM is involved in this decision. Search is checked
+         * first (a query may legitimately contain "and"); every other branch
+         * refuses multi-action goals ("open YouTube and play lofi" stays with
+         * the AI loop).
+         */
+        fun parseDirectAction(text: String): DirectAction? {
+            val lower = text.trim().lowercase()
+            if (lower.isEmpty()) return null
+            extractSearchQuery(text, lower)?.let { return it }
+            if (hasSecondAction(lower)) return null
+            if (isHomeCommand(lower)) return DirectAction.PressHome
+            if (isBackCommand(lower)) return DirectAction.PressBack
+            scrollDirection(lower)?.let { dir ->
+                return DirectAction.Scroll(dir, isABit(lower))
+            }
+            extractTapLabel(lower)?.let { label ->
+                return DirectAction.TapLabel(label)
+            }
+            val number = extractPhoneNumber(lower)
+            if (number != null && hasCallVerb(lower)) return DirectAction.Dial(number)
+            val target = extractTargetApp(text) ?: return null
+            if (!isAutomationIntent(text)) return null
+            if (!isOpenOnlyGoal(text)) return null
+            return DirectAction.OpenApp(target)
         }
     }
 }

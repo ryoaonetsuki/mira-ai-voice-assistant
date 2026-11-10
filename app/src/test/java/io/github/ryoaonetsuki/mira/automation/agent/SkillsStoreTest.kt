@@ -204,5 +204,4 @@ class SkillsStoreTest {
         assertNotNull(exactMatch)
         assertEquals("open facebook", exactMatch?.goal)
     }
-    }
 }

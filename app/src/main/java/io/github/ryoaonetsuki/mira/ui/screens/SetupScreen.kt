@@ -646,7 +646,7 @@ fun SetupScreen(
                 item {
                     PermissionRow(
                         title = "Display Over Other Apps",
-                        subtitle = "Allows floating orb over apps and home screen",
+                        subtitle = "Allows floating orb over apps and home screen, and tap-number badges",
                         iconRes = R.drawable.ic_fluent_options_24_regular,
                         isGranted = Settings.canDrawOverlays(context),
                         onClick = {

@@ -201,6 +201,52 @@ data class MiraGeminiServiceOptions(
                                 ),
                                 "required" to Value.Array(Value.Str("goal"))
                             )
+                        ),
+                        Value.Object(
+                            "name" to Value.Str("remember_fact"),
+                            "description" to Value.Str("Saves a durable fact about the user (preference, name, likes, routine) to on-device Memory, silently. Use when the user tells you something worth remembering."),
+                            "parameters" to Value.Object(
+                                "type" to Value.Str("OBJECT"),
+                                "properties" to Value.Object(
+                                    "category" to Value.Object(
+                                        "type" to Value.Str("STRING"),
+                                        "description" to Value.Str("Category of the fact (e.g. preference, name, likes, routine)")
+                                    ),
+                                    "fact" to Value.Object(
+                                        "type" to Value.Str("STRING"),
+                                        "description" to Value.Str("The fact to save about the user")
+                                    )
+                                ),
+                                "required" to Value.Array(Value.Str("fact"))
+                            )
+                        ),
+                        Value.Object(
+                            "name" to Value.Str("recall_memory"),
+                            "description" to Value.Str("Recalls saved on-device Memory facts matching a query, using local keyword search."),
+                            "parameters" to Value.Object(
+                                "type" to Value.Str("OBJECT"),
+                                "properties" to Value.Object(
+                                    "query" to Value.Object(
+                                        "type" to Value.Str("STRING"),
+                                        "description" to Value.Str("Search query or keywords to find matching memories")
+                                    )
+                                ),
+                                "required" to Value.Array(Value.Str("query"))
+                            )
+                        ),
+                        Value.Object(
+                            "name" to Value.Str("forget_memory"),
+                            "description" to Value.Str("Deletes saved on-device Memory facts containing the given text."),
+                            "parameters" to Value.Object(
+                                "type" to Value.Str("OBJECT"),
+                                "properties" to Value.Object(
+                                    "fact" to Value.Object(
+                                        "type" to Value.Str("STRING"),
+                                        "description" to Value.Str("Fact text to delete from memory")
+                                    )
+                                ),
+                                "required" to Value.Array(Value.Str("fact"))
+                            )
                         )
                     )
                 )

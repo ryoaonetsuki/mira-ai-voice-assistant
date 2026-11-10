@@ -281,37 +281,8 @@ class GeminiRestClientTest {
     }
 
     // =========================================================================
-    // Round 25 Fix Turn F — Automation Think: fast, single-attempt, bounded
+    // Round 25 Fix Turn F — Think client: bounded timeout
     // =========================================================================
-
-    @Test
-    fun testAutomationThink_SingleAttemptLiteModel_NoLadderNoRetry() = runBlocking {
-        var callCount = 0
-        var seenUrl = ""
-        val mockClient = createMockClient { url, _ ->
-            callCount++
-            seenUrl = url
-            Response.Builder()
-                .code(429)
-                .message("Too Many Requests")
-                .protocol(Protocol.HTTP_1_1)
-                .body("{\"error\": {\"message\": \"Resource exhausted\"}}".toResponseBody(jsonMedia))
-                .request(okhttp3.Request.Builder().url(url).build())
-                .build()
-        }
-
-        val restClient = GeminiRestClient()
-        val result = restClient.generateAutomationThink(
-            apiKey = "AIzaSyTestKey123",
-            history = emptyList(),
-            systemPrompt = "",
-            httpClient = mockClient
-        )
-
-        assertTrue("Automation think on 429 must fail fast, got: $result", result.isFailure)
-        assertEquals("Automation think must make exactly ONE attempt (no ladder, no retry)", 1, callCount)
-        assertTrue("Automation think must use the fastest model first, url was: $seenUrl", seenUrl.contains("gemini-3.5-flash-lite"))
-    }
 
     @Test
     fun testThinkClient_DefaultCallTimeout_Is40s() {
@@ -429,10 +400,11 @@ class GeminiRestClientTest {
                 .addInterceptor(rewriteToLocal)
                 .build()
             val startMs = System.currentTimeMillis()
-            val result = restClient.generateAutomationThink(
+            val result = restClient.executeGenerateContentSingleAttempt(
                 apiKey = "AIzaSyTestKey123",
                 history = emptyList(),
                 systemPrompt = "",
+                model = "gemini-3.5-flash-lite",
                 httpClient = fastThinkClient
             )
             val elapsedMs = System.currentTimeMillis() - startMs

@@ -77,4 +77,20 @@ object UiNodeMatcher {
         findByText(nodes, query)
             ?: findByViewId(nodes, query)
             ?: findByClass(nodes, query)
+
+    /**
+     * Returns pairs (number, node) for tappable elements only - isClickable true,
+     * isEnabled true, bounds width (right minus left) > 0 and height (bottom minus top) > 0 -
+     * in the input list order, numbered 1, 2, 3 and so on.
+     */
+    fun tappableNumbered(nodes: List<ScreenNode>): List<Pair<Int, ScreenNode>> {
+        return nodes
+            .filter { node ->
+                node.isClickable &&
+                    node.isEnabled &&
+                    (node.right - node.left > 0) &&
+                    (node.bottom - node.top > 0)
+            }
+            .mapIndexed { index, node -> (index + 1) to node }
+    }
 }

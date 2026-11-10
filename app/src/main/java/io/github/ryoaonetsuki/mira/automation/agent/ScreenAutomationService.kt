@@ -53,6 +53,22 @@ data class ScreenNode(
 
 open class ScreenAutomationService(private val context: Context? = null) : AutomationPort {
 
+    private val tapOverlay: TapNumberOverlay? by lazy {
+        if (context != null) TapNumberOverlay(context) { dumpScreen() } else null
+    }
+
+    override fun showTapNumbers(): List<Pair<Int, ScreenNode>> {
+        val overlay = tapOverlay ?: return emptyList()
+        val nodes = dumpScreen()
+        val numbered = UiNodeMatcher.tappableNumbered(nodes)
+        if (!overlay.show(numbered)) return emptyList()
+        return numbered
+    }
+
+    override fun hideTapNumbers() {
+        tapOverlay?.hide()
+    }
+
     override fun isServiceEnabled(): Boolean {
         return try {
             val ctx = context
@@ -150,7 +166,9 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
             try {
                 Log.i(TAG, "clickText '$text' not found on screen; falling back to recorded coordinates ($fallbackX, $fallbackY)")
             } catch (_: Throwable) {}
-            return clickAt(fallbackX.toFloat(), fallbackY.toFloat())
+            val clicked = clickAt(fallbackX.toFloat(), fallbackY.toFloat())
+            if (clicked) tapOverlay?.hide()
+            return clicked
         }
         return false
     }
@@ -178,6 +196,7 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
                         while (cur != null) {
                             if (cur.isClickable) {
                                 if (cur.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                                    tapOverlay?.hide()
                                     return true
                                 }
                                 break
@@ -186,7 +205,9 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
                         }
                     }
                 }
-                return clickAt(directClickable.centerX.toFloat(), directClickable.centerY.toFloat())
+                val clicked = clickAt(directClickable.centerX.toFloat(), directClickable.centerY.toFloat())
+                if (clicked) tapOverlay?.hide()
+                return clicked
             }
 
             // 2. Matching node that may not be clickable itself
@@ -200,7 +221,9 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
                 val fallbackNode = UiNodeMatcher.findByViewId(nodes, text)
                     ?: UiNodeMatcher.findByClass(nodes, text)
                     ?: return false
-                return clickAt(fallbackNode.centerX.toFloat(), fallbackNode.centerY.toFloat())
+                val clicked = clickAt(fallbackNode.centerX.toFloat(), fallbackNode.centerY.toFloat())
+                if (clicked) tapOverlay?.hide()
+                return clicked
             }
 
             // Climb live accessibility node hierarchy first (like MacroRunner.clickNode)
@@ -211,11 +234,14 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
                     while (current != null) {
                         if (current.isClickable) {
                             if (current.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                                tapOverlay?.hide()
                                 return true
                             }
                             val rect = Rect()
                             current.getBoundsInScreen(rect)
-                            return clickAt(rect.centerX().toFloat(), rect.centerY().toFloat())
+                            val clicked = clickAt(rect.centerX().toFloat(), rect.centerY().toFloat())
+                            if (clicked) tapOverlay?.hide()
+                            return clicked
                         }
                         current = current.parent
                     }
@@ -231,15 +257,54 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
                     candidate.bottom >= matchingNode.bottom
             }
 
-            if (ancestor != null) {
+            val clicked = if (ancestor != null) {
                 clickAt(ancestor.centerX.toFloat(), ancestor.centerY.toFloat())
             } else {
                 clickAt(matchingNode.centerX.toFloat(), matchingNode.centerY.toFloat())
             }
+            if (clicked) tapOverlay?.hide()
+            clicked
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
             Log.e(TAG, "clickText failed", e)
+            false
+        }
+    }
+
+    override fun clickNumber(number: Int, nodes: List<ScreenNode>): Boolean {
+        return try {
+            val node = UiNodeMatcher.tappableNumbered(nodes).firstOrNull { it.first == number }?.second
+                ?: return false
+
+            val service = MiraAccessibilityService.instance
+            val root = service?.rootInActiveWindow
+            if (root != null) {
+                val query = node.text.ifBlank { node.contentDescription }
+                if (query.isNotBlank()) {
+                    val liveNode = findNodeMatchingText(root, query)
+                    if (liveNode != null) {
+                        var cur: AccessibilityNodeInfo? = liveNode
+                        while (cur != null) {
+                            if (cur.isClickable) {
+                                if (cur.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                                    tapOverlay?.hide()
+                                    return true
+                                }
+                                break
+                            }
+                            cur = cur.parent
+                        }
+                    }
+                }
+            }
+            val clicked = clickAt(node.centerX.toFloat(), node.centerY.toFloat())
+            if (clicked) tapOverlay?.hide()
+            clicked
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Log.e(TAG, "clickNumber failed", e)
             false
         }
     }
@@ -322,7 +387,9 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
     override fun scroll(direction: String): Boolean {
         return try {
             val service = MiraAccessibilityService.instance ?: return false
-            service.scroll(direction)
+            val success = service.scroll(direction)
+            if (success) tapOverlay?.hide()
+            success
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
@@ -334,7 +401,9 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
     override fun scroll(direction: String, fraction: Float): Boolean {
         return try {
             val service = MiraAccessibilityService.instance ?: return false
-            service.scroll(direction, fraction)
+            val success = service.scroll(direction, fraction)
+            if (success) tapOverlay?.hide()
+            success
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {

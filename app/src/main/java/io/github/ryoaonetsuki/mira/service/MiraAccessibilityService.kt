@@ -20,7 +20,6 @@ import android.util.Log
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import io.github.ryoaonetsuki.mira.automation.agent.AutomationSafety
 import io.github.ryoaonetsuki.mira.automation.agent.TaskStep
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.CountDownLatch
@@ -624,16 +623,11 @@ class MiraAccessibilityService : AccessibilityService() {
     suspend fun takeScreenshotJpeg(maxWidthPx: Int = 720, quality: Int = 70): ByteArray? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
 
-        val activePkg = getActivePackageName()
-        if (activePkg != null && AutomationSafety.isBlocked(
-                TaskStep(action = TaskStep.ACTION_CLICK_AT),
-                activePkg
-            ) != null
-        ) {
-            Log.i(TAG, "Skipping screenshot on sensitive package: $activePkg")
-            return null
-        }
-
+        // Turn G: no artificial restrictions (owner order) — the banking-app
+        // screenshot skip that lived here via AutomationSafety is removed;
+        // the agent must be able to see every screen. FLAG_SECURE windows
+        // still fail at the OS level, which is a platform protection, not
+        // an in-app restriction.
         val now = SystemClock.elapsedRealtime()
         val elapsed = now - lastScreenshotTimestampMs
         if (elapsed in 0 until SCREENSHOT_DEBOUNCE_MS) {

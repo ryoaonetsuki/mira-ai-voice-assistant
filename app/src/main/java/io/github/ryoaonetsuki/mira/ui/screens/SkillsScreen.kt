@@ -35,11 +35,18 @@ import io.github.ryoaonetsuki.mira.R
 import io.github.ryoaonetsuki.mira.automation.MiraAutomationBridge
 import io.github.ryoaonetsuki.mira.automation.agent.Skill
 import io.github.ryoaonetsuki.mira.automation.agent.SkillMemoryService
+import io.github.ryoaonetsuki.mira.automation.agent.SkillSettings
+import io.github.ryoaonetsuki.mira.automation.agent.TaskHistoryEntry
+import io.github.ryoaonetsuki.mira.automation.agent.TaskHistoryStore
 import io.github.ryoaonetsuki.mira.automation.agent.TaskStatus
 import io.github.ryoaonetsuki.mira.automation.agent.TaskStep
 import io.github.ryoaonetsuki.mira.service.MiraAccessibilityService
 import io.github.ryoaonetsuki.mira.ui.components.MiraCard
+import io.github.ryoaonetsuki.mira.ui.components.MiraSwitch
 import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -56,6 +63,23 @@ fun SkillsScreen(
 
     val skillMemoryService = remember { SkillMemoryService.getInstance(context) }
     val skills by skillMemoryService.skillsFlow.collectAsState()
+
+    val skillSettings = remember { SkillSettings.getInstance(context) }
+    val skillsEnabled by skillSettings.skillsEnabledFlow.collectAsState()
+
+    val taskHistoryStore = remember { TaskHistoryStore.getInstance(context) }
+    val taskEntries by taskHistoryStore.entriesFlow.collectAsState()
+
+    var isTaskPausedUi by remember { mutableStateOf(false) }
+    var showClearHistoryDialog by remember { mutableStateOf(false) }
+
+    val dateFormat = remember { SimpleDateFormat("dd MMM, HH:mm", Locale.getDefault()) }
+
+    LaunchedEffect(runningGoal) {
+        if (runningGoal == null) {
+            isTaskPausedUi = false
+        }
+    }
 
     var isAccessibilityEnabled by remember {
         mutableStateOf(MiraAccessibilityService.isEnabled(context))
@@ -268,6 +292,74 @@ fun SkillsScreen(
                 }
             }
 
+            // Skills Enabled Toggle Card
+            item(key = "skills_enabled_card") {
+                MiraCard(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(42.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (skillsEnabled)
+                                        palette.primary.copy(alpha = 0.15f)
+                                    else
+                                        palette.surfaceVariant.copy(alpha = 0.6f)
+                                )
+                                .border(
+                                    1.dp,
+                                    if (skillsEnabled)
+                                        palette.primary.copy(alpha = 0.35f)
+                                    else
+                                        palette.borderSubtle,
+                                    CircleShape
+                                )
+                        ) {
+                            Icon(
+                                painter = painterResource(
+                                    id = if (skillsEnabled)
+                                        R.drawable.ic_fluent_flash_24_filled
+                                    else
+                                        R.drawable.ic_fluent_flash_24_regular
+                                ),
+                                contentDescription = null,
+                                tint = if (skillsEnabled) palette.primary else palette.textSecondary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(14.dp))
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = stringResource(R.string.skills_enabled_title),
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = palette.textPrimary
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = stringResource(R.string.skills_enabled_desc),
+                                fontSize = 12.sp,
+                                color = palette.textSecondary,
+                                lineHeight = 16.sp
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(10.dp))
+
+                        MiraSwitch(
+                            checked = skillsEnabled,
+                            onCheckedChange = { SkillSettings.getInstance(context).set(it) }
+                        )
+                    }
+                }
+            }
+
             // 2. Macro Recording Control Card
             item(key = "macro_recording_card") {
                 MiraCard(modifier = Modifier.fillMaxWidth()) {
@@ -340,6 +432,14 @@ fun SkillsScreen(
 
                         Button(
                             onClick = {
+                                if (!skillsEnabled) {
+                                    Toast.makeText(
+                                        context,
+                                        context.getString(R.string.skills_off_record_toast),
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                    return@Button
+                                }
                                 if (isRecording) {
                                     val steps = MiraAccessibilityService.stopRecordingSteps()
                                     isRecording = false
@@ -422,7 +522,13 @@ fun SkillsScreen(
                                         color = palette.textPrimary
                                     )
                                     Text(
-                                        text = if (runningDetail.isNullOrBlank()) runningGoal.orEmpty() else "${runningGoal.orEmpty()} — $runningDetail",
+                                        text = if (isTaskPausedUi) {
+                                            stringResource(R.string.task_history_paused)
+                                        } else if (runningDetail.isNullOrBlank()) {
+                                            runningGoal.orEmpty()
+                                        } else {
+                                            "${runningGoal.orEmpty()} — $runningDetail"
+                                        },
                                         fontSize = 12.sp,
                                         color = palette.textSecondary,
                                         maxLines = 1,
@@ -431,28 +537,72 @@ fun SkillsScreen(
                                 }
                             }
 
-                            Button(
-                                onClick = {
-                                    MiraAutomationBridge.getInstance(context).cancel()
-                                },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = Color(0xFFEF4444),
-                                    contentColor = Color.White
-                                ),
-                                shape = RoundedCornerShape(10.dp),
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Icon(
-                                    painter = painterResource(id = R.drawable.ic_fluent_stop_24_filled),
-                                    contentDescription = stringResource(R.string.skill_stop_button),
-                                    modifier = Modifier.size(14.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = stringResource(R.string.skill_stop_button),
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.SemiBold
-                                )
+                                Button(
+                                    onClick = {
+                                        if (isTaskPausedUi) {
+                                            MiraAutomationBridge.getInstance(context).resume()
+                                            isTaskPausedUi = false
+                                        } else {
+                                            MiraAutomationBridge.getInstance(context).pause()
+                                            isTaskPausedUi = true
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = palette.surfaceVariant,
+                                        contentColor = palette.textPrimary
+                                    ),
+                                    shape = RoundedCornerShape(10.dp),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                ) {
+                                    Icon(
+                                        painter = painterResource(
+                                            id = if (isTaskPausedUi)
+                                                R.drawable.ic_fluent_play_24_filled
+                                            else
+                                                R.drawable.ic_fluent_pause_24_regular
+                                        ),
+                                        contentDescription = stringResource(
+                                            if (isTaskPausedUi) R.string.task_resume_button else R.string.task_pause_button
+                                        ),
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = stringResource(
+                                            if (isTaskPausedUi) R.string.task_resume_button else R.string.task_pause_button
+                                        ),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+
+                                Button(
+                                    onClick = {
+                                        MiraAutomationBridge.getInstance(context).cancel()
+                                    },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Color(0xFFEF4444),
+                                        contentColor = Color.White
+                                    ),
+                                    shape = RoundedCornerShape(10.dp),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                ) {
+                                    Icon(
+                                        painter = painterResource(id = R.drawable.ic_fluent_stop_24_filled),
+                                        contentDescription = stringResource(R.string.skill_stop_button),
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = stringResource(R.string.skill_stop_button),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
                             }
                         }
                     }
@@ -670,6 +820,149 @@ fun SkillsScreen(
                 }
             }
 
+            // Task history section
+            item(key = "task_history_header") {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 12.dp, bottom = 4.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f, fill = false)
+                    ) {
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_fluent_arrow_clockwise_24_regular),
+                            contentDescription = null,
+                            tint = palette.textSecondary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = stringResource(R.string.task_history_title),
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = palette.textPrimary
+                        )
+                    }
+                    TextButton(
+                        onClick = { showClearHistoryDialog = true },
+                        enabled = taskEntries.isNotEmpty(),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = stringResource(R.string.task_history_clear),
+                            fontSize = 13.sp,
+                            color = if (taskEntries.isNotEmpty()) palette.primary else palette.textSecondary.copy(alpha = 0.5f)
+                        )
+                    }
+                }
+            }
+
+            if (taskEntries.isEmpty()) {
+                item(key = "task_history_empty") {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 24.dp)
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier.padding(horizontal = 24.dp)
+                        ) {
+                            Text(
+                                text = stringResource(R.string.task_history_empty_title),
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = palette.textSecondary
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = stringResource(R.string.task_history_empty_desc),
+                                fontSize = 12.sp,
+                                color = palette.textSecondary.copy(alpha = 0.8f),
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                            )
+                        }
+                    }
+                }
+            } else {
+                items(taskEntries, key = { it.id }) { entry ->
+                    val shape = RoundedCornerShape(16.dp)
+                    val (statusLabel, statusColor) = when (entry.status) {
+                        TaskStatus.SUCCESS -> "SUCCESS" to Color(0xFF10B981)
+                        TaskStatus.FAILED -> "FAILED" to Color(0xFFEF4444)
+                        TaskStatus.CANCELLED -> "CANCELLED" to Color(0xFFF59E0B)
+                    }
+
+                    Surface(
+                        shape = shape,
+                        color = palette.surface,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, palette.borderSubtle),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(shape)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp)
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(
+                                    verticalAlignment = Alignment.Top,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        text = entry.goal,
+                                        fontSize = 14.5.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = palette.textPrimary,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = statusLabel,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = statusColor,
+                                        modifier = Modifier.padding(top = 2.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                val formattedTime = dateFormat.format(Date(entry.startedAtMs))
+                                val stepsText = stringResource(R.string.task_history_steps, entry.stepsUsed)
+                                Text(
+                                    text = "$formattedTime • $stepsText",
+                                    fontSize = 12.sp,
+                                    color = palette.textSecondary
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.width(8.dp))
+
+                            IconButton(
+                                onClick = { taskHistoryStore.delete(entry.id) },
+                                modifier = Modifier.size(34.dp)
+                            ) {
+                                Icon(
+                                    painter = painterResource(id = R.drawable.ic_fluent_delete_24_regular),
+                                    contentDescription = stringResource(R.string.delete),
+                                    tint = palette.textSecondary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
             item(key = "bottom_spacer") {
                 Spacer(modifier = Modifier.height(24.dp))
             }
@@ -816,6 +1109,7 @@ fun SkillsScreen(
             confirmButton = {
                 Button(
                     onClick = {
+                        if (!skillsEnabled) return@Button
                         val name = macroNameInput.trim()
                         if (name.isNotBlank() && recordedStepsToSave.isNotEmpty()) {
                             skillMemoryService.saveOrUpdate(name, recordedStepsToSave)
@@ -829,6 +1123,49 @@ fun SkillsScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showSaveMacroDialog = false }) {
+                    Text(
+                        text = stringResource(R.string.cancel),
+                        color = palette.textSecondary
+                    )
+                }
+            },
+            containerColor = palette.surface,
+            shape = RoundedCornerShape(16.dp)
+        )
+    }
+
+    // Clear History Confirmation Dialog
+    if (showClearHistoryDialog) {
+        AlertDialog(
+            onDismissRequest = { showClearHistoryDialog = false },
+            title = {
+                Text(
+                    text = stringResource(R.string.task_history_clear_title),
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = palette.textPrimary
+                )
+            },
+            text = {
+                Text(
+                    text = stringResource(R.string.task_history_clear_message),
+                    fontSize = 14.sp,
+                    color = palette.textSecondary
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        taskHistoryStore.clear()
+                        showClearHistoryDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444))
+                ) {
+                    Text(stringResource(R.string.delete))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearHistoryDialog = false }) {
                     Text(
                         text = stringResource(R.string.cancel),
                         color = palette.textSecondary

@@ -568,6 +568,10 @@ class GeminiSessionManager(
         if (isExplicitlyStopped.get() || _state.value == SessionManagerState.STOPPED) return
         Log.e(TAG, "MIRA_LIVE_VOICE: Mic died after internal retries: $reason — restarting session")
         LiveVoiceDiagnostics.recordDropReason("mic-died: $reason")
+        // Turn G: surface the mic death to the session listener (MicService
+        // diagnostics) instead of swallowing it — the restart below is the
+        // recovery, the callback is the record of WHY it restarted.
+        listener.onMicError(reason)
         launchReconnect(isGoAway = false, isStage4Timeout = false)
     }
 

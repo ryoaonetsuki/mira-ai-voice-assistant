@@ -22,8 +22,9 @@ object VoiceMemoryPreload {
     )
 
     private val CARD_REGEX = Regex("\\d[\\d -]{14,18}\\d")
-    private val SENSITIVE_CODE_REGEX = Regex("(otp|pin|password)\\D{0,10}\\d{4,6}", RegexOption.IGNORE_CASE)
-    private val TOKEN_REGEX = Regex("[^\\p{L}\\p{N}]+")
+    private val SENSITIVE_CODE_REGEX = Regex("\\b(otp|pin|password)\\b\\D{0,10}\\d{4,6}", RegexOption.IGNORE_CASE)
+    private val SENSITIVE_KEYWORD_REGEX = Regex("\\b(password|otp|pin|card number|credit card|cvv)\\b", RegexOption.IGNORE_CASE)
+    private val TOKEN_REGEX = Regex("[^\\p{L}\\p{N}\\p{M}]+")
 
     data class RecalledFact(
         val id: Long,
@@ -115,9 +116,7 @@ object VoiceMemoryPreload {
     }
 
     fun isSensitiveFact(text: String): Boolean {
-        val lower = text.lowercase()
-        val keywords = listOf("password", "otp", "pin", "card number", "credit card", "cvv")
-        if (keywords.any { lower.contains(it) }) return true
+        if (SENSITIVE_KEYWORD_REGEX.containsMatchIn(text)) return true
 
         val hasCard = CARD_REGEX.findAll(text).any { match ->
             match.value.count { it.isDigit() } >= 15

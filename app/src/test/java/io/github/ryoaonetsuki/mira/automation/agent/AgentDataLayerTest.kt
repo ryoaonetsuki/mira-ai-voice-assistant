@@ -149,6 +149,51 @@ class AgentDataLayerTest {
   }
 
   @Test
+  fun testTaskStep_TapNumber() {
+    // TaskStep.tryParse with action tap and numeric label becomes click_number
+    val stepFromNl = TaskStep.tryParse("tap 3")
+    assertNotNull(stepFromNl)
+    assertEquals(TaskStep.ACTION_CLICK_NUMBER, stepFromNl?.action)
+    assertEquals(3, stepFromNl?.intParam("number"))
+
+    val stepFromNlNumberWord = TaskStep.tryParse("tap number 5")
+    assertNotNull(stepFromNlNumberWord)
+    assertEquals(TaskStep.ACTION_CLICK_NUMBER, stepFromNlNumberWord?.action)
+    assertEquals(5, stepFromNlNumberWord?.intParam("number"))
+
+    // fromJson with action "tap" and params label "7" becomes click_number with number 7
+    val fromJsonStep = TaskStep.fromJson(JSONObject("""{"action": "tap", "params": {"label": "7"}}"""))
+    assertEquals(TaskStep.ACTION_CLICK_NUMBER, fromJsonStep.action)
+    assertEquals(7, fromJsonStep.intParam("number"))
+
+    val tryParseJsonStep = TaskStep.tryParse("""{"action": "tap", "params": {"label": "7"}}""")
+    assertNotNull(tryParseJsonStep)
+    assertEquals(TaskStep.ACTION_CLICK_NUMBER, tryParseJsonStep?.action)
+    assertEquals(7, tryParseJsonStep?.intParam("number"))
+  }
+
+  @Test
+  fun testTaskStep_ShowAndHideNumbers() {
+    val showJson = JSONObject("""{"action": "show_numbers"}""")
+    val showStep = TaskStep.fromJson(showJson)
+    assertEquals(TaskStep.ACTION_SHOW_NUMBERS, showStep.action)
+    assertTrue(TaskStep.supportedActions.contains(showStep.action))
+
+    val showWithSpace = JSONObject("""{"action": "show numbers"}""")
+    val showStepWithSpace = TaskStep.fromJson(showWithSpace)
+    assertEquals(TaskStep.ACTION_SHOW_NUMBERS, showStepWithSpace.action)
+
+    val hideJson = JSONObject("""{"action": "hide_numbers"}""")
+    val hideStep = TaskStep.fromJson(hideJson)
+    assertEquals(TaskStep.ACTION_HIDE_NUMBERS, hideStep.action)
+    assertTrue(TaskStep.supportedActions.contains(hideStep.action))
+
+    val hideWithSpace = JSONObject("""{"action": "hide numbers"}""")
+    val hideStepWithSpace = TaskStep.fromJson(hideWithSpace)
+    assertEquals(TaskStep.ACTION_HIDE_NUMBERS, hideStepWithSpace.action)
+  }
+
+  @Test
   fun testTaskStep_TryParse_GarbageText_ReturnsNull() {
     val garbage = "I am pondering what action we might consider next, but not taking any action yet."
     assertNull(TaskStep.tryParse(garbage))

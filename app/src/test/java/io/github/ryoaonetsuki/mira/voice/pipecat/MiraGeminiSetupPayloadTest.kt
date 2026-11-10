@@ -111,7 +111,7 @@ class MiraGeminiSetupPayloadTest {
         assertNotNull("tools[0] must be Value.Object", toolDeclObj)
         val funcDecls = toolDeclObj!!.value["functionDeclarations"] as? Value.Array
         assertNotNull("functionDeclarations must be present", funcDecls)
-        assertEquals("Must declare all 11 phone tools", 11, funcDecls!!.value.size)
+        assertEquals("Must declare all 14 phone tools", 14, funcDecls!!.value.size)
 
         val declaredNames = funcDecls.value.mapNotNull {
             ((it as? Value.Object)?.value?.get("name") as? Value.Str)?.value
@@ -127,7 +127,10 @@ class MiraGeminiSetupPayloadTest {
             "get_screen",
             "web_search",
             "run_connector_command",
-            "run_skill"
+            "run_skill",
+            "remember_fact",
+            "recall_memory",
+            "forget_memory"
         )
         assertEquals("Declared tools list must match expected", expectedTools, declaredNames)
 
@@ -204,6 +207,38 @@ class MiraGeminiSetupPayloadTest {
         assertTrue(runSkillReq.value.contains(Value.Str("goal")))
         assertFalse(runSkillReq.value.contains(Value.Str("skill")))
 
+        // Verify remember_fact
+        val rememberDecl = funcDecls.value.first {
+            ((it as? Value.Object)?.value?.get("name") as? Value.Str)?.value == "remember_fact"
+        } as Value.Object
+        val rememberParams = rememberDecl.value["parameters"] as Value.Object
+        val rememberProps = rememberParams.value["properties"] as Value.Object
+        assertEquals(Value.Str("STRING"), (rememberProps.value["category"] as Value.Object).value["type"])
+        assertEquals(Value.Str("STRING"), (rememberProps.value["fact"] as Value.Object).value["type"])
+        val rememberReq = rememberParams.value["required"] as Value.Array
+        assertTrue(rememberReq.value.contains(Value.Str("fact")))
+        assertFalse(rememberReq.value.contains(Value.Str("category")))
+
+        // Verify recall_memory
+        val recallDecl = funcDecls.value.first {
+            ((it as? Value.Object)?.value?.get("name") as? Value.Str)?.value == "recall_memory"
+        } as Value.Object
+        val recallParams = recallDecl.value["parameters"] as Value.Object
+        val recallProps = recallParams.value["properties"] as Value.Object
+        assertEquals(Value.Str("STRING"), (recallProps.value["query"] as Value.Object).value["type"])
+        val recallReq = recallParams.value["required"] as Value.Array
+        assertTrue(recallReq.value.contains(Value.Str("query")))
+
+        // Verify forget_memory
+        val forgetDecl = funcDecls.value.first {
+            ((it as? Value.Object)?.value?.get("name") as? Value.Str)?.value == "forget_memory"
+        } as Value.Object
+        val forgetParams = forgetDecl.value["parameters"] as Value.Object
+        val forgetProps = forgetParams.value["properties"] as Value.Object
+        assertEquals(Value.Str("STRING"), (forgetProps.value["fact"] as Value.Object).value["type"])
+        val forgetReq = forgetParams.value["required"] as Value.Array
+        assertTrue(forgetReq.value.contains(Value.Str("fact")))
+
         // Verify serialized JSON format and exclusion of google_search grounding
         val jsonString = modelConfig.toJsonString(json)
         val jsonObj = JSONObject(jsonString)
@@ -211,10 +246,52 @@ class MiraGeminiSetupPayloadTest {
         val jsonTools = jsonObj.getJSONArray("tools")
         assertEquals(1, jsonTools.length())
         val jsonFuncDecls = jsonTools.getJSONObject(0).getJSONArray("functionDeclarations")
-        assertEquals(11, jsonFuncDecls.length())
+        assertEquals(14, jsonFuncDecls.length())
 
         // Live API requirement: google_search grounding must NOT be combined with function calling
         assertFalse("google_search grounding MUST NOT be in setup alongside function calling", jsonString.contains("google_search") || jsonString.contains("googleSearch"))
+    }
+
+    @Test
+    fun testDefaultPhoneTools_DeclaresMemoryTools() {
+        val tools = MiraGeminiServiceOptions.defaultPhoneTools()
+        val toolsArray = tools.value
+        assertEquals(1, toolsArray.size)
+        val toolObj = toolsArray[0] as Value.Object
+        val funcDecls = (toolObj.value["functionDeclarations"] as Value.Array).value
+
+        val names = funcDecls.mapNotNull {
+            ((it as? Value.Object)?.value?.get("name") as? Value.Str)?.value
+        }
+        assertTrue("Must declare remember_fact", names.contains("remember_fact"))
+        assertTrue("Must declare recall_memory", names.contains("recall_memory"))
+        assertTrue("Must declare forget_memory", names.contains("forget_memory"))
+
+        // remember_fact: category (optional), fact (required)
+        val remember = funcDecls.first { ((it as? Value.Object)?.value?.get("name") as? Value.Str)?.value == "remember_fact" } as Value.Object
+        val rememberParams = remember.value["parameters"] as Value.Object
+        val rememberProps = (rememberParams.value["properties"] as Value.Object).value
+        assertTrue(rememberProps.containsKey("category"))
+        assertTrue(rememberProps.containsKey("fact"))
+        val rememberReq = (rememberParams.value["required"] as Value.Array).value
+        assertTrue(rememberReq.contains(Value.Str("fact")))
+        assertFalse(rememberReq.contains(Value.Str("category")))
+
+        // recall_memory: query (required)
+        val recall = funcDecls.first { ((it as? Value.Object)?.value?.get("name") as? Value.Str)?.value == "recall_memory" } as Value.Object
+        val recallParams = recall.value["parameters"] as Value.Object
+        val recallProps = (recallParams.value["properties"] as Value.Object).value
+        assertTrue(recallProps.containsKey("query"))
+        val recallReq = (recallParams.value["required"] as Value.Array).value
+        assertTrue(recallReq.contains(Value.Str("query")))
+
+        // forget_memory: fact (required)
+        val forget = funcDecls.first { ((it as? Value.Object)?.value?.get("name") as? Value.Str)?.value == "forget_memory" } as Value.Object
+        val forgetParams = forget.value["parameters"] as Value.Object
+        val forgetProps = (forgetParams.value["properties"] as Value.Object).value
+        assertTrue(forgetProps.containsKey("fact"))
+        val forgetReq = (forgetParams.value["required"] as Value.Array).value
+        assertTrue(forgetReq.contains(Value.Str("fact")))
     }
 
     @Test

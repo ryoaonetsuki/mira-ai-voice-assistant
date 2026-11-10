@@ -193,7 +193,15 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
             val matchingNode = nodes.firstOrNull { node ->
                 node.text.contains(text, ignoreCase = true) ||
                     node.contentDescription.contains(text, ignoreCase = true)
-            } ?: return false
+            } ?: run {
+                // 3. Best-of-all (flutter_automate UiSelector): the query may
+                // be a viewId ("search_button") or a class name ("Button")
+                // instead of visible text — tap the matched node's center.
+                val fallbackNode = UiNodeMatcher.findByViewId(nodes, text)
+                    ?: UiNodeMatcher.findByClass(nodes, text)
+                    ?: return false
+                return clickAt(fallbackNode.centerX.toFloat(), fallbackNode.centerY.toFloat())
+            }
 
             // Climb live accessibility node hierarchy first (like MacroRunner.clickNode)
             if (root != null) {
@@ -259,6 +267,30 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
             throw e
         } catch (e: Throwable) {
             Log.e(TAG, "clickAt failed", e)
+            false
+        }
+    }
+
+    override fun longPress(x: Float, y: Float, durationMs: Long): Boolean {
+        return try {
+            val service = MiraAccessibilityService.instance ?: return false
+            service.longPress(x, y, durationMs)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Log.e(TAG, "longPress failed", e)
+            false
+        }
+    }
+
+    override fun pinch(centerX: Float, centerY: Float, zoomIn: Boolean): Boolean {
+        return try {
+            val service = MiraAccessibilityService.instance ?: return false
+            service.pinch(centerX, centerY, zoomIn)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Log.e(TAG, "pinch failed", e)
             false
         }
     }

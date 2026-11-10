@@ -1330,7 +1330,7 @@ internal suspend fun executeFunctionCall(
             postPackage = postPackage,
             postNodes = postNodes,
             isStepOpenApp = false,
-            descriptionContext = resolvedGoal
+            descriptionContext = resolvedGoal.orEmpty()
         )
         val latencyMs = System.currentTimeMillis() - startTimeMs
         LiveVoiceDiagnostics.recordToolResult(name, latencyMs, false)
@@ -1348,7 +1348,7 @@ internal suspend fun executeFunctionCall(
             postPackage = postPackage,
             postNodes = postNodes,
             isStepOpenApp = false,
-            descriptionContext = resolvedGoal
+            descriptionContext = resolvedGoal.orEmpty()
         )
         val latencyMs = System.currentTimeMillis() - startTimeMs
         LiveVoiceDiagnostics.recordToolResult(name, latencyMs, false)
@@ -1506,7 +1506,7 @@ private suspend fun executeFunctionCallInternal(
                     postPackage = prePackage,
                     postNodes = postNodes,
                     isStepOpenApp = false,
-                    descriptionContext = resolvedGoal
+                    descriptionContext = resolvedGoal.orEmpty()
                 )
             }
 
@@ -1615,7 +1615,7 @@ private suspend fun executeFunctionCallInternal(
                     postPackage = prePackage,
                     postNodes = postNodes,
                     isStepOpenApp = false,
-                    descriptionContext = resolvedGoal
+                    descriptionContext = resolvedGoal.orEmpty()
                 )
             }
 

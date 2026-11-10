@@ -32,19 +32,20 @@ object LivePromptBuilder {
     }
 
     /**
-     * Builds the web search rule for the Live session system prompt with the localized acknowledgement phrase.
+     * Builds the web search rule for the Live session system prompt (Milestone 3).
+     * The model narrates the search itself while web_search executes and receives results as a tool response.
      */
-    fun buildWebSearchRule(language: String, searchAckPhrase: String): String {
+    fun buildWebSearchRule(language: String, searchAckPhrase: String = ""): String {
         val lang = language.ifBlank { DEFAULT_LANGUAGE }
         val langLabel = if (LanguageUtils.isBangla(lang)) "Bangla" else lang
-        return "When the user asks you to search or look something up, or asks about something you do not know or have no latest news about: you must FIRST SAY ALOUD the acknowledgement in $langLabel: \"$searchAckPhrase\", then wait for the fresh search results to be provided, then speak the final answer. Never stay silent while searching, and never guess when you do not know. For normal voice talk answer directly and fast."
+        return "When the user asks you to search or look something up, or asks about something you do not know or have no latest news about: call the `web_search` tool to get fresh web search results. Narrate briefly in $langLabel while the search runs, then speak the final answer directly from the fresh search results. Never stay silent while searching, and never guess when you do not know. For normal voice talk answer directly and fast."
     }
 
     /**
-     * Builds the tool-use and narration rule for the Live session system prompt (Milestone 1).
-     * Instructs the model when to call phone tools, to narrate briefly in the user's
-     * language while tools execute, that tool results arrive as function responses,
-     * and never to claim it cannot act on the phone.
+     * Builds the tool-use and narration rule for the Live session system prompt (Milestones 2 & 3).
+     * Instructs the model on the available tools (open_app, click_text, type_text, scroll, press_back, press_home, wait, get_screen, web_search, run_connector_command),
+     * when to call each, to narrate briefly in the user's language while tools execute, that tool results arrive as function responses
+     * with fresh screen state, that the model must check the screen before its next call, and the off-target rule (if not on target app, call open_app first).
      */
     fun buildToolUseRule(language: String): String {
         val lang = language.ifBlank { DEFAULT_LANGUAGE }
@@ -55,12 +56,18 @@ object LivePromptBuilder {
             "e.g. \"Sure, doing that for you...\" or \"Opening it now...\""
         }
 
-        return "PHONE CONTROL & TOOL USE: You have real tools to directly control the user's phone (such as `open_app`). " +
+        return "PHONE CONTROL & ACTION TOOLS: You have real tools to directly control the user's phone: " +
+            "`open_app` (opens an app by name or package), `click_text` (clicks a UI element by text label, with optional fallback x/y coordinates), " +
+            "`type_text` (types text into the focused field), `scroll` (scrolls the screen up, down, left, or right), `press_back` (presses Back button), " +
+            "`press_home` (returns to home screen), `wait` (pauses for UI to load), `get_screen` (inspects current UI elements and screen state), " +
+            "`web_search` (searches web for information), and `run_connector_command` (runs connector actions). " +
             "You CAN and MUST act on the phone whenever asked — NEVER claim you cannot control the phone, open apps, or take actions. " +
-            "When the user asks you to open an app (e.g. 'YouTube খুলো', 'open WhatsApp') or perform a phone action: CALL THE TOOL IMMEDIATELY. " +
+            "OFF-TARGET RULE: If the screen is not currently on the target application needed for the user's goal, you MUST call `open_app` first before attempting to click or type. " +
+            "When the user asks for a phone action or search: CALL THE TOOL IMMEDIATELY. " +
             "While the tool executes in the background, NARRATE BRIEFLY in the conversation language ($narrationExample). Never stay silent and never give robotic excuses. " +
-            "Tool results arrive directly as function responses containing the updated screen state and outcome — they are NOT user messages. " +
-            "When a tool result arrives, review the result and screen state, and speak the outcome naturally and briefly to the user in the conversation language."
+            "Tool results arrive directly as function responses containing the updated screen state, node text, and outcome — they are NOT user messages. " +
+            "You MUST CHECK THE SCREEN in the function response before your next call to verify what is on display and guide your next action. " +
+            "When all actions are complete, speak the outcome naturally and briefly to the user in the conversation language."
     }
 
     /**

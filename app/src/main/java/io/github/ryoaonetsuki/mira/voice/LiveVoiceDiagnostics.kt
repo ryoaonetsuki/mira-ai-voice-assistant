@@ -55,7 +55,13 @@ data class VoiceDiagnosticsData(
     val autoRestartCount: Int = 0,
     val lastAutoRestartAt: Long? = null,
     val lastResumedWithContext: Boolean? = null,
-    val interruptedCount: Int = 0
+    val interruptedCount: Int = 0,
+    // Turn G Milestone 6: tool sequence diagnostics & tracking
+    val lastToolCall: String? = null,
+    val lastToolResult: String? = null,
+    val lastToolError: String? = null,
+    val goalToolCallCount: Int = 0,
+    val totalToolCallCount: Int = 0
 )
 
 object LiveVoiceDiagnostics {
@@ -225,6 +231,61 @@ object LiveVoiceDiagnostics {
     // Audio Mode & Focus Diagnostics (ROUND 20 Turn 4b)
     fun updateAudioMode(mode: String) {
         _data.value = _data.value.copy(audioMode = mode)
+    }
+
+    // Turn G Milestone 6: TOOL_CALL, TOOL_RESULT, TOOL_ERROR diagnostics
+    fun recordToolCall(
+        name: String,
+        argsSummary: String,
+        startTimeMs: Long = System.currentTimeMillis(),
+        goalCallCount: Int? = null
+    ) {
+        val count = goalCallCount ?: (_data.value.goalToolCallCount + 1)
+        _data.value = _data.value.copy(
+            lastToolCall = "$name args=$argsSummary",
+            goalToolCallCount = count,
+            totalToolCallCount = _data.value.totalToolCallCount + 1
+        )
+        val logLine = "TOOL_CALL name=$name args=$argsSummary startTime=$startTimeMs goalCount=$count"
+        addFrameLog(logLine)
+        try {
+            android.util.Log.i("LiveVoiceDiag", logLine)
+        } catch (_: Throwable) {}
+    }
+
+    fun recordToolResult(
+        name: String,
+        latencyMs: Long,
+        success: Boolean
+    ) {
+        val statusStr = if (success) "success" else "failure"
+        _data.value = _data.value.copy(
+            lastToolResult = "$name latency=${latencyMs}ms success=$success"
+        )
+        val logLine = "TOOL_RESULT name=$name latency=${latencyMs}ms status=$statusStr"
+        addFrameLog(logLine)
+        try {
+            android.util.Log.i("LiveVoiceDiag", logLine)
+        } catch (_: Throwable) {}
+    }
+
+    fun recordToolError(
+        name: String,
+        errorMessage: String
+    ) {
+        _data.value = _data.value.copy(
+            lastToolError = "$name error=$errorMessage",
+            lastError = "TOOL_ERROR: $name - $errorMessage"
+        )
+        val logLine = "TOOL_ERROR name=$name error=$errorMessage"
+        addFrameLog(logLine)
+        try {
+            android.util.Log.e("LiveVoiceDiag", logLine)
+        } catch (_: Throwable) {}
+    }
+
+    fun resetGoalToolCallCount() {
+        _data.value = _data.value.copy(goalToolCallCount = 0)
     }
 
     fun reset() {

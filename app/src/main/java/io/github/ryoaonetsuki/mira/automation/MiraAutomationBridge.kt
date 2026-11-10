@@ -653,6 +653,44 @@ class MiraAutomationBridge(
         )
 
         /** True for "can you control my phone"-style questions that carry no concrete action. */
+        fun isAutomationIntent(text: String): Boolean {
+            val trimmed = text.trim()
+            if (trimmed.isEmpty()) return false
+            // A question about whether she CAN control the phone is answered by the Live model, never run as a goal.
+            if (isCapabilityQuestion(trimmed)) return false
+            val lower = trimmed.lowercase()
+
+            // 1. Explicit pattern matches ("play <song> on youtube", "message <name> on whatsapp", "phone control")
+            for (pattern in INTENT_PATTERNS) {
+                if (pattern.containsMatchIn(lower)) return true
+            }
+
+            // 2. Automation verb check across all 30 languages:
+            //    Latin-script verbs use Unicode word-boundary regex; non-Latin / no-word-boundary scripts use substring contains.
+            val hasLatinVerb = LATIN_VERBS.any { verb ->
+                if (verb.contains(" ")) {
+                    Regex("""(?<![\p{L}\p{N}])${Regex.escape(verb)}(?![\p{L}\p{N}])""").containsMatchIn(lower)
+                } else {
+                    Regex("""(?<![\p{L}\p{N}])${Regex.escape(verb)}(?![\p{L}\p{N}])""").containsMatchIn(lower)
+                }
+            }
+            val hasSubstringVerb = SUBSTRING_VERBS.any { lower.contains(it) }
+            val hasVerb = hasLatinVerb || hasSubstringVerb
+
+            if (!hasVerb) return false
+
+            // 3. Target app/media noun check (prefix word boundary for Latin tokens to support suffixes like -e, -এ, -te, or CJK prefixes)
+            val hasApp = KNOWN_APPS.any { app ->
+                if (isLatinWordToken(app)) {
+                    Regex("""(?:^|\b|(?<=[^\p{IsLatin}\p{N}]))${Regex.escape(app)}""").containsMatchIn(lower)
+                } else {
+                    lower.contains(app)
+                }
+            }
+
+            return hasApp
+        }
+
         fun isCapabilityQuestion(text: String): Boolean {
             val lower = text.trim().lowercase()
             if (lower.isEmpty()) return false

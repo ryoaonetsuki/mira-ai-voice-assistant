@@ -28,6 +28,12 @@ data class TaskStep(
   val isSupported: Boolean
     get() = supportedActions.contains(action)
 
+  val fallbackX: Int?
+    get() = intParam("fallbackX") ?: intParam("x")
+
+  val fallbackY: Int?
+    get() = intParam("fallbackY") ?: intParam("y")
+
   /**
    * Stable signature used by the recovery engine to detect repeated actions.
    */

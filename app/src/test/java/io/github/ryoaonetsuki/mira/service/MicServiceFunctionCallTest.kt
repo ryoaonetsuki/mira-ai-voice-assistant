@@ -888,7 +888,7 @@ class MicServiceFunctionCallTest {
         val resultMap = response.value
         assertEquals("Success must be true when tap numbers shown", true, (resultMap["success"] as? Value.Bool)?.value)
         val resultStr = (resultMap["result"] as? Value.Str)?.value.orEmpty()
-        assertTrue("Result text must contain the formatted list: $resultStr", resultStr.contains("[1]"))
+        assertTrue("Result text must contain the formatted list: $resultStr", resultStr.contains("1: Search YouTube"))
         assertTrue("Result text must contain element label: $resultStr", resultStr.contains("Search YouTube"))
     }
 

@@ -100,39 +100,6 @@ class MiraAutomationBridge(
         )
     }
 
-    suspend fun executeGoal(
-        goal: String,
-        onProgress: ((step: Int, description: String) -> Unit)? = null
-    ): AutomationResult {
-        val executor: TaskExecutor
-        synchronized(stateLock) {
-            if (checkRunningAndClearStaleLocked()) {
-                return AutomationResult(TaskStatus.FAILED, buildAlreadyRunningMessageLocked(), 0)
-            }
-            executor = createDefaultExecutor(onProgress)
-            activeExecutor = executor
-            runningGoal = goal
-            runningSinceMs = clockMs()
-        }
-
-        return try {
-            val result = executor.executeGoal(goal)
-            AutomationResult(
-                status = result.status,
-                message = result.message,
-                stepsUsed = result.stepsUsed
-            )
-        } finally {
-            synchronized(stateLock) {
-                if (activeExecutor === executor) {
-                    activeExecutor = null
-                    runningGoal = null
-                    runningSinceMs = 0L
-                }
-            }
-        }
-    }
-
     suspend fun executeSkill(
         skill: io.github.ryoaonetsuki.mira.automation.agent.Skill,
         onProgress: ((step: Int, description: String) -> Unit)? = null

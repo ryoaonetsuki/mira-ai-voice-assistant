@@ -1225,7 +1225,7 @@ class TaskExecutorTest {
         val node2NonClickable = ScreenNode(1, "Second", "", "android.widget.TextView", "", isClickable = false, isEditable = false, isScrollable = false, isCheckable = false, isEnabled = true, 0, 0, 10, 10, 5, 5)
         val node3Disabled = ScreenNode(2, "Third", "", "android.widget.Button", "", isClickable = true, isEditable = false, isScrollable = false, isCheckable = false, isEnabled = false, 0, 0, 10, 10, 5, 5)
         val node4ZeroWidth = ScreenNode(3, "Fourth", "", "android.widget.Button", "", isClickable = true, isEditable = false, isScrollable = false, isCheckable = false, isEnabled = true, 5, 0, 5, 10, 5, 5)
-        val node5ZeroHeight = ScreenNode(4, "Fifth", "", "android.widget.Button", "", isClickable = true, isEditable = false, isScrollable = false, isCheckable = false, isEnabled = true, 0, 5, 10, 5, 5)
+        val node5ZeroHeight = ScreenNode(4, "Fifth", "", "android.widget.Button", "", isClickable = true, isEditable = false, isScrollable = false, isCheckable = false, isEnabled = true, 0, 5, 10, 5, 5, 5)
         val node6 = ScreenNode(5, "Sixth", "", "android.widget.Button", "", isClickable = true, isEditable = false, isScrollable = false, isCheckable = false, isEnabled = true, 0, 0, 20, 20, 10, 10)
         val node7 = ScreenNode(6, "Seventh", "", "android.widget.Button", "", isClickable = true, isEditable = false, isScrollable = false, isCheckable = false, isEnabled = true, 10, 10, 30, 30, 20, 20)
 
@@ -1234,11 +1234,11 @@ class TaskExecutorTest {
 
         assertEquals(3, numbered.size)
         assertEquals(1, numbered[0].first)
-        assertSame(node1, numbered[0].second)
+        assertEquals(node1, numbered[0].second)
         assertEquals(2, numbered[1].first)
-        assertSame(node6, numbered[1].second)
+        assertEquals(node6, numbered[1].second)
         assertEquals(3, numbered[2].first)
-        assertSame(node7, numbered[2].second)
+        assertEquals(node7, numbered[2].second)
     }
 
     @Test

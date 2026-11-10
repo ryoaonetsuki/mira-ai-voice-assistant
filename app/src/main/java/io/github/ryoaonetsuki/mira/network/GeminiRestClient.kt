@@ -874,35 +874,6 @@ class GeminiRestClient(
         )
     }
 
-    /**
-     * Automation think call (Turn F/c+g): FASTEST model first
-     * (gemini-3.5-flash-lite), SINGLE attempt, no model ladder, no retries —
-     * fail fast with a named reason instead of burning the 120s task budget
-     * on 3 models x 4 attempts. Runs on [thinkClient], whose 40s callTimeout
-     * bounds even a blocking body read that coroutine cancellation cannot
-     * interrupt. Chat keeps the ladder via [generateChatResponse].
-     */
-    suspend fun generateAutomationThink(
-        apiKey: String,
-        history: List<ChatMessageEntity>,
-        systemPrompt: String = "",
-        model: String = AUTOMATION_THINK_MODEL,
-        attachments: List<ChatAttachment> = emptyList(),
-        httpClient: OkHttpClient = thinkClient
-    ): Result<GroundedChatResult> = withContext(Dispatchers.IO) {
-        executeGenerateContentSingleAttempt(
-            apiKey = apiKey,
-            history = history,
-            systemPrompt = systemPrompt,
-            model = model,
-            useServerProxy = false,
-            attachSearchTool = false,
-            enableThinking = false,
-            attachments = attachments,
-            httpClient = httpClient
-        )
-    }
-
     suspend fun generateChatResponse(
         apiKey: String,
         history: List<ChatMessageEntity>,

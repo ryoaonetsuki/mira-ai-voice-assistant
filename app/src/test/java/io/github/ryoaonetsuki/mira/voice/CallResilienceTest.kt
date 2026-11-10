@@ -1,0 +1,150 @@
+package io.github.ryoaonetsuki.mira.voice
+
+import android.content.Context
+import io.github.ryoaonetsuki.mira.voice.pipecat.AudioCaptureRetryPolicy
+import org.junit.Assert.*
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+
+/**
+ * Turn G: the "call stays alive" rules — restart backoff, liveness
+ * watchdog, call-active persistence across a service/process kill, and the
+ * drop/restart diagnostics the next phone test reads to tell which suspect
+ * fired. Pure rules (no service instance needed) + the SharedPreferences
+ * store a recreated service reads back.
+ */
+@RunWith(RobolectricTestRunner::class)
+class CallResilienceTest {
+
+    private lateinit var context: Context
+
+    @Before
+    fun setUp() {
+        context = RuntimeEnvironment.getApplication()
+        LiveVoiceDiagnostics.reset()
+    }
+
+    @Test
+    fun testRestartBackoff_CappedAt30s() {
+        assertEquals(2_000L, CallRestartPolicy.delayForAttempt(1))
+        assertEquals(5_000L, CallRestartPolicy.delayForAttempt(2))
+        assertEquals(10_000L, CallRestartPolicy.delayForAttempt(3))
+        assertEquals(20_000L, CallRestartPolicy.delayForAttempt(4))
+        assertEquals(30_000L, CallRestartPolicy.delayForAttempt(5))
+        assertEquals(30_000L, CallRestartPolicy.delayForAttempt(6))
+        assertEquals(30_000L, CallRestartPolicy.delayForAttempt(99))
+    }
+
+    @Test
+    fun testTerminalFailures_NeverAutoRestart() {
+        assertTrue(CallRestartPolicy.isTerminalFailure("Gemini key missing — add it in Settings"))
+        assertTrue(CallRestartPolicy.isTerminalFailure("Microphone permission not granted — allow it in Settings"))
+        assertTrue(CallRestartPolicy.isTerminalFailure("Free-tier limit reached: maximum 1 concurrent sessions allowed"))
+        assertFalse(CallRestartPolicy.isTerminalFailure("Live voice: Connection failed after 5 retries — tap to retry"))
+        assertFalse(CallRestartPolicy.isTerminalFailure("socket-dropped: websocket closed (state=CONNECTED)"))
+        assertFalse(CallRestartPolicy.isTerminalFailure("Live voice: Setup timed out after 15s — tap to retry"))
+    }
+
+    @Test
+    fun testLivenessWatchdog_FiresOnlyWhenLiveUnmutedAndSilent() {
+        val now = 100_000L
+        // Live, unmuted, no frames for 25s -> restart.
+        assertTrue(
+            VoiceLivenessPolicy.shouldTriggerRestart(
+                lastAudioFrameElapsedMs = now - 25_000L, nowElapsedMs = now,
+                isMuted = false, isLive = true, isReconnecting = false
+            )
+        )
+        // Only 5s of silence -> still alive (frames arrive ~every 100ms).
+        assertFalse(
+            VoiceLivenessPolicy.shouldTriggerRestart(
+                lastAudioFrameElapsedMs = now - 5_000L, nowElapsedMs = now,
+                isMuted = false, isLive = true, isReconnecting = false
+            )
+        )
+        // Muted mic sends no frames by design — never fire.
+        assertFalse(
+            VoiceLivenessPolicy.shouldTriggerRestart(
+                lastAudioFrameElapsedMs = now - 60_000L, nowElapsedMs = now,
+                isMuted = true, isLive = true, isReconnecting = false
+            )
+        )
+        // Not live (idle/connecting) -> the connecting watchdog owns it.
+        assertFalse(
+            VoiceLivenessPolicy.shouldTriggerRestart(
+                lastAudioFrameElapsedMs = now - 60_000L, nowElapsedMs = now,
+                isMuted = false, isLive = false, isReconnecting = false
+            )
+        )
+        // Already reconnecting -> the in-flight reconnect owns recovery.
+        assertFalse(
+            VoiceLivenessPolicy.shouldTriggerRestart(
+                lastAudioFrameElapsedMs = now - 60_000L, nowElapsedMs = now,
+                isMuted = false, isLive = true, isReconnecting = true
+            )
+        )
+        // No frame ever seen yet -> do not fire (call just started).
+        assertFalse(
+            VoiceLivenessPolicy.shouldTriggerRestart(
+                lastAudioFrameElapsedMs = 0L, nowElapsedMs = now,
+                isMuted = false, isLive = true, isReconnecting = false
+            )
+        )
+    }
+
+    @Test
+    fun testCallActiveStore_SurvivesRecreation_AndClearsOnUserStop() {
+        // A fresh service reads "no call active".
+        assertFalse(LiveCallStateStore(context).isCallActive())
+
+        // Voice starts: flag set.
+        LiveCallStateStore(context).setCallActive(true)
+
+        // Service killed + recreated: a NEW store instance reads it back —
+        // this is the resume-on-recreate path (START_STICKY, null intent).
+        assertTrue("Recreated service must see the call was active", LiveCallStateStore(context).isCallActive())
+
+        // User taps End: flag cleared, no resume.
+        LiveCallStateStore(context).setCallActive(false)
+        assertFalse(LiveCallStateStore(context).isCallActive())
+    }
+
+    @Test
+    fun testDropDiagnostics_RecordsReasonAndCounts() {
+        assertNull(LiveVoiceDiagnostics.data.value.lastDropReason)
+        assertEquals(0, LiveVoiceDiagnostics.data.value.micRestartCount)
+        assertEquals(0, LiveVoiceDiagnostics.data.value.autoRestartCount)
+
+        LiveVoiceDiagnostics.recordDropReason("mic-died: record.read returned -3")
+        assertEquals("mic-died: record.read returned -3", LiveVoiceDiagnostics.data.value.lastDropReason)
+        assertEquals("mic-died: record.read returned -3", LiveVoiceDiagnostics.data.value.lastError)
+        assertTrue(LiveVoiceDiagnostics.data.value.frameLogs.any { it.contains("DROP_REASON") })
+
+        LiveVoiceDiagnostics.recordMicRestart()
+        LiveVoiceDiagnostics.recordMicRestart()
+        assertEquals(2, LiveVoiceDiagnostics.data.value.micRestartCount)
+
+        LiveVoiceDiagnostics.recordAutoRestart("terminal-error: websocket closed")
+        assertEquals(1, LiveVoiceDiagnostics.data.value.autoRestartCount)
+        assertNotNull(LiveVoiceDiagnostics.data.value.lastAutoRestartAt)
+
+        LiveVoiceDiagnostics.recordResumedWithContext(false)
+        assertEquals(false, LiveVoiceDiagnostics.data.value.lastResumedWithContext)
+    }
+
+    @Test
+    fun testAudioCaptureRetryPolicy_BoundedRetriesAndBackoff() {
+        val policy = AudioCaptureRetryPolicy()
+        assertTrue(policy.shouldRetry(0))
+        assertTrue(policy.shouldRetry(9))
+        assertFalse(policy.shouldRetry(10))
+        assertFalse(policy.shouldRetry(11))
+        assertEquals(250L, policy.delayBeforeRetryMs(1))
+        assertEquals(500L, policy.delayBeforeRetryMs(2))
+        assertEquals(2_000L, policy.delayBeforeRetryMs(8))
+        assertEquals(2_000L, policy.delayBeforeRetryMs(99))
+    }
+}

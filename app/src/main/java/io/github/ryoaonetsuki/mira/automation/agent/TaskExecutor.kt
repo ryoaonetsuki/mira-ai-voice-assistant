@@ -99,7 +99,6 @@ class TaskExecutor(
     private val planWithVision: (suspend (goal: String, screenDescription: String, screenshotJpeg: ByteArray) -> String)? = null,
     private val taskTimeoutMs: Long = DEFAULT_TASK_TIMEOUT_MS,
     private val thinkTimeoutMs: Long = DEFAULT_THINK_TIMEOUT_MS,
-    private val cumulativeThinkBudgetMs: Long = DEFAULT_CUMULATIVE_THINK_BUDGET_MS,
     private val clockMs: () -> Long = { System.currentTimeMillis() },
     private val phaseWarningThresholdSec: Long = DEFAULT_PHASE_WARNING_THRESHOLD_SEC,
     // Turn F(a): cold app launch (YouTube commonly 2-5s) is polled instead of
@@ -150,10 +149,6 @@ class TaskExecutor(
     @Volatile
     private var lastActionError: String? = null
 
-    @Volatile
-    private var _cumulativeThinkTimeMs: Long = 0L
-    val cumulativeThinkTimeMs: Long get() = _cumulativeThinkTimeMs
-
     private fun enterPhase(phase: String, step: Int, detail: String = "") {
         _currentPhase = phase
         _currentStep = step
@@ -183,7 +178,6 @@ class TaskExecutor(
         _lastDiagnosis = null
         _lastError = null
         lastActionError = null
-        _cumulativeThinkTimeMs = 0L
         _currentStep = 0
         _currentPhase = "starting"
         _phaseDetail = goal
@@ -220,7 +214,6 @@ class TaskExecutor(
                 val step = _currentStep
                 val phase = _currentPhase
                 val timeoutMsg = when (phase) {
-                    "thinking" -> "Timed out while waiting for the AI reply (step $step, think call exceeded ${thinkTimeoutMs / 1000}s)"
                     "observing" -> "Timed out during screen read (step $step, dumpScreen exceeded cap)"
                     "acting" -> "Timed out while executing action (step $step, ${_phaseDetail.ifEmpty { "action hung" }})"
                     else -> "Task timed out after ${taskTimeoutMs / 1000}s during $phase (step $step)"
@@ -265,28 +258,23 @@ class TaskExecutor(
         val matchedSkill = skills.findMatch(goal)
         if (matchedSkill != null) {
             onProgress?.invoke(0, "Found memorized skill (${matchedSkill.steps.size} steps). Replaying…")
-            // Turn F(b): a failed replay is RESUMED with AI for the failed
-            // step only — it no longer restarts the whole goal via runAiLoop.
             return executeSkillWithResume(matchedSkill)
         }
 
-        // 4. Plan-once (Turn F): ONE planning call returns the full command
-        // list; the direct executor runs it with no further think calls.
-        // The list is saved as a Skill immediately, so the next identical
-        // command replays instantly (step 3 above).
-        runPlanOnce(goal)?.let { return it }
-
-        // 5. Bounded last resort ONLY: per-step thinking, when no plan could
-        // be produced at all (planner missing, failed, or unparsable).
-        return runAiLoop(goal)
+        // Neither direct action nor saved skill matched. Live voice model executes actions via tool calls.
+        return TaskResult(
+            status = TaskStatus.FAILED,
+            message = "No direct action or saved skill matched for goal '$goal'",
+            stepsUsed = 0
+        )
     }
 
     /**
      * Turn F-direct: executes one fixed local command with zero think calls.
      * Returns null when the goal is not a fixed command — the caller falls
-     * through to skill replay / plan-once / the AI loop.
+     * through to skill replay.
      */
-    private suspend fun executeDirectAction(goal: String): TaskResult? {
+    internal suspend fun executeDirectAction(goal: String): TaskResult? {
         val action = MiraAutomationBridge.parseDirectAction(goal) ?: return null
         return when (action) {
             is MiraAutomationBridge.DirectAction.OpenApp -> executeDirectOpenApp(action.target)
@@ -328,7 +316,7 @@ class TaskExecutor(
         }
     }
 
-    private suspend fun executeDirectOpenApp(target: String): TaskResult? {
+    internal suspend fun executeDirectOpenApp(target: String): TaskResult? {
         val step = TaskStep(action = TaskStep.ACTION_OPEN_APP, params = mapOf("app" to target))
         val prePackage = automation.getCurrentPackage().orEmpty()
         _currentStep = 1
@@ -372,7 +360,7 @@ class TaskExecutor(
         return second.ifEmpty { null }
     }
 
-    private suspend fun executeDirectTapLabel(label: String): TaskResult? {
+    internal suspend fun executeDirectTapLabel(label: String): TaskResult? {
         // Direct accessibility action on the live node tree: no think call,
         // no gesture round-trip. A label that is not on screen falls through
         // to the AI loop (which can scroll / look for it).
@@ -388,7 +376,7 @@ class TaskExecutor(
         }
     }
 
-    private suspend fun executeDirectSearch(action: MiraAutomationBridge.DirectAction.Search): TaskResult? {
+    internal suspend fun executeDirectSearch(action: MiraAutomationBridge.DirectAction.Search): TaskResult? {
         // Turn G (verified misroute): a search naming a known app ("search X
         // on WhatsApp") used to open a Google web search in Chrome and call
         // ANY package change success. A named app must NEVER route to a web
@@ -436,7 +424,7 @@ class TaskExecutor(
         }
     }
 
-    private suspend fun executeDirectDial(number: String): TaskResult {
+    internal suspend fun executeDirectDial(number: String): TaskResult {
         // ACTION_DIAL only opens the dialer with the number prefilled — the
         // user confirms the call there. No call is placed automatically.
         val prePackage = automation.getCurrentPackage().orEmpty()
@@ -471,208 +459,6 @@ class TaskExecutor(
         return current
     }
 
-    /**
-     * Turn F plan-once: one observe + ONE planning call returns the full
-     * command list; the direct executor runs it with no further think calls.
-     * Returns null when no plan could be produced — the caller falls back to
-     * the bounded AI loop. On success the list is saved as a Skill
-     * immediately, so the second identical command replays instantly.
-     */
-    private suspend fun runPlanOnce(goal: String): TaskResult? {
-        val textPlanner = plan
-        if (textPlanner == null && planWithVision == null) return null
-        enterPhase("observing", 0, "Observing screen to plan…")
-        val nodes = dumpScreenSafe()
-        val description = if (nodes.isEmpty()) {
-            "Screen appears empty (use open_app to launch the target app)"
-        } else {
-            automation.getCompressedScreenDescription(nodes, goal)
-        }
-        // Turn G: the planner must SEE the screen. A screenshot is captured
-        // best-effort at the decision point; when one is available the
-        // vision planner decides from pixels + node text together. When no
-        // screenshot is available (service not ready, FLAG_SECURE), the text
-        // planner runs as before — a missing screenshot never fails a goal.
-        val screenshot = try {
-            automation.takeScreenshotJpeg()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Throwable) {
-            logWarn("Plan screenshot skipped: ${e.message}")
-            null
-        }
-        enterPhase("thinking", 0, "planning the full command list…")
-        val useVision = screenshot != null && planWithVision != null
-        // Vision planner without a screenshot has no pixels to plan from.
-        if (!useVision && textPlanner == null) return null
-        val raw: String
-        val thinkStart = clockMs()
-        try {
-            raw = withTimeout(thinkTimeoutMs) {
-                if (useVision) {
-                    planWithVision!!(goal, description, screenshot!!)
-                } else {
-                    textPlanner!!(goal, description)
-                }
-            }
-        } catch (e: TimeoutCancellationException) {
-            val msg = "Planning timed out (think call exceeded ${thinkTimeoutMs / 1000}s)"
-            recordDiagnosis(msg)
-            logWarn(msg)
-            return null
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Throwable) {
-            logWarn("Planning failed: ${e.message}")
-            return null
-        } finally {
-            _cumulativeThinkTimeMs += (clockMs() - thinkStart)
-        }
-        val parsed = parseAiPlan(raw, goal, automation.getCurrentPackage().orEmpty()) ?: run {
-            logWarn("Planning returned no usable command list: $raw")
-            return null
-        }
-        if (parsed.done) {
-            return TaskResult(TaskStatus.SUCCESS, "Goal already complete.", 0)
-        }
-        if (parsed.steps.isEmpty()) return null
-        val steps = parsed.steps.take(maxSteps)
-        // Best-of-all (Automator YAML plan, design only — AGPL, never copied):
-        // the command list is human-readable, so the owner can see what the
-        // AI planned. Recorded in the diagnosis (visible in Skills detail).
-        recordDiagnosis("Plan for '$goal':\n" + formatPlan(steps))
-        val skill = Skill(goal = goal, steps = steps)
-        val result = executeSkillWithResume(skill)
-        if (result.status == TaskStatus.SUCCESS) {
-            // Save the planned list immediately — unless the resume path
-            // already saved it with an AI-fixed step (do not overwrite the
-            // fixed step with the broken original).
-            val existing = skills.findMatch(goal)
-            if (existing == null || existing.normalizedGoal != Skill.normalize(goal)) {
-                skills.saveOrUpdate(goal, steps)
-            }
-            // The resume message ("Task completed via memorized skill") is
-            // wrong for a first-time plan — unless the AI actually fixed a
-            // step, in which case the detail is valuable.
-            if (!result.message.contains("AI completed")) {
-                return TaskResult(
-                    TaskStatus.SUCCESS,
-                    "Goal completed in ${result.stepsUsed} step(s).",
-                    result.stepsUsed
-                )
-            }
-        }
-        return result
-    }
-
-    /** A parsed plan: the full command list, or done=true when already complete. */
-    internal data class AiPlan(val steps: List<TaskStep>, val done: Boolean)
-
-    /**
-     * Best-of-all (Automator, suobset/automator, AGPL-3.0 — DESIGN ONLY, never
-     * copied): Automator renders its plan as a human-readable YAML action
-     * list (OPEN_APP, CLICK_ELEMENT, SCROLL_VIEW, NAVIGATE_HOME, TYPE_TEXT,
-     * WAIT) executed by a deterministic Actor. Mira's command list is JSON;
-     * this renders the same list in Automator's readable action names so the
-     * owner — and the Skills detail screen — can read what the AI planned.
-     */
-    internal fun formatPlan(steps: List<TaskStep>): String {
-        if (steps.isEmpty()) return "Plan (0 steps): nothing to do."
-        val lines = steps.mapIndexed { index, step ->
-            val rendered = when (step.action) {
-                TaskStep.ACTION_OPEN_APP -> "OPEN_APP: ${step.stringParam("app") ?: step.stringParam("package") ?: ""}"
-                TaskStep.ACTION_CLICK_TEXT -> "CLICK_ELEMENT: \"${step.stringParam("text") ?: ""}\""
-                TaskStep.ACTION_CLICK_AT -> "CLICK_ELEMENT: (${step.intParam("x")}, ${step.intParam("y")})"
-                TaskStep.ACTION_TYPE_TEXT -> "TYPE_TEXT: \"${step.stringParam("text") ?: ""}\""
-                TaskStep.ACTION_PRESS_ENTER -> "PRESS_ENTER"
-                TaskStep.ACTION_SCROLL -> "SCROLL_VIEW: ${(step.stringParam("direction") ?: "down").uppercase()}"
-                TaskStep.ACTION_SWIPE -> "SWIPE: (${step.intParam("startX")}, ${step.intParam("startY")}) -> (${step.intParam("endX")}, ${step.intParam("endY")})"
-                TaskStep.ACTION_PRESS_BACK -> "NAVIGATE_BACK"
-                TaskStep.ACTION_PRESS_HOME -> "NAVIGATE_HOME"
-                TaskStep.ACTION_WAIT -> "WAIT: ${step.intParam("ms") ?: 1500}ms"
-                TaskStep.ACTION_LONG_PRESS -> "LONG_PRESS: (${step.intParam("x")}, ${step.intParam("y")})"
-                TaskStep.ACTION_PINCH -> "PINCH: ${(step.stringParam("direction") ?: "in").uppercase()} zoom"
-                TaskStep.ACTION_DONE -> "DONE"
-                else -> step.action.uppercase()
-            }
-            "${index + 1}. $rendered"
-        }
-        return "Plan (${steps.size} steps):\n" + lines.joinToString("\n")
-    }
-
-    /**
-     * Parses a plan response: {"steps": [{...}, ...]} or {"done": true}, or a
-     * bare JSON array. Each element is parsed with the same alias
-     * normalisation as single-step decisions (TaskStep.tryParse). Unsupported
-     * actions are dropped; a plan with no usable steps returns null.
-     */
-    internal fun parseAiPlan(
-        raw: String,
-        goal: String? = null,
-        currentPackage: String? = null
-    ): AiPlan? {
-        var text = raw.trim()
-        if (text.isEmpty()) return null
-        val fence = Regex("""```(?:json)?\s*([\s\S]*?)```""", RegexOption.IGNORE_CASE).find(text)
-        if (fence != null) text = fence.groupValues[1].trim()
-        // `var`: assigned once in the try branch (object with "steps") or in
-        // the catch branch (bare array) — a `val` cannot be assigned in both.
-        var array: JSONArray
-        var done = false
-        try {
-            val obj = JSONObject(text)
-            if (obj.optBoolean("done", false)) return AiPlan(emptyList(), done = true)
-            array = obj.optJSONArray("steps") ?: return null
-        } catch (_: Throwable) {
-            if (!text.startsWith("[")) return null
-            try {
-                array = JSONArray(text)
-            } catch (_: Throwable) {
-                return null
-            }
-        }
-        val steps = mutableListOf<TaskStep>()
-        var hadDoneStep = false
-        for (i in 0 until array.length()) {
-            val el = array.optJSONObject(i) ?: continue
-            val step = TaskStep.tryParse(el.toString()) ?: continue
-            if (step.action == TaskStep.ACTION_DONE) {
-                hadDoneStep = true
-                continue
-            }
-            if (step.isSupported) steps.add(step)
-        }
-        if (steps.isEmpty()) {
-            if (hadDoneStep) return AiPlan(emptyList(), done = true)
-            return null
-        }
-        // Turn G: Enforce home-first structurally. If the current package does not
-        // match the goal's target package and the first step is an action step before
-        // any open_app or press_home, repair the plan by prepending open_app(target).
-        if (goal != null) {
-            val target = MiraAutomationBridge.extractTargetApp(goal)
-            val curr = currentPackage.orEmpty()
-            if (target != null && (curr.isEmpty() || !matchesTarget(target, curr))) {
-                val firstStep = steps.firstOrNull()
-                if (firstStep != null &&
-                    firstStep.action != TaskStep.ACTION_OPEN_APP &&
-                    firstStep.action != TaskStep.ACTION_PRESS_HOME
-                ) {
-                    steps.add(
-                        0,
-                        TaskStep(
-                            action = TaskStep.ACTION_OPEN_APP,
-                            params = mapOf("app" to target),
-                            reasoning = "Structural home-first: launch target app first"
-                        )
-                    )
-                }
-            }
-        }
-        return AiPlan(steps, done)
-    }
-
-
     suspend fun replaySkillDirect(skill: Skill): TaskResult {
         if (_isRunning) {
             return TaskResult(TaskStatus.FAILED, "Another task is already running", 0)
@@ -682,7 +468,6 @@ class TaskExecutor(
         _lastDiagnosis = null
         _lastError = null
         lastActionError = null
-        _cumulativeThinkTimeMs = 0L
         _currentStep = 0
         _currentPhase = "starting"
         _phaseDetail = skill.goal
@@ -719,10 +504,6 @@ class TaskExecutor(
                 val step = _currentStep
                 val phase = _currentPhase
                 val timeoutMsg = when {
-                    // Turn F: the replay path can now spend time in "thinking"
-                    // (AI resume). Name it, like executeGoal already does —
-                    // the generic else-branch hid it behind "during thinking".
-                    phase == "thinking" -> "Timed out while waiting for the AI reply (replay step $step, think call exceeded ${thinkTimeoutMs / 1000}s)"
                     phase == "observing" -> "Timed out during screen read (replay step $step, dumpScreen exceeded cap)"
                     phase == "acting" -> "Timed out while executing action (replay step $step, ${_phaseDetail.ifEmpty { "action hung" }})"
                     phase.startsWith("replaying") -> "Timed out during $phase (${_phaseDetail.ifEmpty { "step hung" }})"
@@ -763,23 +544,18 @@ class TaskExecutor(
         }
 
         onProgress?.invoke(0, "Replaying macro '${skill.goal}' (${skill.steps.size} steps)…")
-        // Turn F(b): a failed replay is RESUMED with AI for the failed step
-        // only — the whole goal is never restarted from scratch.
         return executeSkillWithResume(skill)
     }
 
     /**
-     * Turn F(b): direct replay first; on failure, AI fixes ONLY the failed
-     * recorded step (bounded turns, text-only think), then replay RESUMES
-     * with the remaining recorded steps. The macro is never discarded and
-     * re-done from scratch via runAiLoop.
+     * Replays a skill with delete-at-3 and retry-once per step.
+     * On failure, returns a diagnostic TaskResult so the Live voice model
+     * can inspect the failure and issue corrected tool calls.
      */
-    private suspend fun executeSkillWithResume(skill: Skill): TaskResult {
-        // Stale/empty macro (e.g. a legacy recording with 0 steps): there is
-        // nothing to resume — fall through to the AI loop, as before.
+    internal suspend fun executeSkillWithResume(skill: Skill): TaskResult {
         if (skill.steps.isEmpty()) {
-            logWarn("Cannot replay skill '${skill.goal}': no steps recorded — falling back to AI loop")
-            return runAiLoop(skill.goal)
+            logWarn("Cannot replay skill '${skill.goal}': no steps recorded")
+            return TaskResult(TaskStatus.FAILED, "Skill '${skill.goal}' has no recorded steps", 0)
         }
         val first = replaySkillFrom(skill, 0)
         if (_cancelRequested) {
@@ -795,201 +571,13 @@ class TaskExecutor(
         }
         val failedStepIndex = first.failedStepIndex.coerceIn(0, skill.steps.size - 1)
         val failedStepNumber = failedStepIndex + 1
-        if (think == null && thinkWithVision == null) {
-            skills.markReplayOutcome(skill.id, false)
-            val diag = _lastDiagnosis ?: "Skill replay failed during execution. Please re-record the macro."
-            return TaskResult(
-                status = TaskStatus.FAILED,
-                message = diag,
-                stepsUsed = _currentStep
-            )
-        }
-
-        onProgress?.invoke(0, "Saved skill failed at step $failedStepNumber — AI fixing that step, then resuming macro…")
-        logInfo("Saved skill failed at step $failedStepNumber — resuming with AI for that step only")
-        val resume = resumeSkillWithAi(skill, failedStepIndex)
-        if (!resume.success) {
-            skills.markReplayOutcome(skill.id, false)
-            val replayDiag = _lastDiagnosis?.let { " ($it)" }.orEmpty()
-            return TaskResult(
-                status = TaskStatus.FAILED,
-                message = "Skill replay failed at step $failedStepNumber$replayDiag and AI fallback could not complete that step: ${resume.message}",
-                stepsUsed = _currentStep
-            )
-        }
-
-        // Resume replay with the remaining recorded steps.
-        val rest = if (failedStepIndex + 1 < skill.steps.size) {
-            replaySkillFrom(skill, failedStepIndex + 1)
-        } else {
-            ReplayOutcome(success = true, stepsCompleted = 0)
-        }
-        if (_cancelRequested) {
-            return TaskResult(TaskStatus.CANCELLED, "Task cancelled by user", skill.steps.size)
-        }
-        if (rest.success) {
-            // Learn: replace the failed recorded step with the AI's working
-            // step so the next replay of this macro is fully direct.
-            val updatedSteps = skill.steps.toMutableList()
-            resume.aiStep?.let { updatedSteps[failedStepIndex] = it }
-            skills.saveOrUpdate(skill.goal, updatedSteps)
-            skills.markReplayOutcome(skill.id, true)
-            return TaskResult(
-                status = TaskStatus.SUCCESS,
-                message = "Skill replay failed at step $failedStepNumber; AI completed that step and replay resumed — completed via recorded macro + AI fallback.",
-                stepsUsed = skill.steps.size
-            )
-        }
         skills.markReplayOutcome(skill.id, false)
-        val restDiag = _lastDiagnosis?.let { " ($it)" }.orEmpty()
+        val diag = _lastDiagnosis ?: "Skill replay failed during execution. Please re-record the macro."
         return TaskResult(
             status = TaskStatus.FAILED,
-            message = "AI fixed step $failedStepNumber but replay of the remaining steps failed$restDiag",
+            message = "Skill replay failed at step $failedStepNumber: $diag",
             stepsUsed = _currentStep
         )
-    }
-
-    private data class AiResumeResult(
-        val success: Boolean,
-        val aiStep: TaskStep?,
-        val message: String
-    )
-
-    /**
-     * Turn F(b): uses the AI for ONE failed recorded step only — at most
-     * [AI_RESUME_MAX_ATTEMPTS] think turns, each under the think deadline.
-     * Think is TEXT-ONLY here: recorded steps already carry coordinates and
-     * labels, so no screenshot tax. Returns the AI step that fixed it, for
-     * learning back into the macro.
-     */
-    private suspend fun resumeSkillWithAi(skill: Skill, failedStepIndex: Int): AiResumeResult {
-        val failedStep = skill.steps[failedStepIndex]
-        val stepNumber = failedStepIndex + 1
-        val history = mutableListOf<Pair<String, String>>()
-        val goalText = "Complete this one recorded step from the macro '${skill.goal}' " +
-            "(step $stepNumber of ${skill.steps.size}): ${describeStep(failedStep)}. " +
-            "Reply with ONLY one JSON action object for that step. " +
-            "If the step is already done on screen, reply done."
-        var lastReason = "no AI attempt made"
-        var attempts = 0
-        while (attempts < AI_RESUME_MAX_ATTEMPTS) {
-            if (_cancelRequested) return AiResumeResult(false, null, "cancelled by user")
-            if (_cumulativeThinkTimeMs >= cumulativeThinkBudgetMs) {
-                val msg = "Per-task think budget exhausted (${cumulativeThinkBudgetMs / 1000}s reached)"
-                recordDiagnosis(msg)
-                logWarn(msg)
-                return AiResumeResult(false, null, msg)
-            }
-            attempts++
-            _currentStep = stepNumber
-            enterPhase("thinking", stepNumber, "AI fixing recorded step $stepNumber (attempt $attempts/$AI_RESUME_MAX_ATTEMPTS)")
-            val nodes = dumpScreenSafe()
-            val description = if (nodes.isEmpty()) {
-                "Screen appears empty (use open_app to launch the target app)"
-            } else {
-                automation.getCompressedScreenDescription(nodes, goalText)
-            }
-            val raw: String
-            val thinkStart = clockMs()
-            try {
-                raw = withTimeout(thinkTimeoutMs) {
-                    val fn = think
-                    if (fn != null) {
-                        fn(goalText, description, history)
-                    } else {
-                        // No text think available: allow the vision route to
-                        // attach a screenshot only when the text is
-                        // insufficient (see shouldAttachScreenshot).
-                        _decideNextStep(goalText, description, nodes, history, lastStepHadNoEffect = true)
-                    }
-                }
-            } catch (e: TimeoutCancellationException) {
-                val msg = "Timed out while waiting for the AI reply (step $stepNumber, think call exceeded ${thinkTimeoutMs / 1000}s)"
-                recordDiagnosis(msg)
-                logWarn(msg)
-                return AiResumeResult(false, null, msg)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Throwable) {
-                val msg = "AI request failed: ${e.message}"
-                recordDiagnosis(msg)
-                logError("AI resume think failed: ${e.message}", e)
-                return AiResumeResult(false, null, msg)
-            } finally {
-                _cumulativeThinkTimeMs += (clockMs() - thinkStart)
-            }
-
-            val decision = TaskStep.tryParse(raw)
-            if (decision == null) {
-                lastReason = "AI replied non-JSON"
-                logWarn("AI resume step $stepNumber: could not parse AI output as action JSON (attempt $attempts): $raw")
-                pushTurn(
-                    history,
-                    raw,
-                    "Your last reply was not valid JSON. Reply with ONLY the single JSON action object: {\"action\": \"<action>\", \"params\": {...}, \"reasoning\": \"<explanation>\", \"is_complete\": false}"
-                )
-                continue
-            }
-
-            // Turn G: no artificial action restrictions (owner order) — the
-            // model's own judgement decides what cannot be done; a model
-            // refusal is surfaced honestly instead of blocked in code.
-            val prePackage = automation.getCurrentPackage().orEmpty()
-            val preSignature = computeNodeSignature(nodes)
-
-            if (decision.action == TaskStep.ACTION_DONE) {
-                // AI says the step is already done — verify the recorded
-                // step's effect on the current screen before believing it.
-                val postNodes = dumpScreenSafe()
-                val postPackage = automation.getCurrentPackage().orEmpty()
-                if (verifyEffect(failedStep, prePackage, preSignature, postPackage, computeNodeSignature(postNodes), goal = goalText)) {
-                    return AiResumeResult(true, failedStep, "AI confirmed step $stepNumber is already complete")
-                }
-                lastReason = "AI said done but the recorded step's effect is not visible"
-                pushTurn(
-                    history,
-                    raw,
-                    "ACTION RESULT: [NO_EFFECT] The recorded step is not complete yet. Take one concrete action to complete it."
-                )
-                continue
-            }
-
-            enterPhase("acting", stepNumber, decision.reasoning.ifEmpty { decision.action })
-            val dispatched = _performAction(decision, nodes)
-            if (!dispatched) {
-                lastReason = lastActionError ?: "${decision.action} dispatch failed"
-                pushTurn(
-                    history,
-                    raw,
-                    "ACTION RESULT: [NO_EFFECT] $lastReason. Pick a different approach."
-                )
-                continue
-            }
-            if (decision.action == TaskStep.ACTION_WAIT) {
-                return AiResumeResult(true, decision, "AI waited for step $stepNumber")
-            }
-
-            enterPhase(
-                "observing",
-                stepNumber,
-                if (decision.action == TaskStep.ACTION_OPEN_APP) "waiting for app to open (step $stepNumber)"
-                else "verifying effect of ${decision.action} (step $stepNumber)"
-            )
-            val (postNodes, postPackage, postSignature) = settleAndDump(decision, prePackage)
-            if (verifyEffect(decision, prePackage, preSignature, postPackage, postSignature, goal = goalText)) {
-                return AiResumeResult(true, decision, "AI completed step $stepNumber")
-            }
-            lastReason = "${decision.action} was dispatched but the screen did not change"
-            pushTurn(
-                history,
-                raw,
-                "ACTION RESULT: [NO_EFFECT] ${decision.action} was dispatched but the screen did not change. Pick a different approach."
-            )
-        }
-        val msg = "AI could not complete recorded step $stepNumber (${failedStep.action}) after $AI_RESUME_MAX_ATTEMPTS attempts: $lastReason"
-        recordDiagnosis(msg)
-        logWarn(msg)
-        return AiResumeResult(false, null, msg)
     }
 
     private fun describeStep(step: TaskStep): String = when (step.action) {
@@ -1230,320 +818,12 @@ class TaskExecutor(
         return ReplayOutcome(success = stepCount > 0, stepsCompleted = stepCount)
     }
 
-    private suspend fun runAiLoop(goal: String): TaskResult {
-        if (think == null && thinkWithVision == null) {
-            return TaskResult(
-                status = TaskStatus.FAILED,
-                message = "No think function provided",
-                stepsUsed = 0
-            )
-        }
-
-        val history = mutableListOf<Pair<String, String>>()
-        val executedSteps = mutableListOf<TaskStep>()
-        var parseFailures = 0
-        var step = 0
-        var lastStepHadNoEffect = false
-        // Turn G: the step just executed opened an app — the next decision
-        // must SEE that app's home screen (screenshot) before acting.
-        var lastStepWasOpenApp = false
-        // Best-of-all (Tapilot guardRepeatedGesture): stops a stuck loop
-        // fast instead of burning all 15 steps on a screen that never changes.
-        val loopGuard = LoopGuard()
-        // Turn F(e): the previous step's verification dump is carried into
-        // the next step's observe — one screen read per AI step instead of
-        // two. Invalidated whenever anything else touches the screen.
-        var carriedNodes: List<ScreenNode>? = null
-        var carriedDescription: String? = null
-
-        while (step < maxSteps) {
-            if (_cancelRequested) {
-                return TaskResult(TaskStatus.CANCELLED, "Task cancelled by user", step)
-            }
-
-            step++
-            _currentStep = step
-
-            // --- Observe ---
-            // Reuse the previous verification dump when it is non-empty;
-            // otherwise read the screen fresh.
-            val carried = carriedNodes?.takeIf { it.isNotEmpty() }
-            val nodes: List<ScreenNode>
-            val description: String
-            if (carried != null) {
-                nodes = carried
-                description = carriedDescription
-                    ?: automation.getCompressedScreenDescription(nodes, goal)
-                carriedNodes = null
-                carriedDescription = null
-            } else {
-                enterPhase("observing", step, "Observing screen (step $step/$maxSteps)...")
-                val freshNodes = try {
-                    automation.getScreenElements()
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Throwable) {
-                    logWarn("Failed to read screen: ${e.message}")
-                    delay(stepDelayMs)
-                    continue
-                }
-                nodes = freshNodes
-                description = if (nodes.isEmpty()) {
-                    if (executedSteps.isEmpty()) {
-                        logInfo("Screen appears empty on step 1 — passing open_app hint to AI")
-                        "Screen appears empty (use open_app to launch the target app)"
-                    } else {
-                        logInfo("Screen appears empty (locked?). Waiting...")
-                        delay(1500)
-                        continue
-                    }
-                } else {
-                    recovery.recordScreen(automation.formatNodes(nodes))
-                    automation.getCompressedScreenDescription(nodes, goal)
-                }
-            }
-
-            // --- Think ---
-            if (_cumulativeThinkTimeMs >= cumulativeThinkBudgetMs) {
-                val thinkMsg = "Per-task think budget exhausted (${cumulativeThinkBudgetMs / 1000}s reached)"
-                recordDiagnosis(thinkMsg)
-                logWarn(thinkMsg)
-                return TaskResult(
-                    status = TaskStatus.FAILED,
-                    message = thinkMsg,
-                    stepsUsed = step
-                )
-            }
-            enterPhase("thinking", step, "waiting for AI reply (step $step)")
-            val thinkStart = clockMs()
-            val raw: String
-            try {
-                raw = withTimeout(thinkTimeoutMs) {
-                    _decideNextStep(goal, description, nodes, history, lastStepHadNoEffect, lastStepWasOpenApp)
-                }
-            } catch (e: TimeoutCancellationException) {
-                val detail = "think call exceeded ${thinkTimeoutMs / 1000}s"
-                val thinkMsg = "Timed out while waiting for the AI reply (step $step, $detail)"
-                recordDiagnosis(thinkMsg)
-                logWarn(thinkMsg)
-                return TaskResult(
-                    status = TaskStatus.FAILED,
-                    message = thinkMsg,
-                    stepsUsed = step
-                )
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Throwable) {
-                logError("Think step failed: ${e.message}", e)
-                val errMsg = "AI request failed: ${e.message}"
-                recordDiagnosis(errMsg)
-                return TaskResult(TaskStatus.FAILED, errMsg, step)
-            } finally {
-                _cumulativeThinkTimeMs += (clockMs() - thinkStart)
-            }
-
-            val decision = TaskStep.tryParse(raw)
-            if (decision == null) {
-                parseFailures++
-                logWarn("Could not parse AI output as action JSON (attempt $parseFailures): $raw")
-                if (parseFailures >= 3) {
-                    val giveUpMsg = "Giving up: AI kept replying non-JSON."
-                    recordDiagnosis(giveUpMsg)
-                    return TaskResult(
-                        status = TaskStatus.FAILED,
-                        message = giveUpMsg,
-                        stepsUsed = step
-                    )
-                }
-                pushTurn(
-                    history,
-                    raw,
-                    "Your last reply was not valid JSON. Reply with ONLY the single JSON action object: {\"action\": \"<action>\", \"params\": {...}, \"reasoning\": \"<explanation>\", \"is_complete\": false}"
-                )
-                continue
-            }
-            parseFailures = 0
-
-            // Turn G: no artificial action restrictions (owner order) — the
-            // "Safety Gate" blocklist is removed entirely; the model's own
-            // judgement decides what cannot be done.
-            // --- Act ---
-            enterPhase("acting", step, decision.reasoning.ifEmpty { decision.action })
-
-            // F-04 & F-07: Never return SUCCESS on ACTION_DONE when executedSteps (verified effects) is empty
-            if (decision.action == TaskStep.ACTION_DONE) {
-                if (executedSteps.isEmpty()) {
-                    logWarn("Rejected premature ACTION_DONE with zero verified executed steps")
-                    lastStepHadNoEffect = true
-                    pushTurn(
-                        history,
-                        raw,
-                        "ACTION RESULT: [NO_EFFECT] Cannot complete task before executing at least one action with a verified effect on screen. Use open_app or interact with the screen first."
-                    )
-                    continue
-                }
-                skills.saveOrUpdate(goal, executedSteps)
-                return TaskResult(
-                    status = TaskStatus.SUCCESS,
-                    message = "Goal completed in $step step(s).",
-                    stepsUsed = step
-                )
-            }
-
-            val prePackage = automation.getCurrentPackage().orEmpty()
-            val preSignature = computeNodeSignature(nodes)
-
-            val dispatched = _performAction(decision, nodes)
-            recovery.recordAction(decision)
-
-            if (!dispatched) {
-                lastStepHadNoEffect = true
-                val reason = lastActionError ?: "${decision.action} dispatch failed"
-                recordDiagnosis("Step $step: $reason")
-                loopGuard.observeNoEffect(decision.action, preSignature)?.let { loopReason ->
-                    recordDiagnosis(loopReason)
-                    logWarn(loopReason)
-                    return TaskResult(TaskStatus.FAILED, loopReason, step)
-                }
-                pushTurn(
-                    history,
-                    raw,
-                    "ACTION RESULT: [NO_EFFECT] $reason. Pick a different approach."
-                )
-            } else if (decision.action == TaskStep.ACTION_WAIT) {
-                lastStepHadNoEffect = false
-                pushTurn(
-                    history,
-                    raw,
-                    "ACTION RESULT: [OK] waited."
-                )
-            } else {
-                // Turn F(a/f): open_app polls for the target package; other
-                // actions wait the short settle. One dump, then carry it
-                // forward as the next step's observe (Turn F/e).
-                enterPhase(
-                    "observing",
-                    step,
-                    if (decision.action == TaskStep.ACTION_OPEN_APP) "waiting for app to open (step $step)"
-                    else "verifying effect of ${decision.action} (step $step)"
-                )
-                val (postNodes, postPackage, postSignature) = settleAndDump(decision, prePackage)
-                val effectVerified = verifyEffect(decision, prePackage, preSignature, postPackage, postSignature, goal = goal)
-                if (postNodes.isNotEmpty()) {
-                    carriedNodes = postNodes
-                    carriedDescription = automation.getCompressedScreenDescription(postNodes, goal)
-                } else {
-                    carriedNodes = null
-                    carriedDescription = null
-                }
-
-                if (effectVerified) {
-                    lastStepHadNoEffect = false
-                    loopGuard.reset()
-                    executedSteps.add(decision)
-                    pushTurn(
-                        history,
-                        raw,
-                        "ACTION RESULT: [OK] for ${decision.action}."
-                    )
-                    // Turn F-direct: an open-only goal is DONE the moment the
-                    // app is foreground — no more think rounds on the opened
-                    // app's screen (the "~1 hour to home screen" bug: the loop
-                    // kept acting on an already-open app).
-                    if (decision.action == TaskStep.ACTION_OPEN_APP &&
-                        MiraAutomationBridge.isOpenOnlyGoal(goal)
-                    ) {
-                        skills.saveOrUpdate(goal, executedSteps)
-                        return TaskResult(
-                            status = TaskStatus.SUCCESS,
-                            message = "Goal completed in $step step(s).",
-                            stepsUsed = step
-                        )
-                    }
-                    if (decision.isComplete && executedSteps.isNotEmpty()) {
-                        skills.saveOrUpdate(goal, executedSteps)
-                        return TaskResult(
-                            status = TaskStatus.SUCCESS,
-                            message = "Goal completed in $step step(s).",
-                            stepsUsed = step
-                        )
-                    }
-                } else {
-                    lastStepHadNoEffect = true
-                    loopGuard.observeNoEffect(decision.action, postSignature)?.let { loopReason ->
-                        recordDiagnosis(loopReason)
-                        logWarn(loopReason)
-                        return TaskResult(TaskStatus.FAILED, loopReason, step)
-                    }
-                    pushTurn(
-                        history,
-                        raw,
-                        "ACTION RESULT: [NO_EFFECT] ${decision.action} was dispatched but the screen did not change. Pick a different approach."
-                    )
-                }
-            }
-
-            // Turn G: remember whether this step opened an app, so the next
-            // decision looks at the new app's home screen (screenshot)
-            // before acting, instead of deciding from stale text.
-            lastStepWasOpenApp = decision.action == TaskStep.ACTION_OPEN_APP
-
-            // Recovery safeguard
-            if (recovery.shouldRecover) {
-                val recoveryStep = recovery.suggestRecovery()
-                onProgress?.invoke(step, "Recovery: ${recoveryStep.reasoning}")
-                _performAction(recoveryStep, nodes)
-                lastStepWasOpenApp = recoveryStep.action == TaskStep.ACTION_OPEN_APP
-                // The recovery action changed the screen — the carried
-                // verification dump is stale, re-read next step.
-                carriedNodes = null
-                carriedDescription = null
-            }
-
-            delay(stepDelayMs)
-        }
-
-        return TaskResult(
-            status = TaskStatus.FAILED,
-            message = "Reached the maximum of $maxSteps steps without completing the goal.",
-            stepsUsed = step
-        )
-    }
-
     fun shouldAttachScreenshot(
         nodes: List<ScreenNode>,
         lastStepHadNoEffect: Boolean,
         lastStepWasOpenApp: Boolean = false
     ): Boolean =
         Companion.shouldAttachScreenshot(nodes, lastStepHadNoEffect, lastStepWasOpenApp)
-
-    private suspend fun _decideNextStep(
-        goal: String,
-        screenDescription: String,
-        nodes: List<ScreenNode>,
-        history: List<Pair<String, String>>,
-        lastStepHadNoEffect: Boolean,
-        lastStepWasOpenApp: Boolean = false
-    ): String {
-        val screenshot = if (shouldAttachScreenshot(nodes, lastStepHadNoEffect, lastStepWasOpenApp)) {
-            try {
-                automation.takeScreenshotJpeg()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Throwable) {
-                logWarn("Screenshot capture skipped: ${e.message}")
-                null
-            }
-        } else {
-            null
-        }
-        val visionFn = thinkWithVision
-        if (screenshot != null && visionFn != null) {
-            return visionFn(goal, screenDescription, history, screenshot)
-        }
-        val thinkFn = think ?: throw IllegalStateException("No think function provided")
-        return thinkFn(goal, screenDescription, history)
-    }
 
     private suspend fun _performAction(step: TaskStep, nodes: List<ScreenNode>): Boolean {
         lastActionError = null
@@ -1713,13 +993,6 @@ class TaskExecutor(
         private const val TAG = "TaskExecutor"
         const val DEFAULT_TASK_TIMEOUT_MS: Long = 120_000L
         const val DEFAULT_THINK_TIMEOUT_MS: Long = 45_000L
-        /**
-         * Turn G: cumulative per-task think budget. The 120s task budget is split
-         * roughly half-and-half between LLM think time (60s) and dispatch/settle/verify/re-dump
-         * time, preventing repetitive think timeouts from consuming the full task budget.
-         * Once exhausted, no new think calls are started.
-         */
-        const val DEFAULT_CUMULATIVE_THINK_BUDGET_MS: Long = 60_000L
         const val DEFAULT_PHASE_WARNING_THRESHOLD_SEC: Long = 20L
         const val MAX_SIGNATURE_NODES: Int = 200
         /** Turn F(a): how long an open_app step waits for the target package. */
@@ -1897,41 +1170,4 @@ class TaskExecutor(
  * test without a screenshot. Only no-effect steps feed the guard; any
  * verified effect resets it.
  */
-internal class LoopGuard(private val maxIdenticalRepeats: Int = 3) {
-    private var lastKey: String? = null
-    private var repeatCount = 0
-    private val recentKeys = ArrayDeque<String>()
 
-    /** Any verified effect is progress — clear the guard. */
-    fun reset() {
-        lastKey = null
-        repeatCount = 0
-        recentKeys.clear()
-    }
-
-    /**
-     * Records a step that had NO verified effect. Returns a failure reason
-     * when this proves a loop, else null.
-     */
-    fun observeNoEffect(action: String, signature: Int): String? {
-        val key = "$action@$signature"
-        if (key == lastKey) repeatCount++ else {
-            lastKey = key
-            repeatCount = 1
-        }
-        recentKeys.addLast(key)
-        if (recentKeys.size > 4) recentKeys.removeFirst()
-        if (repeatCount >= maxIdenticalRepeats) {
-            return "Stopped: '$action' repeated $repeatCount times with no screen change — the screen is stuck; try a different approach."
-        }
-        if (recentKeys.size == 4) {
-            val (a, b, c, d) = recentKeys
-            if (a == c && b == d && a != b) {
-                val first = a.substringBefore('@')
-                val second = b.substringBefore('@')
-                return "Stopped: alternating '$first' / '$second' loop with no screen change — the screen is stuck; try a different approach."
-            }
-        }
-        return null
-    }
-}

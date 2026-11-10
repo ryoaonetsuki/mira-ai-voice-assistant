@@ -140,6 +140,33 @@ class TaskExecutorTest {
             return true
         }
 
+        override fun scroll(direction: String, fraction: Float): Boolean {
+            if (!actionSuccess) return false
+            actionsPerformed.add("scroll:$direction:$fraction")
+            mutateScreenState("scroll:$direction")
+            return true
+        }
+
+        override fun openUrl(url: String): Boolean {
+            if (!actionSuccess) return false
+            actionsPerformed.add("openUrl:$url")
+            if (simulateEffect) {
+                currentPkg = "com.android.chrome"
+                mutateScreenState("opened:$url")
+            }
+            return true
+        }
+
+        override fun dialNumber(number: String): Boolean {
+            if (!actionSuccess) return false
+            actionsPerformed.add("dialNumber:$number")
+            if (simulateEffect) {
+                currentPkg = "com.google.android.dialer"
+                mutateScreenState("dialer:$number")
+            }
+            return true
+        }
+
         override fun swipe(
             startX: Float,
             startY: Float,
@@ -340,10 +367,15 @@ class TaskExecutorTest {
         val fakePort = FakeAutomationPort(serviceEnabled = true)
         val skills = SkillMemoryService(InMemorySkillStore())
 
-        // Pre-save a skill
+        // Pre-save a skill for a goal the direct path does NOT cover (a
+        // specific media request, not just "open app" — the direct path wins
+        // for plain "open camera", see the Turn F-direct tests below).
         skills.saveOrUpdate(
-            goal = "open camera",
-            steps = listOf(TaskStep(action = "open_app", params = mapOf("app" to "camera")))
+            goal = "play lofi on youtube",
+            steps = listOf(
+                TaskStep(action = "open_app", params = mapOf("app" to "youtube")),
+                TaskStep(action = "click_text", params = mapOf("text" to "Search"))
+            )
         )
 
         var thinkCalled = false
@@ -357,11 +389,12 @@ class TaskExecutorTest {
             stepDelayMs = 0
         )
 
-        val result = executor.executeGoal("open camera")
+        val result = executor.executeGoal("play lofi on youtube")
 
         assertEquals(TaskStatus.SUCCESS, result.status)
         assertFalse("Think lambda must NOT be called on skill replay match", thinkCalled)
-        assertTrue(fakePort.actionsPerformed.contains("openApp:camera"))
+        assertTrue(fakePort.actionsPerformed.contains("openApp:youtube"))
+        assertTrue(fakePort.actionsPerformed.contains("clickText:Search"))
         assertEquals("Task completed via memorized skill", result.message)
     }
 
@@ -385,14 +418,14 @@ class TaskExecutorTest {
             stepDelayMs = 0
         )
 
-        val result = executor.executeGoal("open youtube")
+        val result = executor.executeGoal("open youtube and play lofi")
 
         assertEquals(TaskStatus.SUCCESS, result.status)
         assertEquals(2, result.stepsUsed)
         assertTrue(fakePort.actionsPerformed.contains("openApp:youtube"))
 
         // Assert skill was auto-saved
-        val savedSkill = skills.findMatch("open youtube")
+        val savedSkill = skills.findMatch("open youtube and play lofi")
         assertNotNull("Skill must be auto-saved after successful AI loop", savedSkill)
         assertEquals(1, savedSkill?.steps?.size)
         assertEquals("open_app", savedSkill?.steps?.first()?.action)
@@ -516,7 +549,7 @@ class TaskExecutorTest {
     fun testTaskExecutor_ExecuteGoal_StaleOrEmptySkillMatch_FallsThroughToAiLoop() = runBlocking {
         val fakePort = FakeAutomationPort(serviceEnabled = true)
         // Stored skill with 0 steps (representing legacy or empty macro recorded on phone)
-        val store = InMemorySkillStore("""[{"id":"empty-skill","goal":"play song","steps":[]}]""")
+        val store = InMemorySkillStore("""[{"id":"empty-skill","goal":"play lofi song on youtube","steps":[]}]""")
         val skills = SkillMemoryService(store)
 
         var thinkTurns = 0
@@ -534,7 +567,7 @@ class TaskExecutorTest {
             stepDelayMs = 0
         )
 
-        val result = executor.executeGoal("play song")
+        val result = executor.executeGoal("play lofi song on youtube")
         assertEquals("F-08: Stale/empty skill must fall through to AI loop and succeed", TaskStatus.SUCCESS, result.status)
         assertTrue(thinkTurns >= 2)
         assertTrue(fakePort.actionsPerformed.contains("openApp:youtube"))
@@ -739,7 +772,7 @@ class TaskExecutorTest {
             maxSteps = 2,
             stepDelayMs = 0
         )
-        val res1 = executor1.executeGoal("open youtube")
+        val res1 = executor1.executeGoal("open youtube and play lofi")
         assertEquals(TaskStatus.FAILED, res1.status)
         assertTrue(fakePort1.actionsPerformed.isEmpty())
 
@@ -755,7 +788,7 @@ class TaskExecutorTest {
             maxSteps = 2,
             stepDelayMs = 0
         )
-        val res2 = executor2.executeGoal("open youtube")
+        val res2 = executor2.executeGoal("open youtube and play lofi")
         assertEquals(TaskStatus.SUCCESS, res2.status)
         assertEquals(listOf("openApp:youtube"), fakePort2.actionsPerformed)
     }
@@ -784,7 +817,7 @@ class TaskExecutorTest {
             stepDelayMs = 0
         )
 
-        val result = executor.executeGoal("tap home")
+        val result = executor.executeGoal("tap home and show me the feed")
         assertEquals("Must fail when no action had a verified screen effect", TaskStatus.FAILED, result.status)
         assertTrue(
             "History must record [NO_EFFECT] so LLM knows the action had no effect",
@@ -819,7 +852,7 @@ class TaskExecutorTest {
             stepDelayMs = 0
         )
 
-        val result = executor.executeGoal("ইউটিউব খুলো")
+        val result = executor.executeGoal("ইউটিউব খুলে গান চালাও")
         assertEquals(TaskStatus.SUCCESS, result.status)
         assertTrue(
             "Step 1 empty screen must pass launch hint to think",
@@ -889,7 +922,7 @@ class TaskExecutorTest {
             },
             stepDelayMs = 0
         )
-        val result = visionExecutor.executeGoal("open youtube")
+        val result = visionExecutor.executeGoal("open youtube and play lofi")
         assertEquals(TaskStatus.SUCCESS, result.status)
         assertEquals("First AI step on an unlabeled screen must use text-only think", 1, visionThinkTurns)
         assertTrue("thinkWithVision must be invoked on the step after a no-effect step on an unlabeled screen", visionCalled)
@@ -1485,9 +1518,377 @@ class TaskExecutorTest {
             stepDelayMs = 0
         )
 
-        val result = executor.executeGoal("open youtube")
+        val result = executor.executeGoal("open youtube and play lofi")
         assertEquals(TaskStatus.SUCCESS, result.status)
         assertEquals(2, result.stepsUsed)
         assertEquals("2-step AI loop must read the screen 2x (observe + verify), not 3x", 2, fakePort.dumpCount)
+    }
+
+    // =========================================================================
+    // Round 25 Fix Turn F — Direct fast path (Voice Access model), plan-once,
+    // learning loop, voice-path deadline
+    // =========================================================================
+
+    private fun directExecutor(
+        fakePort: FakeAutomationPort,
+        skills: SkillMemoryService,
+        thinkCalls: MutableList<String>,
+        planCalls: MutableList<String> = mutableListOf()
+    ): TaskExecutor = TaskExecutor(
+        automation = fakePort,
+        skills = skills,
+        think = { _, _, _ ->
+            thinkCalls.add("think")
+            """{"action": "done", "is_complete": true}"""
+        },
+        plan = { _, _ ->
+            planCalls.add("plan")
+            """{"steps": []}"""
+        },
+        stepDelayMs = 0
+    )
+
+    @Test
+    fun testDirect_OpenFacebook_En_ZeroThink() = runBlocking {
+        val fakePort = FakeAutomationPort(serviceEnabled = true)
+        val skills = SkillMemoryService(InMemorySkillStore())
+        val thinkCalls = mutableListOf<String>()
+        val executor = directExecutor(fakePort, skills, thinkCalls)
+
+        val result = executor.executeGoal("open Facebook")
+
+        assertEquals(TaskStatus.SUCCESS, result.status)
+        assertEquals(1, result.stepsUsed)
+        assertTrue("Direct path must make zero think calls", thinkCalls.isEmpty())
+        assertTrue(fakePort.actionsPerformed.contains("openApp:com.facebook.katana"))
+    }
+
+    @Test
+    fun testDirect_OpenFacebook_BanglaNatural_ZeroThink() = runBlocking {
+        val fakePort = FakeAutomationPort(serviceEnabled = true)
+        val skills = SkillMemoryService(InMemorySkillStore())
+        val thinkCalls = mutableListOf<String>()
+        val executor = directExecutor(fakePort, skills, thinkCalls)
+
+        // Natural Bangla with particle ("টা"), filler ("তো") and word order.
+        val result = executor.executeGoal("ফেসবুকটা ওপেন করো তো")
+
+        assertEquals(TaskStatus.SUCCESS, result.status)
+        assertEquals(1, result.stepsUsed)
+        assertTrue("Direct path must make zero think calls", thinkCalls.isEmpty())
+        assertTrue(fakePort.actionsPerformed.contains("openApp:com.facebook.katana"))
+    }
+
+    @Test
+    fun testDirect_Home_Bangla_ZeroThink() = runBlocking {
+        val fakePort = FakeAutomationPort(serviceEnabled = true)
+        val skills = SkillMemoryService(InMemorySkillStore())
+        val thinkCalls = mutableListOf<String>()
+        val executor = directExecutor(fakePort, skills, thinkCalls)
+
+        val result = executor.executeGoal("হোমপেজে আসো")
+
+        assertEquals(TaskStatus.SUCCESS, result.status)
+        assertTrue("Direct path must make zero think calls", thinkCalls.isEmpty())
+        assertTrue(fakePort.actionsPerformed.contains("pressHome"))
+    }
+
+    @Test
+    fun testDirect_ScrollDownABit_Bangla_ZeroThink() = runBlocking {
+        val fakePort = FakeAutomationPort(serviceEnabled = true)
+        val skills = SkillMemoryService(InMemorySkillStore())
+        val thinkCalls = mutableListOf<String>()
+        val executor = directExecutor(fakePort, skills, thinkCalls)
+
+        val result = executor.executeGoal("একটু নিচে স্ক্রল করো তো")
+
+        assertEquals(TaskStatus.SUCCESS, result.status)
+        assertTrue("Direct path must make zero think calls", thinkCalls.isEmpty())
+        assertTrue(
+            "A 'bit' scroll must use the small fraction (0.15)",
+            fakePort.actionsPerformed.contains("scroll:down:0.15")
+        )
+    }
+
+    @Test
+    fun testDirect_GoUpABit_Bangla_ZeroThink() = runBlocking {
+        val fakePort = FakeAutomationPort(serviceEnabled = true)
+        val skills = SkillMemoryService(InMemorySkillStore())
+        val thinkCalls = mutableListOf<String>()
+        val executor = directExecutor(fakePort, skills, thinkCalls)
+
+        val result = executor.executeGoal("একটু উপরের দিকে যাও")
+
+        assertEquals(TaskStatus.SUCCESS, result.status)
+        assertTrue("Direct path must make zero think calls", thinkCalls.isEmpty())
+        assertTrue(fakePort.actionsPerformed.contains("scroll:up:0.15"))
+    }
+
+    @Test
+    fun testDirect_TapLabel_ZeroThink() = runBlocking {
+        val settingsNode = ScreenNode(
+            index = 0, text = "Settings", contentDescription = "Settings",
+            className = "android.widget.TextView", viewId = "settings",
+            isClickable = true, isEditable = false, isScrollable = false,
+            isCheckable = false, isEnabled = true,
+            left = 10, top = 10, right = 100, bottom = 50, centerX = 55, centerY = 30
+        )
+        val fakePort = FakeAutomationPort(
+            serviceEnabled = true,
+            screenNodes = listOf(settingsNode),
+            requireNodeMatchForClickText = true
+        )
+        val skills = SkillMemoryService(InMemorySkillStore())
+        val thinkCalls = mutableListOf<String>()
+        val executor = directExecutor(fakePort, skills, thinkCalls)
+
+        val result = executor.executeGoal("tap Settings")
+
+        assertEquals(TaskStatus.SUCCESS, result.status)
+        assertTrue("Direct path must make zero think calls", thinkCalls.isEmpty())
+        assertTrue(fakePort.actionsPerformed.contains("clickText:Settings"))
+    }
+
+    @Test
+    fun testDirect_Search_ZeroThink() = runBlocking {
+        val fakePort = FakeAutomationPort(serviceEnabled = true)
+        val skills = SkillMemoryService(InMemorySkillStore())
+        val thinkCalls = mutableListOf<String>()
+        val executor = directExecutor(fakePort, skills, thinkCalls)
+
+        val result = executor.executeGoal("search lofi on youtube")
+
+        assertEquals(TaskStatus.SUCCESS, result.status)
+        assertTrue("Direct path must make zero think calls", thinkCalls.isEmpty())
+        assertTrue(
+            fakePort.actionsPerformed.any { it.startsWith("openUrl:https://www.youtube.com/results?search_query=lofi") }
+        )
+    }
+
+    @Test
+    fun testDirect_Dial_ZeroThink() = runBlocking {
+        val fakePort = FakeAutomationPort(serviceEnabled = true)
+        val skills = SkillMemoryService(InMemorySkillStore())
+        val thinkCalls = mutableListOf<String>()
+        val executor = directExecutor(fakePort, skills, thinkCalls)
+
+        val result = executor.executeGoal("call 01712345678")
+
+        assertEquals(TaskStatus.SUCCESS, result.status)
+        assertTrue("Direct path must make zero think calls", thinkCalls.isEmpty())
+        assertTrue(fakePort.actionsPerformed.contains("dialNumber:01712345678"))
+    }
+
+    @Test
+    fun testDirect_NonDirectGoal_FallsThroughToAiLoop() = runBlocking {
+        val fakePort = FakeAutomationPort(serviceEnabled = true)
+        val skills = SkillMemoryService(InMemorySkillStore())
+        var thinkTurn = 0
+        val executor = TaskExecutor(
+            automation = fakePort,
+            skills = skills,
+            think = { _, _, _ ->
+                thinkTurn++
+                """{"action": "open_app", "params": {"app": "whatsapp"}, "is_complete": true}"""
+            },
+            stepDelayMs = 0
+        )
+
+        // "message mom on whatsapp" needs more than opening the app — the
+        // direct path must refuse it so the AI loop can do the real work.
+        val result = executor.executeGoal("message mom on whatsapp")
+
+        assertEquals(TaskStatus.SUCCESS, result.status)
+        assertTrue("AI loop must run for non-direct goals", thinkTurn >= 1)
+        assertTrue(fakePort.actionsPerformed.contains("openApp:whatsapp"))
+    }
+
+    @Test
+    fun testDirect_OpenOnlyGoal_AiLoopReturnsImmediatelyAfterOpenApp() = runBlocking {
+        val fakePort = FakeAutomationPort(serviceEnabled = true)
+        val skills = SkillMemoryService(InMemorySkillStore())
+        var thinkTurn = 0
+        val executor = TaskExecutor(
+            automation = fakePort,
+            skills = skills,
+            think = { _, _, _ ->
+                thinkTurn++
+                // No is_complete flag: the model keeps "thinking" instead of
+                // saying done. The loop must still stop after the open.
+                """{"action": "open_app", "params": {"app": "mybankapp"}}"""
+            },
+            stepDelayMs = 0
+        )
+
+        // Unknown app (not in the local tables) so the direct path cannot
+        // take it — the AI loop must still reach DONE in one step.
+        val result = executor.executeGoal("open mybankapp")
+
+        assertEquals(TaskStatus.SUCCESS, result.status)
+        assertEquals("AI loop must stop after the open_app succeeds", 1, result.stepsUsed)
+        assertEquals("Exactly one think call — no second round on the opened app", 1, thinkTurn)
+    }
+
+    @Test
+    fun testPlanOnce_SavesSkill_AndSecondInvocationIsInstant() = runBlocking {
+        val fakePort = FakeAutomationPort(serviceEnabled = true)
+        val skills = SkillMemoryService(InMemorySkillStore())
+        var planCalls = 0
+        var thinkTurns = 0
+        val executor = TaskExecutor(
+            automation = fakePort,
+            skills = skills,
+            think = { _, _, _ ->
+                thinkTurns++
+                """{"action": "done", "is_complete": true}"""
+            },
+            plan = { _, _ ->
+                planCalls++
+                """{"steps": [{"action": "open_app", "params": {"app": "youtube"}}, {"action": "click_text", "params": {"text": "Search"}}]}"""
+            },
+            stepDelayMs = 0
+        )
+
+        // First time: one planning call, zero per-step think, skill saved.
+        val first = executor.executeGoal("open youtube and play lofi")
+        assertEquals(TaskStatus.SUCCESS, first.status)
+        assertEquals("Exactly one planning call on first invocation", 1, planCalls)
+        assertEquals("Zero per-step think calls on the plan-once path", 0, thinkTurns)
+        val saved = skills.findMatch("open youtube and play lofi")
+        assertNotNull("Planned list must be saved as a Skill immediately", saved)
+        assertEquals(2, saved?.steps?.size)
+
+        // Second time: the saved list replays directly — no plan call, no think.
+        val second = executor.executeGoal("open youtube and play lofi")
+        assertEquals(TaskStatus.SUCCESS, second.status)
+        assertEquals("No second planning call — the saved list replays directly", 1, planCalls)
+        assertEquals("No think calls on the replay path either", 0, thinkTurns)
+        assertEquals(
+            listOf("openApp:youtube", "clickText:Search", "openApp:youtube", "clickText:Search"),
+            fakePort.actionsPerformed
+        )
+    }
+
+    @Test
+    fun testPlanOnce_UnparsablePlan_FallsBackToAiLoop() = runBlocking {
+        val fakePort = FakeAutomationPort(serviceEnabled = true)
+        val skills = SkillMemoryService(InMemorySkillStore())
+        var thinkTurn = 0
+        val executor = TaskExecutor(
+            automation = fakePort,
+            skills = skills,
+            think = { _, _, _ ->
+                thinkTurn++
+                if (thinkTurn == 1) {
+                    """{"action": "open_app", "params": {"app": "youtube"}}"""
+                } else {
+                    """{"action": "done", "is_complete": true}"""
+                }
+            },
+            plan = { _, _ -> "this is not json at all" },
+            stepDelayMs = 0
+        )
+
+        val result = executor.executeGoal("open youtube and play lofi")
+
+        assertEquals(TaskStatus.SUCCESS, result.status)
+        assertTrue("AI loop must run when the plan is unusable", thinkTurn >= 1)
+    }
+
+    @Test
+    fun testPlanOnce_DonePlan_ReturnsSuccessImmediately() = runBlocking {
+        val fakePort = FakeAutomationPort(serviceEnabled = true)
+        val skills = SkillMemoryService(InMemorySkillStore())
+        var thinkTurn = 0
+        val executor = TaskExecutor(
+            automation = fakePort,
+            skills = skills,
+            think = { _, _, _ ->
+                thinkTurn++
+                """{"action": "done", "is_complete": true}"""
+            },
+            plan = { _, _ -> """{"done": true}""" },
+            stepDelayMs = 0
+        )
+
+        val result = executor.executeGoal("open youtube and play lofi")
+
+        assertEquals(TaskStatus.SUCCESS, result.status)
+        assertEquals(0, result.stepsUsed)
+        assertEquals("No think calls when the plan says already done", 0, thinkTurn)
+        assertTrue(fakePort.actionsPerformed.isEmpty())
+    }
+
+    @Test
+    fun testParseAiPlan_Formats() {
+        val executor = TaskExecutor(
+            automation = FakeAutomationPort(),
+            skills = SkillMemoryService(InMemorySkillStore()),
+            stepDelayMs = 0
+        )
+
+        val list = executor.parseAiPlan(
+            """{"steps": [{"action": "open_app", "params": {"app": "youtube"}}, {"action": "click_text", "params": {"text": "Search"}}]}"""
+        )
+        assertNotNull(list)
+        assertFalse(list!!.done)
+        assertEquals(2, list.steps.size)
+        assertEquals("open_app", list.steps[0].action)
+        assertEquals("click_text", list.steps[1].action)
+
+        val done = executor.parseAiPlan("""{"done": true}""")
+        assertNotNull(done)
+        assertTrue(done!!.done)
+
+        val bare = executor.parseAiPlan("""[{"action": "back"}]""")
+        assertNotNull(bare)
+        assertEquals("press_back", bare!!.steps.first().action)
+
+        val fenced = executor.parseAiPlan(
+            "```json\n{\"steps\": [{\"action\": \"open_app\", \"params\": {\"app\": \"youtube\"}}]}\n```"
+        )
+        assertNotNull(fenced)
+        assertEquals(1, fenced!!.steps.size)
+
+        assertNull(executor.parseAiPlan("this is not json at all"))
+        assertNull(executor.parseAiPlan("""{"steps": []}"""))
+        assertNull(executor.parseAiPlan(""))
+    }
+
+    @Test
+    fun testBridge_HungThink_VoicePathFailsFast_AndSlotClears() = runBlocking {
+        val bridge = MiraAutomationBridge(
+            context = null,
+            taskTimeoutMs = 5_000L,
+            executorFactory = {
+                val fakePort = FakeAutomationPort(serviceEnabled = true)
+                val skills = SkillMemoryService(InMemorySkillStore())
+                TaskExecutor(
+                    automation = fakePort,
+                    skills = skills,
+                    think = { _, _, _ ->
+                        kotlinx.coroutines.delay(30_000L) // hangs far past every deadline
+                        """{"action": "done", "is_complete": true}"""
+                    },
+                    stepDelayMs = 0,
+                    taskTimeoutMs = 500L,
+                    thinkTimeoutMs = 200L
+                )
+            }
+        )
+
+        // This is the voice path: MicService calls bridge.executeGoal. A hung
+        // think must fail at the ~200ms think deadline (not the 120s task
+        // timeout), and the executor slot must clear so the next command can run.
+        val start = System.currentTimeMillis()
+        val result = bridge.executeGoal("test hung voice goal")
+        val elapsed = System.currentTimeMillis() - start
+
+        assertEquals(TaskStatus.FAILED, result.status)
+        assertTrue(
+            "Hung think on the voice path must fail fast (took ${elapsed}ms)",
+            elapsed < 5_000L
+        )
+        assertFalse("Executor slot must clear after the timeout", bridge.isRunning)
     }
 }

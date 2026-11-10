@@ -5,6 +5,7 @@ import io.github.ryoaonetsuki.mira.automation.agent.AutomationPort
 import io.github.ryoaonetsuki.mira.automation.agent.ScreenAutomationService
 import io.github.ryoaonetsuki.mira.automation.agent.SkillMemoryService
 import io.github.ryoaonetsuki.mira.automation.agent.TaskExecutor
+import io.github.ryoaonetsuki.mira.automation.agent.TaskHistoryStore
 import io.github.ryoaonetsuki.mira.automation.agent.TaskStatus
 import io.github.ryoaonetsuki.mira.backend.ApiKeyResolver
 import io.github.ryoaonetsuki.mira.backend.KeySource
@@ -57,10 +58,29 @@ class MiraAutomationBridge(
             checkRunningAndClearStaleLocked()
         }
 
+    val isPaused: Boolean
+        get() = synchronized(stateLock) {
+            activeExecutor?.isPaused ?: false
+        }
+
+    fun pause() {
+        synchronized(stateLock) {
+            activeExecutor?.pause()
+        }
+    }
+
+    fun resume() {
+        synchronized(stateLock) {
+            activeExecutor?.resume()
+        }
+    }
+
     private fun checkRunningAndClearStaleLocked(): Boolean {
         val current = activeExecutor ?: return false
-        val now = clockMs()
-        val elapsed = if (runningSinceMs > 0L) (now - runningSinceMs).coerceAtLeast(0L) else 0L
+        if (current.isPaused) {
+            return true
+        }
+        val elapsed = current.activeElapsedMs()
         if (elapsed > taskTimeoutMs) {
             current.cancel()
             activeExecutor = null
@@ -73,7 +93,9 @@ class MiraAutomationBridge(
 
     private fun buildAlreadyRunningMessageLocked(): String {
         val goal = runningGoal ?: "unknown"
-        val elapsedSec = if (runningSinceMs > 0L) ((clockMs() - runningSinceMs).coerceAtLeast(0L) / 1000L) else 0L
+        val elapsed = activeExecutor?.activeElapsedMs()
+            ?: if (runningSinceMs > 0L) (clockMs() - runningSinceMs).coerceAtLeast(0L) else 0L
+        val elapsedSec = elapsed / 1000L
         return "Another task is already running (\"$goal\", ${elapsedSec}s elapsed)"
     }
 
@@ -92,11 +114,13 @@ class MiraAutomationBridge(
         val ctx = requireNotNull(context) { "Context is required when no executorFactory is provided" }
         val automation: AutomationPort = ScreenAutomationService(ctx)
         val skills = SkillMemoryService.getInstance(ctx)
+        val historyStore = TaskHistoryStore.getInstance(ctx)
         return TaskExecutor(
             automation = automation,
             skills = skills,
             taskTimeoutMs = taskTimeoutMs,
-            onProgress = onProgress
+            onProgress = onProgress,
+            historyStore = historyStore
         )
     }
 

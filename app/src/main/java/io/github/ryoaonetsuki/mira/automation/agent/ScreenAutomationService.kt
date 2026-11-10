@@ -3,6 +3,7 @@ package io.github.ryoaonetsuki.mira.automation.agent
 import android.content.Context
 import android.content.Intent
 import android.graphics.Rect
+import android.net.Uri
 import android.util.Log
 import android.view.accessibility.AccessibilityNodeInfo
 import io.github.ryoaonetsuki.mira.service.MiraAccessibilityService
@@ -290,6 +291,50 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
             throw e
         } catch (e: Throwable) {
             Log.e(TAG, "scroll failed", e)
+            false
+        }
+    }
+
+    override fun scroll(direction: String, fraction: Float): Boolean {
+        return try {
+            val service = MiraAccessibilityService.instance ?: return false
+            service.scroll(direction, fraction)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Log.e(TAG, "scroll with fraction failed", e)
+            false
+        }
+    }
+
+    override fun openUrl(url: String): Boolean {
+        return try {
+            val ctx = context ?: return false
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            ctx.startActivity(intent)
+            true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Log.e(TAG, "openUrl failed", e)
+            false
+        }
+    }
+
+    override fun dialNumber(number: String): Boolean {
+        return try {
+            val ctx = context ?: return false
+            val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$number")).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            ctx.startActivity(intent)
+            true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Log.e(TAG, "dialNumber failed", e)
             false
         }
     }

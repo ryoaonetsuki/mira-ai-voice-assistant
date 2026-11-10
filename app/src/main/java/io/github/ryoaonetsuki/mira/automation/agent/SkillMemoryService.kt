@@ -108,21 +108,31 @@ class SkillMemoryService(
   fun getAllSkills(): List<Skill> = all()
 
   /**
-   * Finds a stored skill matching [goal]: exact normalized match first,
-   * then token Jaccard similarity >= 0.75.
+   * Finds a stored skill matching [goal]: exact raw match first,
+   * then exact normalized match, then token Jaccard similarity >= 0.75.
    */
   fun findMatch(goal: String): Skill? = synchronized(lock) {
-    val normalized = Skill.normalize(goal)
-    if (normalized.isEmpty()) return null
+    val clean = goal.trim()
+    if (clean.isEmpty()) return null
     val skills = load()
 
+    // 1. Exact raw match first
+    for (s in skills) {
+      if (s.goal.equals(clean, ignoreCase = true)) return s
+    }
+
+    // 2. Exact normalized match
+    val normalized = Skill.normalize(clean)
+    if (normalized.isEmpty()) return null
     for (s in skills) {
       if (s.normalizedGoal == normalized) return s
     }
+
+    // 3. Token Jaccard similarity >= MATCH_THRESHOLD
     var best: Skill? = null
     var bestScore = 0.0
     for (s in skills) {
-      val score = Skill.similarity(normalized, s.normalizedGoal)
+      val score = Skill.similarity(clean, s.goal)
       if (score > bestScore) {
         bestScore = score
         best = s

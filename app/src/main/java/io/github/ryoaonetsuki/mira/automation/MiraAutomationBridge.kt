@@ -195,6 +195,49 @@ class MiraAutomationBridge(
             }
         }
 
+    /**
+     * Turn G: the SAME one-shot planning call, but WITH the screenshot
+     * attached — the plan is made from pixels + node text together, so the
+     * agent plans from what the screen actually shows (home screen first,
+     * then scroll/tap as the screen demands). Same model, same single
+     * attempt and deadline as the text planner; the vision lambda is a
+     * think call, not a chat call.
+     */
+    private fun buildPlanVisionLambda(
+        restClient: GeminiRestClient,
+        knowledge: AppKnowledge? = null
+    ): suspend (String, String, ByteArray) -> String =
+        { currentGoal, screenDescription, screenshotBytes ->
+            val key = apiKey()
+            val entities = buildHistoryEntities(currentGoal, screenDescription, emptyList())
+            val target = extractTargetApp(currentGoal)
+            val note = knowledge?.noteForTarget(target)
+            val systemPrompt = if (note != null) {
+                "$PLAN_SYSTEM_PROMPT\n\nApp knowledge for this goal:\n$note"
+            } else {
+                PLAN_SYSTEM_PROMPT
+            }
+            val base64Data = java.util.Base64.getEncoder().encodeToString(screenshotBytes)
+            val attachment = ChatAttachment(
+                mimeType = "image/jpeg",
+                base64Data = base64Data,
+                fileName = "screenshot.jpg"
+            )
+            val planResult = withTimeout(TaskExecutor.DEFAULT_THINK_TIMEOUT_MS) {
+                restClient.generateAutomationThink(
+                    apiKey = key,
+                    history = entities,
+                    systemPrompt = systemPrompt,
+                    attachments = listOf(attachment)
+                )
+            }
+            if (planResult.isSuccess) {
+                planResult.getOrNull()?.text ?: ""
+            } else {
+                throw planResult.exceptionOrNull() ?: Exception("LLM vision call failed")
+            }
+        }
+
     private fun createDefaultExecutor(onProgress: ((step: Int, description: String) -> Unit)? = null): TaskExecutor {
         executorFactory?.let {
             val exec = it()
@@ -220,6 +263,7 @@ class MiraAutomationBridge(
             think = buildThinkLambda(restClient),
             thinkWithVision = buildThinkVisionLambda(restClient),
             plan = buildPlanLambda(restClient, knowledge),
+            planWithVision = buildPlanVisionLambda(restClient, knowledge),
             taskTimeoutMs = taskTimeoutMs,
             onProgress = onProgress
         )
@@ -327,7 +371,7 @@ class MiraAutomationBridge(
 
     companion object {
         private const val SYSTEM_PROMPT =
-            "You control an Android phone. Reply with ONLY one JSON action object {action, params, reasoning, is_complete}. Actions: click_text, click_at, type_text, press_enter, scroll, swipe, press_back, press_home, open_app, wait, done. Screen description and goal are provided. Never invent coordinates outside the screen. If the goal is complete, reply done."
+            "You control an Android phone. Reply with ONLY one JSON action object {action, params, reasoning, is_complete}. Actions: click_text, click_at, type_text, press_enter, scroll, swipe, press_back, press_home, open_app, wait, done. Screen description and goal are provided. Never invent coordinates outside the screen. If the goal is complete, reply done. Decide from the screenshot AND the node list together — when a screenshot is attached, look at it: work out which app and screen you are on, and only then act. If you just opened an app, you are on its home screen — read it before acting. Scroll only if the thing you need is not visible; never tap something you cannot see on the screen."
         /**
          * Plan-once prompt (Turn F): ONE planning call per goal. The model
          * returns the COMPLETE command list up front — the executor then runs
@@ -337,7 +381,7 @@ class MiraAutomationBridge(
          * the goal is already complete on the current screen.
          */
         private const val PLAN_SYSTEM_PROMPT =
-            "You plan Android phone tasks. Given the goal and the current screen, reply with ONLY one JSON object: {\"steps\": [{\"action\": \"<action>\", \"params\": {...}}, ...]} listing EVERY action needed to complete the goal, in order, from the current screen. Actions: click_text, click_at, type_text, press_enter, scroll, swipe, press_back, press_home, open_app, wait, done, long_press (params x, y, durationMs), pinch (params centerX, centerY, direction in|out). Use click_text with the visible label when possible; use open_app with the app name to launch an app. Never invent coordinates outside the screen. Keep the list short (at most 10 steps). If the goal is already complete on the current screen, reply {\"done\": true}."
+            "You plan Android phone tasks. Given the goal and the current screen, reply with ONLY one JSON object: {\"steps\": [{\"action\": \"<action>\", \"params\": {...}}, ...]} listing EVERY action needed to complete the goal, in order, from the current screen. Actions: click_text, click_at, type_text, press_enter, scroll, swipe, press_back, press_home, open_app, wait, done, long_press (params x, y, durationMs), pinch (params centerX, centerY, direction in|out). Use click_text with the visible label when possible; use open_app with the app name to launch an app. Never invent coordinates outside the screen. Keep the list short (at most 10 steps). If the goal is already complete on the current screen, reply {\"done\": true}. Plan from the screenshot AND the node list together: first work out from the screenshot which app and screen you are on. If you are not on the target app's home screen, get there first (open_app / press_home / press_back as needed). Then look at the screen and decide each next step from what you can actually SEE — scroll only if the thing you need is not visible; never tap something you cannot see on the screen."
 
         @Volatile
         private var instance: MiraAutomationBridge? = null

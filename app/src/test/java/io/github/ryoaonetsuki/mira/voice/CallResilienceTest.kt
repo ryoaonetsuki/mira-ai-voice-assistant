@@ -113,10 +113,34 @@ class CallResilienceTest {
     }
 
     @Test
+    fun testCallActiveStore_PersistsVoiceLanguageAndGoalAcrossKill() {
+        val store1 = LiveCallStateStore(context)
+        store1.setCallActive(true)
+        store1.setVoiceName("Puck")
+        store1.setLanguage("bn-BD")
+        store1.setLastGoal("YouTube-এ গান চালাও")
+
+        // Service killed + recreated: NEW store instance
+        val store2 = LiveCallStateStore(context)
+        assertTrue(store2.isCallActive())
+        assertEquals("Puck", store2.getVoiceName())
+        assertEquals("bn-BD", store2.getLanguage())
+        assertEquals("YouTube-এ গান চালাও", store2.getLastGoal())
+
+        // Clearing call active clears all continuity fields
+        store2.setCallActive(false)
+        assertFalse(store2.isCallActive())
+        assertNull(store2.getVoiceName())
+        assertNull(store2.getLanguage())
+        assertNull(store2.getLastGoal())
+    }
+
+    @Test
     fun testDropDiagnostics_RecordsReasonAndCounts() {
         assertNull(LiveVoiceDiagnostics.data.value.lastDropReason)
         assertEquals(0, LiveVoiceDiagnostics.data.value.micRestartCount)
         assertEquals(0, LiveVoiceDiagnostics.data.value.autoRestartCount)
+        assertEquals(0, LiveVoiceDiagnostics.data.value.interruptedCount)
 
         LiveVoiceDiagnostics.recordDropReason("mic-died: record.read returned -3")
         assertEquals("mic-died: record.read returned -3", LiveVoiceDiagnostics.data.value.lastDropReason)
@@ -133,6 +157,11 @@ class CallResilienceTest {
 
         LiveVoiceDiagnostics.recordResumedWithContext(false)
         assertEquals(false, LiveVoiceDiagnostics.data.value.lastResumedWithContext)
+
+        LiveVoiceDiagnostics.recordInterrupted()
+        LiveVoiceDiagnostics.recordInterrupted()
+        assertEquals(2, LiveVoiceDiagnostics.data.value.interruptedCount)
+        assertTrue(LiveVoiceDiagnostics.data.value.frameLogs.any { it.contains("INTERRUPTED") })
     }
 
     @Test

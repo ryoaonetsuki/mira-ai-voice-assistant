@@ -477,6 +477,13 @@ class GeminiSessionManagerTest {
         runCurrent()
         val client2 = fakeFactory.createdClients[1]
 
+        // Turn G: the handshake must actually reach the server for the
+        // handle to count as rejected — open the socket (CONFIGURING)
+        // first, then the server kills it before setupComplete.
+        client2.sessionListener.onWebSocketOpen()
+        runCurrent()
+        assertEquals(SessionManagerState.CONFIGURING, manager.state.value)
+
         // Resumption handshake fails (e.g. server returns 400/1008 or closed before setupComplete)
         client2.sessionListener.onSessionEnded("400 Bad Request: Invalid session handle", null)
         runCurrent()

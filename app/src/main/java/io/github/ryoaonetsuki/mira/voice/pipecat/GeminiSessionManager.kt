@@ -513,13 +513,15 @@ class GeminiSessionManager(
 
         transitionTo(SessionManagerState.CONFIGURING)
 
-        // Stage-4 silence watchdog: 15-second timer started when WebSocket opens / setup is sent
+        // Stage-4 silence watchdog: 15-second timer started when WebSocket opens / setup is sent.
+        // Turn G: a slow server must not burn a valid resumption handle. The handle
+        // is cleared ONLY on explicit server rejection during CONFIGURING (handleSessionEnded),
+        // never on silence timeout. Keep the silence-triggered reconnect itself.
         stage4WatchdogJob?.cancel()
         stage4WatchdogJob = scope.launch {
             delayProvider(STAGE4_SILENCE_TIMEOUT_MS)
             if (_state.value == SessionManagerState.CONFIGURING && epoch == currentEpoch.get()) {
                 Log.w(TAG, "MIRA_LIVE_VOICE: Stage-4 silence detected")
-                resumptionStore.clearHandle()
                 closeCurrentClient()
                 launchReconnect(isGoAway = false, isStage4Timeout = true)
             }

@@ -165,10 +165,20 @@ class TaskExecutor(
     private val taskTimeoutMs: Long = DEFAULT_TASK_TIMEOUT_MS,
     private val thinkTimeoutMs: Long = DEFAULT_THINK_TIMEOUT_MS,
     private val clockMs: () -> Long = { System.currentTimeMillis() },
-    private val phaseWarningThresholdSec: Long = DEFAULT_PHASE_WARNING_THRESHOLD_SEC
+    private val phaseWarningThresholdSec: Long = DEFAULT_PHASE_WARNING_THRESHOLD_SEC,
+    // Turn F(a): cold app launch (YouTube commonly 2-5s) is polled instead of
+    // a fixed settle + one retry.
+    private val openAppPollTimeoutMs: Long = DEFAULT_OPEN_APP_POLL_TIMEOUT_MS,
+    private val openAppPollIntervalMs: Long = DEFAULT_OPEN_APP_POLL_INTERVAL_MS
 ) {
-    private val settleDelayMs: Long = if (stepDelayMs == 0L) 0L else 700L
-    private val openAppSettleDelayMs: Long = if (stepDelayMs == 0L) 0L else 1200L
+    // Turn F(f): 700ms -> 350ms settle for non-open_app steps.
+    private val settleDelayMs: Long = if (stepDelayMs == 0L) 0L else 350L
+    // Tests pass stepDelayMs == 0, so polling is a single immediate check
+    // there (fast); on the phone the full ~8s cold-start window applies.
+    private val effectiveOpenAppPollTimeoutMs: Long =
+        if (stepDelayMs == 0L) 0L else openAppPollTimeoutMs
+    private val effectiveOpenAppPollIntervalMs: Long =
+        if (stepDelayMs == 0L) 0L else openAppPollIntervalMs
 
     @Volatile
     private var _isRunning: Boolean = false
@@ -305,22 +315,9 @@ class TaskExecutor(
         val matchedSkill = skills.findMatch(goal)
         if (matchedSkill != null) {
             onProgress?.invoke(0, "Found memorized skill (${matchedSkill.steps.size} steps). Replaying…")
-            val replaySuccess = replaySkill(matchedSkill)
-            if (_cancelRequested) {
-                return TaskResult(TaskStatus.CANCELLED, "Task cancelled by user", matchedSkill.steps.size)
-            }
-            if (replaySuccess) {
-                skills.markReplayOutcome(matchedSkill.id, true)
-                return TaskResult(
-                    status = TaskStatus.SUCCESS,
-                    message = "Task completed via memorized skill",
-                    stepsUsed = matchedSkill.steps.size
-                )
-            }
-            // Replay failed — record failed outcome (kept until 3 consecutive failures) and fall through to live AI loop
-            skills.markReplayOutcome(matchedSkill.id, false)
-            logInfo("Saved skill failed — falling back to AI loop")
-            onProgress?.invoke(0, "Saved skill failed — falling back to AI loop")
+            // Turn F(b): a failed replay is RESUMED with AI for the failed
+            // step only — it no longer restarts the whole goal via runAiLoop.
+            return executeSkillWithResume(matchedSkill)
         }
 
         // 3. AI loop
@@ -372,6 +369,10 @@ class TaskExecutor(
                 val step = _currentStep
                 val phase = _currentPhase
                 val timeoutMsg = when {
+                    // Turn F: the replay path can now spend time in "thinking"
+                    // (AI resume). Name it, like executeGoal already does —
+                    // the generic else-branch hid it behind "during thinking".
+                    phase == "thinking" -> "Timed out while waiting for the AI reply (replay step $step, think call exceeded ${thinkTimeoutMs / 1000}s)"
                     phase == "observing" -> "Timed out during screen read (replay step $step, dumpScreen exceeded cap)"
                     phase == "acting" -> "Timed out while executing action (replay step $step, ${_phaseDetail.ifEmpty { "action hung" }})"
                     phase.startsWith("replaying") -> "Timed out during $phase (${_phaseDetail.ifEmpty { "step hung" }})"
@@ -412,11 +413,29 @@ class TaskExecutor(
         }
 
         onProgress?.invoke(0, "Replaying macro '${skill.goal}' (${skill.steps.size} steps)…")
-        val ok = replaySkill(skill)
+        // Turn F(b): a failed replay is RESUMED with AI for the failed step
+        // only — the whole goal is never restarted from scratch.
+        return executeSkillWithResume(skill)
+    }
+
+    /**
+     * Turn F(b): direct replay first; on failure, AI fixes ONLY the failed
+     * recorded step (bounded turns, text-only think), then replay RESUMES
+     * with the remaining recorded steps. The macro is never discarded and
+     * re-done from scratch via runAiLoop.
+     */
+    private suspend fun executeSkillWithResume(skill: Skill): TaskResult {
+        // Stale/empty macro (e.g. a legacy recording with 0 steps): there is
+        // nothing to resume — fall through to the AI loop, as before.
+        if (skill.steps.isEmpty()) {
+            logWarn("Cannot replay skill '${skill.goal}': no steps recorded — falling back to AI loop")
+            return runAiLoop(skill.goal)
+        }
+        val first = replaySkillFrom(skill, 0)
         if (_cancelRequested) {
             return TaskResult(TaskStatus.CANCELLED, "Task cancelled by user", skill.steps.size)
         }
-        if (ok) {
+        if (first.success) {
             skills.markReplayOutcome(skill.id, true)
             return TaskResult(
                 status = TaskStatus.SUCCESS,
@@ -424,133 +443,383 @@ class TaskExecutor(
                 stepsUsed = skill.steps.size
             )
         }
-
-        if (think != null || thinkWithVision != null) {
-            logInfo("Saved skill failed — falling back to AI loop")
-            onProgress?.invoke(0, "Saved skill failed — falling back to AI loop")
-            val aiResult = runAiLoop(skill.goal)
-            return when (aiResult.status) {
-                TaskStatus.SUCCESS -> {
-                    skills.markReplayOutcome(skill.id, true)
-                    TaskResult(
-                        status = TaskStatus.SUCCESS,
-                        message = "Skill replay failed; completed via AI fallback in ${aiResult.stepsUsed} step(s).",
-                        stepsUsed = aiResult.stepsUsed
-                    )
-                }
-                TaskStatus.CANCELLED -> aiResult
-                TaskStatus.FAILED -> {
-                    skills.markReplayOutcome(skill.id, false)
-                    val replayDiag = _lastDiagnosis?.let { " ($it)" }.orEmpty()
-                    TaskResult(
-                        status = TaskStatus.FAILED,
-                        message = "Skill replay failed$replayDiag and AI fallback could not complete the goal: ${aiResult.message}",
-                        stepsUsed = aiResult.stepsUsed
-                    )
-                }
-            }
+        val failedStepIndex = first.failedStepIndex.coerceIn(0, skill.steps.size - 1)
+        val failedStepNumber = failedStepIndex + 1
+        if (think == null && thinkWithVision == null) {
+            skills.markReplayOutcome(skill.id, false)
+            val diag = _lastDiagnosis ?: "Skill replay failed during execution. Please re-record the macro."
+            return TaskResult(
+                status = TaskStatus.FAILED,
+                message = diag,
+                stepsUsed = _currentStep
+            )
         }
 
+        onProgress?.invoke(0, "Saved skill failed at step $failedStepNumber — AI fixing that step, then resuming macro…")
+        logInfo("Saved skill failed at step $failedStepNumber — resuming with AI for that step only")
+        val resume = resumeSkillWithAi(skill, failedStepIndex)
+        if (!resume.success) {
+            skills.markReplayOutcome(skill.id, false)
+            val replayDiag = _lastDiagnosis?.let { " ($it)" }.orEmpty()
+            return TaskResult(
+                status = TaskStatus.FAILED,
+                message = "Skill replay failed at step $failedStepNumber$replayDiag and AI fallback could not complete that step: ${resume.message}",
+                stepsUsed = _currentStep
+            )
+        }
+
+        // Resume replay with the remaining recorded steps.
+        val rest = if (failedStepIndex + 1 < skill.steps.size) {
+            replaySkillFrom(skill, failedStepIndex + 1)
+        } else {
+            ReplayOutcome(success = true, stepsCompleted = 0)
+        }
+        if (_cancelRequested) {
+            return TaskResult(TaskStatus.CANCELLED, "Task cancelled by user", skill.steps.size)
+        }
+        if (rest.success) {
+            // Learn: replace the failed recorded step with the AI's working
+            // step so the next replay of this macro is fully direct.
+            val updatedSteps = skill.steps.toMutableList()
+            resume.aiStep?.let { updatedSteps[failedStepIndex] = it }
+            skills.saveOrUpdate(skill.goal, updatedSteps)
+            skills.markReplayOutcome(skill.id, true)
+            return TaskResult(
+                status = TaskStatus.SUCCESS,
+                message = "Skill replay failed at step $failedStepNumber; AI completed that step and replay resumed — completed via recorded macro + AI fallback.",
+                stepsUsed = skill.steps.size
+            )
+        }
         skills.markReplayOutcome(skill.id, false)
-        val diag = _lastDiagnosis ?: "Skill replay failed during execution. Please re-record the macro."
+        val restDiag = _lastDiagnosis?.let { " ($it)" }.orEmpty()
         return TaskResult(
             status = TaskStatus.FAILED,
-            message = diag,
+            message = "AI fixed step $failedStepNumber but replay of the remaining steps failed$restDiag",
             stepsUsed = _currentStep
         )
     }
 
-    suspend fun replaySkill(skill: Skill): Boolean {
-        if (skill.steps.isEmpty()) {
-            logWarn("Cannot replay skill '${skill.goal}': no steps recorded")
-            return false
-        }
-        val totalSteps = skill.steps.size
-        var stepCount = 0
-        var skippedCount = 0
-        for (step in skill.steps) {
-            if (_cancelRequested) return false
-            stepCount++
-            _currentStep = stepCount
-            enterPhase("replaying step $stepCount", stepCount, "Replaying: ${step.action}")
+    private data class AiResumeResult(
+        val success: Boolean,
+        val aiStep: TaskStep?,
+        val message: String
+    )
 
-            enterPhase("observing", stepCount, "reading screen (step $stepCount)")
-            var preNodes = try {
-                automation.getScreenElements()
+    /**
+     * Turn F(b): uses the AI for ONE failed recorded step only — at most
+     * [AI_RESUME_MAX_ATTEMPTS] think turns, each under the think deadline.
+     * Think is TEXT-ONLY here: recorded steps already carry coordinates and
+     * labels, so no screenshot tax. Returns the AI step that fixed it, for
+     * learning back into the macro.
+     */
+    private suspend fun resumeSkillWithAi(skill: Skill, failedStepIndex: Int): AiResumeResult {
+        val failedStep = skill.steps[failedStepIndex]
+        val stepNumber = failedStepIndex + 1
+        val history = mutableListOf<Pair<String, String>>()
+        val goalText = "Complete this one recorded step from the macro '${skill.goal}' " +
+            "(step $stepNumber of ${skill.steps.size}): ${describeStep(failedStep)}. " +
+            "Reply with ONLY one JSON action object for that step. " +
+            "If the step is already done on screen, reply done."
+        var lastReason = "no AI attempt made"
+        var attempts = 0
+        while (attempts < AI_RESUME_MAX_ATTEMPTS) {
+            if (_cancelRequested) return AiResumeResult(false, null, "cancelled by user")
+            attempts++
+            _currentStep = stepNumber
+            enterPhase("thinking", stepNumber, "AI fixing recorded step $stepNumber (attempt $attempts/$AI_RESUME_MAX_ATTEMPTS)")
+            val nodes = dumpScreenSafe()
+            val description = if (nodes.isEmpty()) {
+                "Screen appears empty (use open_app to launch the target app)"
+            } else {
+                automation.getCompressedScreenDescription(nodes, goalText)
+            }
+            val raw: String
+            try {
+                raw = withTimeout(thinkTimeoutMs) {
+                    val fn = think
+                    if (fn != null) {
+                        fn(goalText, description, history)
+                    } else {
+                        // No text think available: allow the vision route to
+                        // attach a screenshot only when the text is
+                        // insufficient (see shouldAttachScreenshot).
+                        _decideNextStep(goalText, description, nodes, history, lastStepHadNoEffect = true)
+                    }
+                }
+            } catch (e: TimeoutCancellationException) {
+                val msg = "Timed out while waiting for the AI reply (step $stepNumber, think call exceeded ${thinkTimeoutMs / 1000}s)"
+                recordDiagnosis(msg)
+                logWarn(msg)
+                return AiResumeResult(false, null, msg)
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: Throwable) {
-                emptyList()
+            } catch (e: Throwable) {
+                val msg = "AI request failed: ${e.message}"
+                recordDiagnosis(msg)
+                logError("AI resume think failed: ${e.message}", e)
+                return AiResumeResult(false, null, msg)
             }
-            var prePackage = automation.getCurrentPackage().orEmpty()
-            var preSignature = computeNodeSignature(preNodes)
+
+            val decision = TaskStep.tryParse(raw)
+            if (decision == null) {
+                lastReason = "AI replied non-JSON"
+                logWarn("AI resume step $stepNumber: could not parse AI output as action JSON (attempt $attempts): $raw")
+                pushTurn(
+                    history,
+                    raw,
+                    "Your last reply was not valid JSON. Reply with ONLY the single JSON action object: {\"action\": \"<action>\", \"params\": {...}, \"reasoning\": \"<explanation>\", \"is_complete\": false}"
+                )
+                continue
+            }
+
+            val blockedReason = AutomationSafety.isBlocked(decision, automation.getCurrentPackage())
+            if (blockedReason != null) {
+                val msg = "Blocked for safety: $blockedReason"
+                recordDiagnosis(msg)
+                logWarn(msg)
+                return AiResumeResult(false, null, msg)
+            }
+
+            val prePackage = automation.getCurrentPackage().orEmpty()
+            val preSignature = computeNodeSignature(nodes)
+
+            if (decision.action == TaskStep.ACTION_DONE) {
+                // AI says the step is already done — verify the recorded
+                // step's effect on the current screen before believing it.
+                val postNodes = dumpScreenSafe()
+                val postPackage = automation.getCurrentPackage().orEmpty()
+                if (verifyEffect(failedStep, prePackage, preSignature, postPackage, computeNodeSignature(postNodes))) {
+                    return AiResumeResult(true, failedStep, "AI confirmed step $stepNumber is already complete")
+                }
+                lastReason = "AI said done but the recorded step's effect is not visible"
+                pushTurn(
+                    history,
+                    raw,
+                    "ACTION RESULT: [NO_EFFECT] The recorded step is not complete yet. Take one concrete action to complete it."
+                )
+                continue
+            }
+
+            enterPhase("acting", stepNumber, decision.reasoning.ifEmpty { decision.action })
+            val dispatched = _performAction(decision, nodes)
+            if (!dispatched) {
+                lastReason = lastActionError ?: "${decision.action} dispatch failed"
+                pushTurn(
+                    history,
+                    raw,
+                    "ACTION RESULT: [NO_EFFECT] $lastReason. Pick a different approach."
+                )
+                continue
+            }
+            if (decision.action == TaskStep.ACTION_WAIT) {
+                return AiResumeResult(true, decision, "AI waited for step $stepNumber")
+            }
+
+            enterPhase(
+                "observing",
+                stepNumber,
+                if (decision.action == TaskStep.ACTION_OPEN_APP) "waiting for app to open (step $stepNumber)"
+                else "verifying effect of ${decision.action} (step $stepNumber)"
+            )
+            val (postNodes, postPackage, postSignature) = settleAndDump(decision, prePackage)
+            if (verifyEffect(decision, prePackage, preSignature, postPackage, postSignature)) {
+                return AiResumeResult(true, decision, "AI completed step $stepNumber")
+            }
+            lastReason = "${decision.action} was dispatched but the screen did not change"
+            pushTurn(
+                history,
+                raw,
+                "ACTION RESULT: [NO_EFFECT] ${decision.action} was dispatched but the screen did not change. Pick a different approach."
+            )
+        }
+        val msg = "AI could not complete recorded step $stepNumber (${failedStep.action}) after $AI_RESUME_MAX_ATTEMPTS attempts: $lastReason"
+        recordDiagnosis(msg)
+        logWarn(msg)
+        return AiResumeResult(false, null, msg)
+    }
+
+    private fun describeStep(step: TaskStep): String = when (step.action) {
+        TaskStep.ACTION_OPEN_APP -> "open the app '${step.stringParam("app") ?: step.stringParam("package") ?: ""}'"
+        TaskStep.ACTION_CLICK_TEXT -> "tap '${step.stringParam("text") ?: ""}' on screen"
+        TaskStep.ACTION_CLICK_AT -> "tap at (${step.intParam("x")}, ${step.intParam("y")})"
+        TaskStep.ACTION_TYPE_TEXT -> "type '${step.stringParam("text") ?: ""}'"
+        TaskStep.ACTION_PRESS_ENTER -> "press Enter"
+        TaskStep.ACTION_SCROLL -> "scroll ${step.stringParam("direction") ?: "down"}"
+        TaskStep.ACTION_SWIPE -> "swipe on screen"
+        TaskStep.ACTION_PRESS_BACK -> "press Back"
+        TaskStep.ACTION_PRESS_HOME -> "press Home"
+        TaskStep.ACTION_WAIT -> "wait a moment"
+        TaskStep.ACTION_DONE -> "finish"
+        else -> step.action
+    }
+
+    private fun dumpScreenSafe(): List<ScreenNode> {
+        return try {
+            automation.getScreenElements()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+            emptyList()
+        }
+    }
+
+    /**
+     * Turn F(a): after an open_app dispatch, poll the foreground package
+     * until the target is reached (cold start can take 2-5s) instead of a
+     * fixed settle. Returns the last observed package. A package check is
+     * cheap — no screen dump happens inside the poll.
+     */
+    private suspend fun pollForOpenApp(step: TaskStep, prePackage: String): String {
+        val deadline = clockMs() + effectiveOpenAppPollTimeoutMs
+        var current = automation.getCurrentPackage().orEmpty()
+        while (true) {
+            if (openAppTargetReached(step, prePackage, current)) return current
+            if (_cancelRequested) return current
+            if (clockMs() >= deadline) return current
+            delay(effectiveOpenAppPollIntervalMs)
+            current = automation.getCurrentPackage().orEmpty()
+        }
+    }
+
+    /**
+     * Turn F(e/f): one settle + one screen read per verification. open_app
+     * polls for the target package first; every other action waits the short
+     * settle and dumps once. Returns (postNodes, postPackage, postSignature).
+     * Callers set the observing phase before invoking this.
+     */
+    private suspend fun settleAndDump(step: TaskStep, prePackage: String): Triple<List<ScreenNode>, String, Int> {
+        if (step.action == TaskStep.ACTION_OPEN_APP) {
+            pollForOpenApp(step, prePackage)
+        } else {
+            delay(settleDelayMs)
+        }
+        val postNodes = dumpScreenSafe()
+        val postPackage = automation.getCurrentPackage().orEmpty()
+        return Triple(postNodes, postPackage, computeNodeSignature(postNodes))
+    }
+
+    data class ReplayOutcome(
+        val success: Boolean,
+        /** 0-based index of the step that failed, or -1 when the range completed. */
+        val failedStepIndex: Int = -1,
+        val stepsCompleted: Int = 0
+    )
+
+    /**
+     * Turn F(b): replays recorded steps starting at [startIndex] so an AI
+     * fix for one failed step can RESUME the macro instead of restarting
+     * the whole goal. Returns which step failed, if any.
+     */
+    suspend fun replaySkillFrom(skill: Skill, startIndex: Int): ReplayOutcome {
+        if (skill.steps.isEmpty()) {
+            logWarn("Cannot replay skill '${skill.goal}': no steps recorded")
+            return ReplayOutcome(success = false, failedStepIndex = startIndex.coerceAtLeast(0))
+        }
+        val from = startIndex.coerceIn(0, skill.steps.size)
+        val range = skill.steps.subList(from, skill.steps.size)
+        val totalSteps = range.size
+        var stepCount = 0
+        var skippedCount = 0
+        var lastSkippedIndex = -1
+        // Turn F(e): the previous step's post-verification dump is carried
+        // forward as the next step's pre-dump — one screen read per step
+        // instead of two. A retry always re-dumps, so a stale carry
+        // self-heals on the retry path.
+        var carriedNodes: List<ScreenNode>? = null
+        var carriedPackage: String? = null
+        var carriedSignature: Int? = null
+        for ((rangeIndex, step) in range.withIndex()) {
+            val stepIndex = from + rangeIndex
+            val stepNumber = stepIndex + 1
+            if (_cancelRequested) {
+                return ReplayOutcome(success = false, failedStepIndex = stepIndex, stepsCompleted = stepCount)
+            }
+            stepCount++
+            _currentStep = stepNumber
+            enterPhase("replaying step $stepNumber", stepNumber, "Replaying: ${step.action}")
+
+            var preNodes: List<ScreenNode>
+            var prePackage: String
+            var preSignature: Int
+            val carried = carriedNodes
+            if (carried != null && carriedPackage != null && carriedSignature != null) {
+                preNodes = carried
+                prePackage = carriedPackage
+                preSignature = carriedSignature
+                carriedNodes = null
+                carriedPackage = null
+                carriedSignature = null
+            } else {
+                enterPhase("observing", stepNumber, "reading screen (step $stepNumber)")
+                preNodes = dumpScreenSafe()
+                prePackage = automation.getCurrentPackage().orEmpty()
+                preSignature = computeNodeSignature(preNodes)
+            }
 
             val blocked = AutomationSafety.isBlocked(step, prePackage.ifEmpty { null })
             if (blocked != null) {
                 recordDiagnosis("Replayed step blocked for safety: $blocked")
                 logWarn("Replayed step blocked for safety: $blocked")
-                return false
+                return ReplayOutcome(success = false, failedStepIndex = stepIndex, stepsCompleted = stepCount)
             }
 
             if (step.action == TaskStep.ACTION_WAIT || step.action == TaskStep.ACTION_DONE) {
-                enterPhase("acting", stepCount, "executing ${step.action} (step $stepCount)")
+                enterPhase("acting", stepNumber, "executing ${step.action} (step $stepNumber)")
                 _performAction(step, preNodes)
                 delay(stepDelayMs)
+                carriedNodes = null
+                carriedPackage = null
+                carriedSignature = null
                 continue
             }
 
             // (i) Dispatch with one retry after re-dumping the screen
-            enterPhase("acting", stepCount, "executing ${step.action} (step $stepCount)")
+            enterPhase("acting", stepNumber, "executing ${step.action} (step $stepNumber)")
             var ok = _performAction(step, preNodes)
             if (!ok) {
                 val reason = lastActionError ?: "${step.action} dispatch failed"
-                logWarn("Replayed step $stepCount/$totalSteps (${step.action}) dispatch failed ($reason) on attempt 1 — re-dumping screen and retrying once")
+                logWarn("Replayed step $stepNumber/$totalSteps (${step.action}) dispatch failed ($reason) on attempt 1 — re-dumping screen and retrying once")
                 delay(stepDelayMs)
-                if (_cancelRequested) return false
-                enterPhase("observing", stepCount, "re-reading screen for retry (step $stepCount)")
-                preNodes = try {
-                    automation.getScreenElements()
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (_: Throwable) {
-                    emptyList()
+                if (_cancelRequested) {
+                    return ReplayOutcome(success = false, failedStepIndex = stepIndex, stepsCompleted = stepCount)
                 }
+                enterPhase("observing", stepNumber, "re-reading screen for retry (step $stepNumber)")
+                preNodes = dumpScreenSafe()
                 prePackage = automation.getCurrentPackage().orEmpty()
                 preSignature = computeNodeSignature(preNodes)
                 val retryBlocked = AutomationSafety.isBlocked(step, prePackage.ifEmpty { null })
                 if (retryBlocked != null) {
                     recordDiagnosis("Replayed step blocked for safety on retry: $retryBlocked")
                     logWarn("Replayed step blocked for safety on retry: $retryBlocked")
-                    return false
+                    return ReplayOutcome(success = false, failedStepIndex = stepIndex, stepsCompleted = stepCount)
                 }
-                enterPhase("acting", stepCount, "retrying ${step.action} (step $stepCount)")
+                enterPhase("acting", stepNumber, "retrying ${step.action} (step $stepNumber)")
                 ok = _performAction(step, preNodes)
             }
             if (!ok) {
                 val reason = lastActionError ?: "${step.action} dispatch failed"
-                recordDiagnosis("Macro replay step $stepCount failed: $reason")
-                logWarn("Replayed step $stepCount/$totalSteps (${step.action}) dispatch failed after retry ($reason) — aborting replay")
-                return false
+                recordDiagnosis("Macro replay step $stepNumber failed: $reason")
+                logWarn("Replayed step $stepNumber/$totalSteps (${step.action}) dispatch failed after retry ($reason) — aborting replay")
+                return ReplayOutcome(success = false, failedStepIndex = stepIndex, stepsCompleted = stepCount)
             }
 
-            // (ii) Verify effect; if no effect, retry once, then skip non-critical or fail critical
-            val waitMs = if (step.action == TaskStep.ACTION_OPEN_APP) openAppSettleDelayMs else settleDelayMs
-            delay(waitMs)
-            enterPhase("observing", stepCount, "verifying effect (step $stepCount)")
-            var postNodes = try {
-                automation.getScreenElements()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Throwable) {
-                emptyList()
-            }
-            var postPackage = automation.getCurrentPackage().orEmpty()
-            var postSignature = computeNodeSignature(postNodes)
+            // (ii) Verify effect; if no effect, retry once, then skip non-critical or fail critical.
+            // Turn F(a): open_app polls for the target package (cold start)
+            // instead of a fixed 1200ms settle.
+            enterPhase(
+                "observing",
+                stepNumber,
+                if (step.action == TaskStep.ACTION_OPEN_APP) "waiting for app to open (step $stepNumber)"
+                else "verifying effect (step $stepNumber)"
+            )
+            var (postNodes, postPackage, postSignature) = settleAndDump(step, prePackage)
             var effectVerified = verifyEffect(step, prePackage, preSignature, postPackage, postSignature)
 
             if (!effectVerified) {
-                logWarn("Replayed step $stepCount/$totalSteps (${step.action}) had no verified effect — re-dumping screen and retrying once")
-                if (_cancelRequested) return false
+                logWarn("Replayed step $stepNumber/$totalSteps (${step.action}) had no verified effect — re-dumping screen and retrying once")
+                if (_cancelRequested) {
+                    return ReplayOutcome(success = false, failedStepIndex = stepIndex, stepsCompleted = stepCount)
+                }
                 preNodes = postNodes
                 prePackage = postPackage
                 preSignature = postSignature
@@ -558,22 +827,21 @@ class TaskExecutor(
                 if (retryBlocked != null) {
                     recordDiagnosis("Replayed step blocked for safety on effect retry: $retryBlocked")
                     logWarn("Replayed step blocked for safety on effect retry: $retryBlocked")
-                    return false
+                    return ReplayOutcome(success = false, failedStepIndex = stepIndex, stepsCompleted = stepCount)
                 }
-                enterPhase("acting", stepCount, "retrying ${step.action} for effect verification (step $stepCount)")
+                enterPhase("acting", stepNumber, "retrying ${step.action} for effect verification (step $stepNumber)")
                 val retryDispatched = _performAction(step, preNodes)
                 if (retryDispatched) {
-                    delay(waitMs)
-                    enterPhase("observing", stepCount, "verifying effect on retry (step $stepCount)")
-                    postNodes = try {
-                        automation.getScreenElements()
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (_: Throwable) {
-                        emptyList()
-                    }
-                    postPackage = automation.getCurrentPackage().orEmpty()
-                    postSignature = computeNodeSignature(postNodes)
+                    enterPhase(
+                        "observing",
+                        stepNumber,
+                        if (step.action == TaskStep.ACTION_OPEN_APP) "waiting for app to open on retry (step $stepNumber)"
+                        else "verifying effect on retry (step $stepNumber)"
+                    )
+                    val retried = settleAndDump(step, prePackage)
+                    postNodes = retried.first
+                    postPackage = retried.second
+                    postSignature = retried.third
                     effectVerified = verifyEffect(step, prePackage, preSignature, postPackage, postSignature)
                 }
             }
@@ -586,23 +854,31 @@ class TaskExecutor(
                     } else {
                         "critical step ${step.action} had no verified effect"
                     }
-                    recordDiagnosis("Macro replay step $stepCount failed: $detail")
-                    logWarn("Replayed critical step $stepCount/$totalSteps (${step.action}) had no verified effect after retry — aborting replay: $detail")
-                    return false
+                    recordDiagnosis("Macro replay step $stepNumber failed: $detail")
+                    logWarn("Replayed critical step $stepNumber/$totalSteps (${step.action}) had no verified effect after retry — aborting replay: $detail")
+                    return ReplayOutcome(success = false, failedStepIndex = stepIndex, stepsCompleted = stepCount)
                 }
                 skippedCount++
-                logWarn("Replayed non-critical step $stepCount/$totalSteps (${step.action}) had no verified effect after retry — skipping ($skippedCount/$totalSteps skipped)")
+                lastSkippedIndex = stepIndex
+                logWarn("Replayed non-critical step $stepNumber/$totalSteps (${step.action}) had no verified effect after retry — skipping ($skippedCount/$totalSteps skipped)")
             }
+
+            // Carry this step's verified post-dump forward as the next
+            // step's pre-dump (Turn F/e).
+            carriedNodes = postNodes
+            carriedPackage = postPackage
+            carriedSignature = postSignature
         }
 
-        // (iii) If skipped steps are more than half of all steps, replay overall fails
+        // (iii) If skipped steps are more than half of all steps, replay overall fails.
+        // The AI resume path can still fix the last skipped step.
         if (skippedCount * 2 > totalSteps) {
             val diag = "Macro replay failed: skipped $skippedCount of $totalSteps steps (>50%) for '${skill.goal}'"
             recordDiagnosis(diag)
             logWarn(diag)
-            return false
+            return ReplayOutcome(success = false, failedStepIndex = lastSkippedIndex, stepsCompleted = stepCount)
         }
-        return stepCount > 0
+        return ReplayOutcome(success = stepCount > 0, stepsCompleted = stepCount)
     }
 
     private suspend fun runAiLoop(goal: String): TaskResult {
@@ -619,6 +895,11 @@ class TaskExecutor(
         var parseFailures = 0
         var step = 0
         var lastStepHadNoEffect = false
+        // Turn F(e): the previous step's verification dump is carried into
+        // the next step's observe — one screen read per AI step instead of
+        // two. Invalidated whenever anything else touches the screen.
+        var carriedNodes: List<ScreenNode>? = null
+        var carriedDescription: String? = null
 
         while (step < maxSteps) {
             if (_cancelRequested) {
@@ -627,33 +908,44 @@ class TaskExecutor(
 
             step++
             _currentStep = step
-            enterPhase("observing", step, "Observing screen (step $step/$maxSteps)...")
 
             // --- Observe ---
-            val nodes = try {
-                automation.getScreenElements()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Throwable) {
-                logWarn("Failed to read screen: ${e.message}")
-                delay(stepDelayMs)
-                continue
-            }
-
+            // Reuse the previous verification dump when it is non-empty;
+            // otherwise read the screen fresh.
+            val carried = carriedNodes?.takeIf { it.isNotEmpty() }
+            val nodes: List<ScreenNode>
             val description: String
-            if (nodes.isEmpty()) {
-                if (executedSteps.isEmpty()) {
-                    logInfo("Screen appears empty on step 1 — passing open_app hint to AI")
-                    description = "Screen appears empty (use open_app to launch the target app)"
-                } else {
-                    logInfo("Screen appears empty (locked?). Waiting...")
-                    delay(1500)
+            if (carried != null) {
+                nodes = carried
+                description = carriedDescription
+                    ?: automation.getCompressedScreenDescription(nodes, goal)
+                carriedNodes = null
+                carriedDescription = null
+            } else {
+                enterPhase("observing", step, "Observing screen (step $step/$maxSteps)...")
+                val freshNodes = try {
+                    automation.getScreenElements()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    logWarn("Failed to read screen: ${e.message}")
+                    delay(stepDelayMs)
                     continue
                 }
-            } else {
-                val fullDump = automation.formatNodes(nodes)
-                recovery.recordScreen(fullDump)
-                description = automation.getCompressedScreenDescription(nodes, goal)
+                nodes = freshNodes
+                description = if (nodes.isEmpty()) {
+                    if (executedSteps.isEmpty()) {
+                        logInfo("Screen appears empty on step 1 — passing open_app hint to AI")
+                        "Screen appears empty (use open_app to launch the target app)"
+                    } else {
+                        logInfo("Screen appears empty (locked?). Waiting...")
+                        delay(1500)
+                        continue
+                    }
+                } else {
+                    recovery.recordScreen(automation.formatNodes(nodes))
+                    automation.getCompressedScreenDescription(nodes, goal)
+                }
             }
 
             // --- Think ---
@@ -759,18 +1051,24 @@ class TaskExecutor(
                     "ACTION RESULT: [OK] waited."
                 )
             } else {
-                delay(if (decision.action == TaskStep.ACTION_OPEN_APP) openAppSettleDelayMs else settleDelayMs)
-                enterPhase("observing", step, "verifying effect of ${decision.action} (step $step)")
-                val postNodes = try {
-                    automation.getScreenElements()
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (_: Throwable) {
-                    emptyList()
-                }
-                val postPackage = automation.getCurrentPackage().orEmpty()
-                val postSignature = computeNodeSignature(postNodes)
+                // Turn F(a/f): open_app polls for the target package; other
+                // actions wait the short settle. One dump, then carry it
+                // forward as the next step's observe (Turn F/e).
+                enterPhase(
+                    "observing",
+                    step,
+                    if (decision.action == TaskStep.ACTION_OPEN_APP) "waiting for app to open (step $step)"
+                    else "verifying effect of ${decision.action} (step $step)"
+                )
+                val (postNodes, postPackage, postSignature) = settleAndDump(decision, prePackage)
                 val effectVerified = verifyEffect(decision, prePackage, preSignature, postPackage, postSignature)
+                if (postNodes.isNotEmpty()) {
+                    carriedNodes = postNodes
+                    carriedDescription = automation.getCompressedScreenDescription(postNodes, goal)
+                } else {
+                    carriedNodes = null
+                    carriedDescription = null
+                }
 
                 if (effectVerified) {
                     lastStepHadNoEffect = false
@@ -805,6 +1103,10 @@ class TaskExecutor(
                 if (recBlocked == null) {
                     onProgress?.invoke(step, "Recovery: ${recoveryStep.reasoning}")
                     _performAction(recoveryStep, nodes)
+                    // The recovery action changed the screen — the carried
+                    // verification dump is stale, re-read next step.
+                    carriedNodes = null
+                    carriedDescription = null
                 }
             }
 
@@ -994,6 +1296,12 @@ class TaskExecutor(
         const val DEFAULT_THINK_TIMEOUT_MS: Long = 45_000L
         const val DEFAULT_PHASE_WARNING_THRESHOLD_SEC: Long = 20L
         const val MAX_SIGNATURE_NODES: Int = 200
+        /** Turn F(a): how long an open_app step waits for the target package. */
+        const val DEFAULT_OPEN_APP_POLL_TIMEOUT_MS: Long = 8_000L
+        /** Turn F(a): how often the foreground package is re-checked while polling. */
+        const val DEFAULT_OPEN_APP_POLL_INTERVAL_MS: Long = 500L
+        /** Turn F(b): max AI turns spent fixing ONE failed recorded step. */
+        const val AI_RESUME_MAX_ATTEMPTS: Int = 3
 
         fun isCriticalReplayStep(action: String): Boolean =
             action == TaskStep.ACTION_OPEN_APP || action == TaskStep.ACTION_TYPE_TEXT
@@ -1003,6 +1311,25 @@ class TaskExecutor(
                 "${it.className}:${it.text}:${it.contentDescription}:${it.left},${it.top},${it.right},${it.bottom}:${it.isClickable}:${it.isEditable}"
             }.hashCode()
 
+        /**
+         * Turn F(a): does the current foreground package show the app an
+         * open_app step asked for? "Already in target package" counts as
+         * success — a cold start that is still launching is not a failure.
+         */
+        fun openAppTargetReached(step: TaskStep, prePackage: String, postPackage: String): Boolean {
+            val targetQuery = (step.stringParam("app") ?: step.stringParam("package") ?: "").trim()
+            if (targetQuery.isEmpty() || postPackage.isEmpty()) return false
+            if (postPackage == "io.github.ryoaonetsuki.mira" && !targetQuery.contains("mira", ignoreCase = true)) {
+                return false
+            }
+            val resolvedCandidates = ScreenAutomationService.resolveKnownAppPackages(targetQuery)
+            val matchesTarget = postPackage.contains(targetQuery, ignoreCase = true) ||
+                resolvedCandidates.any {
+                    postPackage.equals(it, ignoreCase = true) || postPackage.contains(it, ignoreCase = true)
+                }
+            return postPackage != prePackage || matchesTarget
+        }
+
         fun verifyEffect(
             step: TaskStep,
             prePackage: String,
@@ -1011,19 +1338,7 @@ class TaskExecutor(
             postSignature: Int
         ): Boolean {
             return when (step.action) {
-                TaskStep.ACTION_OPEN_APP -> {
-                    val targetQuery = (step.stringParam("app") ?: step.stringParam("package") ?: "").trim()
-                    if (targetQuery.isEmpty() || postPackage.isEmpty()) return false
-                    if (postPackage == "io.github.ryoaonetsuki.mira" && !targetQuery.contains("mira", ignoreCase = true)) {
-                        return false
-                    }
-                    val resolvedCandidates = ScreenAutomationService.resolveKnownAppPackages(targetQuery)
-                    val matchesTarget = postPackage.contains(targetQuery, ignoreCase = true) ||
-                        resolvedCandidates.any {
-                            postPackage.equals(it, ignoreCase = true) || postPackage.contains(it, ignoreCase = true)
-                        }
-                    postPackage != prePackage || matchesTarget
-                }
+                TaskStep.ACTION_OPEN_APP -> openAppTargetReached(step, prePackage, postPackage)
                 TaskStep.ACTION_CLICK_TEXT,
                 TaskStep.ACTION_CLICK_AT,
                 TaskStep.ACTION_TYPE_TEXT,
@@ -1039,8 +1354,12 @@ class TaskExecutor(
         }
 
         fun shouldAttachScreenshot(nodes: List<ScreenNode>, lastStepHadNoEffect: Boolean): Boolean {
+            // Turn F(d): a screenshot is a per-step tax (capture + base64 +
+            // vision call). Only pay it when the previous step had NO effect
+            // AND the text description is insufficient to decide the next
+            // action (empty screen, or most clickable nodes unlabeled).
+            if (!lastStepHadNoEffect) return false
             if (nodes.isEmpty()) return true
-            if (lastStepHadNoEffect) return true
             val clickableNodes = nodes.filter { it.isClickable }
             if (clickableNodes.isNotEmpty()) {
                 val unlabeledCount = clickableNodes.count { it.text.isBlank() && it.contentDescription.isBlank() }

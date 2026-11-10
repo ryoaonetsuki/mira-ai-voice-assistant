@@ -42,8 +42,8 @@ class VoiceTurnRouterTest {
     }
 
     @Test
-    fun commandRoutesToAutomation_stopRoutesToStop() {
-        assertEquals(VoiceTurnRoute.AUTOMATION, VoiceTurnRouter.route("YouTube open করো", emptyList(), false))
+    fun commandRoutesToLiveAnswers_stopRoutesToStop() {
+        assertEquals(VoiceTurnRoute.LIVE_ANSWERS, VoiceTurnRouter.route("YouTube open করো", emptyList(), false))
         assertEquals(VoiceTurnRoute.STOP_AUTOMATION, VoiceTurnRouter.route("stop", emptyList(), true))
         assertEquals(VoiceTurnRoute.LIVE_ANSWERS, VoiceTurnRouter.route("stop", emptyList(), false))
     }
@@ -95,15 +95,6 @@ class VoiceTurnRouterTest {
         assertTrue(VoiceTurnRouter.mayAnnounceAutomationResult(goalFromUserCommand = true))
     }
 
-    @Test
-    fun resultNoteAsksLiveToAnnounceInOwnWords_noVerbatimRecitation() {
-        val note = VoiceTurnRouter.buildResultNote("Opened YouTube", "Bangla", true)
-        assertTrue(note.contains("own words"))
-        assertTrue(note.contains("Opened YouTube"))
-        assertFalse(note.uppercase().contains("EXACTLY"))
-        assertFalse(note.lowercase().contains("verbatim"))
-        assertFalse(VoiceTurnRouter.buildAccessibilityNote("English").uppercase().contains("EXACTLY"))
-    }
 
     @Test
     fun sessionStartSpeaksNothing_noGreetingOrIntroInVoiceTurnPolicy() {

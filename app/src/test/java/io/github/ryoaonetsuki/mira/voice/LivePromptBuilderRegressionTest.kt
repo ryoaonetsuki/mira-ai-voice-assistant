@@ -212,4 +212,14 @@ class LivePromptBuilderRegressionTest {
         assertTrue(rule.contains("`forget_memory`"))
         assertTrue(rule.contains("Memory tools: when the user tells you something worth remembering, save it quietly with remember_fact (category + fact); use recall_memory when you need a saved fact; never announce saving."))
     }
+
+    @Test
+    fun testBuildToolUseRule_DeclaresTapNumberToolsAndRule() {
+        val rule = LivePromptBuilder.buildToolUseRule("English")
+        assertTrue(rule.contains("`tap_number`"))
+        assertTrue(rule.contains("`show_numbers`"))
+        assertTrue(rule.contains("`hide_numbers`"))
+        assertTrue(rule.contains("tap a number"))
+        assertTrue(rule.contains("tap number N"))
+    }
 }

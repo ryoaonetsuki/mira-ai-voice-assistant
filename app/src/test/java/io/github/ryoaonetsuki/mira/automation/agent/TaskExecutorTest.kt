@@ -1572,15 +1572,30 @@ class TaskExecutorTest {
 
         // Natural Bangla with particle ("টা"), filler ("তো") and word order.
         val result = executor.executeGoal("ফেসবুকটা ওপেন করো তো")
-        val parsed = MiraAutomationBridge.parseDirectAction("ফেসবুকটা ওপেন করো তো")
 
-        assertEquals(
-            "parse=$parsed result=$result think=$thinkCalls actions=${fakePort.actionsPerformed}",
-            TaskStatus.SUCCESS, result.status
-        )
+        assertEquals(TaskStatus.SUCCESS, result.status)
         assertEquals(1, result.stepsUsed)
         assertTrue("Direct path must make zero think calls", thinkCalls.isEmpty())
         assertTrue(fakePort.actionsPerformed.contains("openApp:com.facebook.katana"))
+    }
+
+    @Test
+    fun testDirect_SecondActionBangla_FallsThroughToAiLoop() = runBlocking {
+        // Regression for the tokenize \p{M} fix: "এবং" must survive as one
+        // token so the second-action guard fires. With the old splitter the
+        // Bengali vowel signs shattered the words and this goal wrongly took
+        // the direct PressHome path with zero think calls.
+        val fakePort = FakeAutomationPort(serviceEnabled = true)
+        val skills = SkillMemoryService(InMemorySkillStore())
+        val thinkCalls = mutableListOf<String>()
+        val executor = directExecutor(fakePort, skills, thinkCalls)
+
+        val result = executor.executeGoal("হোমপেজে যাও এবং ফেসবুক খোলো")
+
+        assertTrue(
+            "Bengali second-action goal must NOT take the direct path; it must fall through to the AI loop (thinkCalls=$thinkCalls, result=$result)",
+            thinkCalls.isNotEmpty()
+        )
     }
 
     @Test

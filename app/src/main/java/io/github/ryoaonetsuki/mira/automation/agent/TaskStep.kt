@@ -174,7 +174,29 @@ data class TaskStep(
           rawAction == "tap" ||
           rawAction == "press" ||
           rawAction == "touch") {
-        if (params.containsKey("x") || params.containsKey("y") || params.containsKey("coordinates")) {
+        val hasLabel = params.containsKey("text") || params.containsKey("label") ||
+            params.containsKey("target") || params.containsKey("name") ||
+            json.opt("text") != null || json.opt("label") != null
+        if (hasLabel) {
+          rawAction = ACTION_CLICK_TEXT
+          if (!params.containsKey("text")) {
+            params["text"] = params["label"]
+              ?: params["target"]
+              ?: params["name"]
+              ?: params["value"]
+              ?: json.opt("text")
+              ?: json.opt("label")
+              ?: ""
+          }
+          if (!params.containsKey("fallbackX") && !params.containsKey("x")) {
+            val fx = json.opt("fallbackX") ?: json.opt("x")
+            if (fx != null && fx != JSONObject.NULL) params["fallbackX"] = fx
+          }
+          if (!params.containsKey("fallbackY") && !params.containsKey("y")) {
+            val fy = json.opt("fallbackY") ?: json.opt("y")
+            if (fy != null && fy != JSONObject.NULL) params["fallbackY"] = fy
+          }
+        } else if (params.containsKey("x") || params.containsKey("y") || params.containsKey("coordinates")) {
           rawAction = ACTION_CLICK_AT
         } else if (params.containsKey("app")) {
           rawAction = ACTION_OPEN_APP
@@ -231,6 +253,26 @@ data class TaskStep(
           rawAction == "success" ||
           rawAction == "end") {
         rawAction = ACTION_DONE
+      }
+
+      if (rawAction == ACTION_CLICK_TEXT) {
+        if (!params.containsKey("text")) {
+          params["text"] = params["label"]
+            ?: params["target"]
+            ?: params["name"]
+            ?: params["value"]
+            ?: json.opt("text")
+            ?: json.opt("label")
+            ?: ""
+        }
+        if (!params.containsKey("x") && !params.containsKey("fallbackX")) {
+          val fx = json.opt("fallbackX") ?: json.opt("x")
+          if (fx != null && fx != JSONObject.NULL) params["fallbackX"] = fx
+        }
+        if (!params.containsKey("y") && !params.containsKey("fallbackY")) {
+          val fy = json.opt("fallbackY") ?: json.opt("y")
+          if (fy != null && fy != JSONObject.NULL) params["fallbackY"] = fy
+        }
       }
 
       val reasoning = (json.opt("reasoning") ?: "").toString().let { if (it == "null") "" else it }

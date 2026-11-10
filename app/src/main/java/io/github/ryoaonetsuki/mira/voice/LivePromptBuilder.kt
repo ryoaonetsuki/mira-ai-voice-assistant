@@ -85,7 +85,8 @@ object LivePromptBuilder {
         dateLine: String = "",
         searchAckPhrase: String = "",
         customInstructions: String = "",
-        activeRules: String = ""
+        activeRules: String = "",
+        memorySection: String = ""
     ): String {
         val lang = language.ifBlank { DEFAULT_LANGUAGE }
         val languageRule = buildLanguageRule(lang)
@@ -149,6 +150,12 @@ object LivePromptBuilder {
             append(webSearchRule)
             append("\nTool use rule: ")
             append(toolUseRule)
+            if (memorySection.isNotBlank()) {
+                append("\nMemory:\n")
+                append(memorySection)
+            } else {
+                append("\nMemory: No saved memories yet. Do not invent facts about the user.")
+            }
             if (customInstructions.isNotBlank()) {
                 append("\nUser instructions: ")
                 append(customInstructions)

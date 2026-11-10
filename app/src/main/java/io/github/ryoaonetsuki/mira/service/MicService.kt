@@ -26,6 +26,7 @@ import io.github.ryoaonetsuki.mira.automation.agent.SkillMemoryService
 import io.github.ryoaonetsuki.mira.automation.agent.TaskExecutor
 import io.github.ryoaonetsuki.mira.automation.agent.TaskStatus
 import io.github.ryoaonetsuki.mira.automation.agent.TaskStep
+import io.github.ryoaonetsuki.mira.automation.agent.formatNumberedList
 import io.github.ryoaonetsuki.mira.data.local.MiraDatabase
 import io.github.ryoaonetsuki.mira.data.local.entities.ChatMessageEntity
 import io.github.ryoaonetsuki.mira.data.local.entities.NotificationEntity
@@ -1344,7 +1345,7 @@ internal fun isOffTargetForAction(
     target: String?,
     goalText: String?
 ): Boolean {
-    if (action != TaskStep.ACTION_CLICK_TEXT && action != TaskStep.ACTION_TYPE_TEXT) {
+    if (action != TaskStep.ACTION_CLICK_TEXT && action != TaskStep.ACTION_TYPE_TEXT && action != "tap_number" && action != TaskStep.ACTION_CLICK_NUMBER) {
         return false
     }
     val effectiveTarget = target ?: goalText?.let { MiraAutomationBridge.extractTargetApp(it) }
@@ -1475,10 +1476,10 @@ private suspend fun executeFunctionCallInternal(
         }
     }
 
-    // Phone-action tool findMatch check: when a phone-action tool (open_app, click_text, type_text, scroll)
+    // Phone-action tool findMatch check: when a phone-action tool (open_app, click_text, type_text, scroll, tap_number, show_numbers, hide_numbers)
     // is invoked and SkillMemoryService.findMatch matches the current goal, replay the skill directly
     // instead of executing the single step, and return the replay result as the tool result.
-    val isPhoneAction = normName in setOf("open_app", "click_text", "type_text", "scroll")
+    val isPhoneAction = normName in setOf("open_app", "click_text", "type_text", "scroll", "tap_number", "show_numbers", "hide_numbers")
     if (isPhoneAction && !resolvedGoal.isNullOrBlank() && skills != null) {
         val matchedSkill = skills.findMatch(resolvedGoal)
         if (matchedSkill != null) {
@@ -1662,6 +1663,117 @@ private suspend fun executeFunctionCallInternal(
                 postNodes = postNodes,
                 isStepOpenApp = false,
                 descriptionContext = "Clicked $text"
+            )
+        }
+
+        "tap_number" -> {
+            val number = (typedArgs["number"] as? Number)?.toInt()
+                ?: (typedArgs["number"] as? String)?.toIntOrNull()
+                ?: rawArgs["number"]?.toIntOrNull()
+            if (number == null || number <= 0) {
+                return Value.Object("error" to Value.Str("Missing or invalid number argument for tap_number"))
+            }
+
+            val prePackage = automationPort.getCurrentPackage().orEmpty()
+
+            // Milestone 6 Off-target refusal guard: refuse BEFORE executing tap_number
+            if (isOffTargetForAction("tap_number", prePackage, resolvedTarget, resolvedGoal)) {
+                val postNodes = automationPort.dumpScreen()
+                val targetName = resolvedTarget ?: resolvedGoal?.let { MiraAutomationBridge.extractTargetApp(it) } ?: "target app"
+                val outcome = "Current screen package '$prePackage' is not on the target app '$targetName'. You must call open_app first before tapping a number."
+                return buildActionResult(
+                    automationPort = automationPort,
+                    outcome = outcome,
+                    success = false,
+                    postPackage = prePackage,
+                    postNodes = postNodes,
+                    isStepOpenApp = false,
+                    descriptionContext = resolvedGoal.orEmpty()
+                )
+            }
+
+            val preNodes = automationPort.dumpScreen()
+            val preSignature = TaskExecutor.computeNodeSignature(preNodes)
+
+            val actionSuccess = automationPort.clickNumber(number)
+            if (settleDelayMs > 0L) {
+                delay(settleDelayMs)
+            }
+
+            val postPackage = automationPort.getCurrentPackage().orEmpty()
+            val postNodes = automationPort.dumpScreen()
+            val postSignature = TaskExecutor.computeNodeSignature(postNodes)
+
+            val step = TaskStep(action = TaskStep.ACTION_CLICK_NUMBER, params = mapOf("number" to number))
+            MicService.lastExecutedStep = step
+
+            val effectiveTarget = resolvedTarget ?: if (prePackage.isNotEmpty() && !TaskExecutor.isLauncherPackage(prePackage) && prePackage != "io.github.ryoaonetsuki.mira") prePackage else null
+            val wrongPackage = isWrongPackageChange(step.action, prePackage, postPackage, effectiveTarget, resolvedGoal)
+
+            val effectVerified = !wrongPackage && actionSuccess && TaskExecutor.verifyEffect(
+                step = step,
+                prePackage = prePackage,
+                preSignature = preSignature,
+                postPackage = postPackage,
+                postSignature = postSignature,
+                goal = resolvedGoal,
+                targetApp = effectiveTarget
+            )
+
+            val outcome = if (wrongPackage) {
+                "Action tap_number '$number' changed package from '$prePackage' to '$postPackage' which does not match target '$effectiveTarget' (wrong-package change failure)"
+            } else if (effectVerified) {
+                "Successfully tapped number $number"
+            } else if (!actionSuccess) {
+                "tap_number $number failed (no tappable element with that number)"
+            } else {
+                "tap_number $number dispatched but had no verified effect on screen"
+            }
+
+            return buildActionResult(
+                automationPort = automationPort,
+                outcome = outcome,
+                success = effectVerified,
+                postPackage = postPackage,
+                postNodes = postNodes,
+                isStepOpenApp = false,
+                descriptionContext = "Tapped number $number"
+            )
+        }
+
+        "show_numbers" -> {
+            val numbered = automationPort.showTapNumbers()
+            if (numbered.isEmpty()) {
+                return Value.Object("error" to Value.Str("Could not show tap numbers: no tappable elements found, or the \"Display over other apps\" permission is not granted - enable it in setup."))
+            }
+
+            val postPackage = automationPort.getCurrentPackage().orEmpty()
+            val postNodes = automationPort.dumpScreen()
+
+            return buildActionResult(
+                automationPort = automationPort,
+                outcome = formatNumberedList(numbered),
+                success = true,
+                postPackage = postPackage,
+                postNodes = postNodes,
+                isStepOpenApp = false,
+                descriptionContext = "Tap numbers"
+            )
+        }
+
+        "hide_numbers" -> {
+            automationPort.hideTapNumbers()
+            val postPackage = automationPort.getCurrentPackage().orEmpty()
+            val postNodes = automationPort.dumpScreen()
+
+            return buildActionResult(
+                automationPort = automationPort,
+                outcome = "Tap numbers hidden",
+                success = true,
+                postPackage = postPackage,
+                postNodes = postNodes,
+                isStepOpenApp = false,
+                descriptionContext = "Tap numbers hidden"
             )
         }
 

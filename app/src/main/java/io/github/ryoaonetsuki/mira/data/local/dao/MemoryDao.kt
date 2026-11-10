@@ -32,4 +32,22 @@ interface MemoryDao {
 
     @Query("UPDATE memories SET playCount = playCount + 1 WHERE id = :id")
     suspend fun incrementPlayCount(id: Long)
+
+    @Query("SELECT * FROM memories")
+    suspend fun getAllMemoriesOnce(): List<MemoryEntity>
+
+    @Query("SELECT COUNT(*) FROM memories")
+    suspend fun getMemoryCount(): Int
+
+    @Query("UPDATE memories SET useCount = useCount + 1, lastUsedAt = :now WHERE id = :id")
+    suspend fun markMemoryUsed(id: Long, now: Long)
+
+    @Query("DELETE FROM memories WHERE id = (SELECT id FROM memories ORDER BY CASE WHEN origin = 'explicit' THEN 1 ELSE 0 END, importance ASC, lastUsedAt ASC LIMIT 1)")
+    suspend fun evictLowestMemory()
+
+    @Query("SELECT * FROM memories WHERE content = :content LIMIT 1")
+    suspend fun getMemoryByContent(content: String): MemoryEntity?
+
+    @Query("DELETE FROM memories WHERE LOWER(content) LIKE '%' || LOWER(:text) || '%'")
+    suspend fun deleteMemoriesContaining(text: String): Int
 }

@@ -387,20 +387,33 @@ class MiraAccessibilityService : AccessibilityService() {
      * Prefers native scroll action on first scrollable node, then gesture fallback.
      */
     fun scroll(direction: String): Boolean {
+        return scroll(direction, null)
+    }
+
+    /**
+     * Turn F-direct: scroll by a relative fraction of the screen. When
+     * [fraction] is given (e.g. 0.15 for "a bit"), the gesture path is used
+     * directly — ACTION_SCROLL_FORWARD's distance is system-defined and
+     * cannot be "a bit". When null, the scroll action is tried first with
+     * the 0.30f gesture as fallback (previous behaviour).
+     */
+    fun scroll(direction: String, fraction: Float?): Boolean {
         return try {
             val dir = direction.lowercase()
             val forward = dir == "down" || dir == "right"
             val vertical = dir == "down" || dir == "up"
 
-            val scrollable = findFirstScrollable(rootInActiveWindow)
-            if (scrollable != null) {
-                val action = if (forward) {
-                    AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
-                } else {
-                    AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
-                }
-                if (scrollable.performAction(action)) {
-                    return true
+            if (fraction == null) {
+                val scrollable = findFirstScrollable(rootInActiveWindow)
+                if (scrollable != null) {
+                    val action = if (forward) {
+                        AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+                    } else {
+                        AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+                    }
+                    if (scrollable.performAction(action)) {
+                        return true
+                    }
                 }
             }
 
@@ -410,8 +423,8 @@ class MiraAccessibilityService : AccessibilityService() {
             val h = metrics.heightPixels.toFloat()
             val cx = w / 2f
             val cy = h / 2f
-            val dy = h * 0.30f
-            val dx = w * 0.30f
+            val dy = h * (fraction ?: 0.30f)
+            val dx = w * (fraction ?: 0.30f)
             when (dir) {
                 "down" -> swipe(cx, cy + dy / 2, cx, cy - dy / 2, 380L)
                 "up" -> swipe(cx, cy - dy / 2, cx, cy + dy / 2, 380L)

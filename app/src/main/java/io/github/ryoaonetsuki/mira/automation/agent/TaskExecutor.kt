@@ -99,6 +99,7 @@ class TaskExecutor(
     private val planWithVision: (suspend (goal: String, screenDescription: String, screenshotJpeg: ByteArray) -> String)? = null,
     private val taskTimeoutMs: Long = DEFAULT_TASK_TIMEOUT_MS,
     private val thinkTimeoutMs: Long = DEFAULT_THINK_TIMEOUT_MS,
+    private val cumulativeThinkBudgetMs: Long = DEFAULT_CUMULATIVE_THINK_BUDGET_MS,
     private val clockMs: () -> Long = { System.currentTimeMillis() },
     private val phaseWarningThresholdSec: Long = DEFAULT_PHASE_WARNING_THRESHOLD_SEC,
     // Turn F(a): cold app launch (YouTube commonly 2-5s) is polled instead of
@@ -149,6 +150,10 @@ class TaskExecutor(
     @Volatile
     private var lastActionError: String? = null
 
+    @Volatile
+    private var _cumulativeThinkTimeMs: Long = 0L
+    val cumulativeThinkTimeMs: Long get() = _cumulativeThinkTimeMs
+
     private fun enterPhase(phase: String, step: Int, detail: String = "") {
         _currentPhase = phase
         _currentStep = step
@@ -178,6 +183,7 @@ class TaskExecutor(
         _lastDiagnosis = null
         _lastError = null
         lastActionError = null
+        _cumulativeThinkTimeMs = 0L
         _currentStep = 0
         _currentPhase = "starting"
         _phaseDetail = goal
@@ -390,12 +396,15 @@ class TaskExecutor(
         // in-app search from the app's real home screen.
         val targetApp = action.targetApp
         if (targetApp != null && targetApp != YOUTUBE_PACKAGE) {
+            val prePackage = automation.getCurrentPackage().orEmpty()
             val launched = automation.openApp(targetApp)
             if (launched == null) {
                 val msg = "Could not open $targetApp to search for '${action.query}'"
                 recordDiagnosis(msg)
                 return TaskResult(TaskStatus.FAILED, msg, 1)
             }
+            val step = TaskStep(action = TaskStep.ACTION_OPEN_APP, params = mapOf("app" to targetApp))
+            pollForOpenApp(step, prePackage)
             recordDiagnosis(
                 "Search for '${action.query}' is inside $targetApp, not the web — opened the app; planning the in-app search from its home screen."
             )
@@ -497,6 +506,7 @@ class TaskExecutor(
         // Vision planner without a screenshot has no pixels to plan from.
         if (!useVision && textPlanner == null) return null
         val raw: String
+        val thinkStart = clockMs()
         try {
             raw = withTimeout(thinkTimeoutMs) {
                 if (useVision) {
@@ -515,8 +525,10 @@ class TaskExecutor(
         } catch (e: Throwable) {
             logWarn("Planning failed: ${e.message}")
             return null
+        } finally {
+            _cumulativeThinkTimeMs += (clockMs() - thinkStart)
         }
-        val parsed = parseAiPlan(raw) ?: run {
+        val parsed = parseAiPlan(raw, goal, automation.getCurrentPackage().orEmpty()) ?: run {
             logWarn("Planning returned no usable command list: $raw")
             return null
         }
@@ -594,7 +606,11 @@ class TaskExecutor(
      * normalisation as single-step decisions (TaskStep.tryParse). Unsupported
      * actions are dropped; a plan with no usable steps returns null.
      */
-    internal fun parseAiPlan(raw: String): AiPlan? {
+    internal fun parseAiPlan(
+        raw: String,
+        goal: String? = null,
+        currentPackage: String? = null
+    ): AiPlan? {
         var text = raw.trim()
         if (text.isEmpty()) return null
         val fence = Regex("""```(?:json)?\s*([\s\S]*?)```""", RegexOption.IGNORE_CASE).find(text)
@@ -630,6 +646,29 @@ class TaskExecutor(
             if (hadDoneStep) return AiPlan(emptyList(), done = true)
             return null
         }
+        // Turn G: Enforce home-first structurally. If the current package does not
+        // match the goal's target package and the first step is an action step before
+        // any open_app or press_home, repair the plan by prepending open_app(target).
+        if (goal != null) {
+            val target = MiraAutomationBridge.extractTargetApp(goal)
+            val curr = currentPackage.orEmpty()
+            if (target != null && (curr.isEmpty() || !matchesTarget(target, curr))) {
+                val firstStep = steps.firstOrNull()
+                if (firstStep != null &&
+                    firstStep.action != TaskStep.ACTION_OPEN_APP &&
+                    firstStep.action != TaskStep.ACTION_PRESS_HOME
+                ) {
+                    steps.add(
+                        0,
+                        TaskStep(
+                            action = TaskStep.ACTION_OPEN_APP,
+                            params = mapOf("app" to target),
+                            reasoning = "Structural home-first: launch target app first"
+                        )
+                    )
+                }
+            }
+        }
         return AiPlan(steps, done)
     }
 
@@ -643,6 +682,7 @@ class TaskExecutor(
         _lastDiagnosis = null
         _lastError = null
         lastActionError = null
+        _cumulativeThinkTimeMs = 0L
         _currentStep = 0
         _currentPhase = "starting"
         _phaseDetail = skill.goal
@@ -834,6 +874,12 @@ class TaskExecutor(
         var attempts = 0
         while (attempts < AI_RESUME_MAX_ATTEMPTS) {
             if (_cancelRequested) return AiResumeResult(false, null, "cancelled by user")
+            if (_cumulativeThinkTimeMs >= cumulativeThinkBudgetMs) {
+                val msg = "Per-task think budget exhausted (${cumulativeThinkBudgetMs / 1000}s reached)"
+                recordDiagnosis(msg)
+                logWarn(msg)
+                return AiResumeResult(false, null, msg)
+            }
             attempts++
             _currentStep = stepNumber
             enterPhase("thinking", stepNumber, "AI fixing recorded step $stepNumber (attempt $attempts/$AI_RESUME_MAX_ATTEMPTS)")
@@ -844,6 +890,7 @@ class TaskExecutor(
                 automation.getCompressedScreenDescription(nodes, goalText)
             }
             val raw: String
+            val thinkStart = clockMs()
             try {
                 raw = withTimeout(thinkTimeoutMs) {
                     val fn = think
@@ -868,6 +915,8 @@ class TaskExecutor(
                 recordDiagnosis(msg)
                 logError("AI resume think failed: ${e.message}", e)
                 return AiResumeResult(false, null, msg)
+            } finally {
+                _cumulativeThinkTimeMs += (clockMs() - thinkStart)
             }
 
             val decision = TaskStep.tryParse(raw)
@@ -893,7 +942,7 @@ class TaskExecutor(
                 // step's effect on the current screen before believing it.
                 val postNodes = dumpScreenSafe()
                 val postPackage = automation.getCurrentPackage().orEmpty()
-                if (verifyEffect(failedStep, prePackage, preSignature, postPackage, computeNodeSignature(postNodes))) {
+                if (verifyEffect(failedStep, prePackage, preSignature, postPackage, computeNodeSignature(postNodes), goal = goalText)) {
                     return AiResumeResult(true, failedStep, "AI confirmed step $stepNumber is already complete")
                 }
                 lastReason = "AI said done but the recorded step's effect is not visible"
@@ -927,7 +976,7 @@ class TaskExecutor(
                 else "verifying effect of ${decision.action} (step $stepNumber)"
             )
             val (postNodes, postPackage, postSignature) = settleAndDump(decision, prePackage)
-            if (verifyEffect(decision, prePackage, preSignature, postPackage, postSignature)) {
+            if (verifyEffect(decision, prePackage, preSignature, postPackage, postSignature, goal = goalText)) {
                 return AiResumeResult(true, decision, "AI completed step $stepNumber")
             }
             lastReason = "${decision.action} was dispatched but the screen did not change"
@@ -1119,7 +1168,7 @@ class TaskExecutor(
                 else "verifying effect (step $stepNumber)"
             )
             var (postNodes, postPackage, postSignature) = settleAndDump(step, prePackage)
-            var effectVerified = verifyEffect(step, prePackage, preSignature, postPackage, postSignature)
+            var effectVerified = verifyEffect(step, prePackage, preSignature, postPackage, postSignature, goal = skill.goal)
 
             if (!effectVerified) {
                 logWarn("Replayed step $stepNumber/$totalSteps (${step.action}) had no verified effect — re-dumping screen and retrying once")
@@ -1142,7 +1191,7 @@ class TaskExecutor(
                     postNodes = retried.first
                     postPackage = retried.second
                     postSignature = retried.third
-                    effectVerified = verifyEffect(step, prePackage, preSignature, postPackage, postSignature)
+                    effectVerified = verifyEffect(step, prePackage, preSignature, postPackage, postSignature, goal = skill.goal)
                 }
             }
 
@@ -1255,7 +1304,18 @@ class TaskExecutor(
             }
 
             // --- Think ---
+            if (_cumulativeThinkTimeMs >= cumulativeThinkBudgetMs) {
+                val thinkMsg = "Per-task think budget exhausted (${cumulativeThinkBudgetMs / 1000}s reached)"
+                recordDiagnosis(thinkMsg)
+                logWarn(thinkMsg)
+                return TaskResult(
+                    status = TaskStatus.FAILED,
+                    message = thinkMsg,
+                    stepsUsed = step
+                )
+            }
             enterPhase("thinking", step, "waiting for AI reply (step $step)")
+            val thinkStart = clockMs()
             val raw: String
             try {
                 raw = withTimeout(thinkTimeoutMs) {
@@ -1278,6 +1338,8 @@ class TaskExecutor(
                 val errMsg = "AI request failed: ${e.message}"
                 recordDiagnosis(errMsg)
                 return TaskResult(TaskStatus.FAILED, errMsg, step)
+            } finally {
+                _cumulativeThinkTimeMs += (clockMs() - thinkStart)
             }
 
             val decision = TaskStep.tryParse(raw)
@@ -1366,7 +1428,7 @@ class TaskExecutor(
                     else "verifying effect of ${decision.action} (step $step)"
                 )
                 val (postNodes, postPackage, postSignature) = settleAndDump(decision, prePackage)
-                val effectVerified = verifyEffect(decision, prePackage, preSignature, postPackage, postSignature)
+                val effectVerified = verifyEffect(decision, prePackage, preSignature, postPackage, postSignature, goal = goal)
                 if (postNodes.isNotEmpty()) {
                     carriedNodes = postNodes
                     carriedDescription = automation.getCompressedScreenDescription(postNodes, goal)
@@ -1651,6 +1713,13 @@ class TaskExecutor(
         private const val TAG = "TaskExecutor"
         const val DEFAULT_TASK_TIMEOUT_MS: Long = 120_000L
         const val DEFAULT_THINK_TIMEOUT_MS: Long = 45_000L
+        /**
+         * Turn G: cumulative per-task think budget. The 120s task budget is split
+         * roughly half-and-half between LLM think time (60s) and dispatch/settle/verify/re-dump
+         * time, preventing repetitive think timeouts from consuming the full task budget.
+         * Once exhausted, no new think calls are started.
+         */
+        const val DEFAULT_CUMULATIVE_THINK_BUDGET_MS: Long = 60_000L
         const val DEFAULT_PHASE_WARNING_THRESHOLD_SEC: Long = 20L
         const val MAX_SIGNATURE_NODES: Int = 200
         /** Turn F(a): how long an open_app step waits for the target package. */
@@ -1684,6 +1753,37 @@ class TaskExecutor(
                 lower.contains("contacts")
         }
 
+        fun isLauncherPackage(pkg: String): Boolean {
+            val lower = pkg.lowercase()
+            return lower.contains("launcher") || lower.contains("home") ||
+                lower == "com.google.android.apps.nexuslauncher" ||
+                lower == "com.android.launcher3" ||
+                lower == "com.sec.android.app.launcher" ||
+                lower == "com.mi.android.globallauncher"
+        }
+
+        fun matchesTarget(targetQuery: String, pkg: String): Boolean {
+            if (targetQuery.isEmpty() || pkg.isEmpty()) return false
+            if (pkg == "io.github.ryoaonetsuki.mira" && !targetQuery.contains("mira", ignoreCase = true)) {
+                return false
+            }
+            val resolvedCandidates = ScreenAutomationService.resolveKnownAppPackages(targetQuery)
+            return pkg.contains(targetQuery, ignoreCase = true) ||
+                resolvedCandidates.any {
+                    pkg.equals(it, ignoreCase = true) || pkg.contains(it, ignoreCase = true)
+                }
+        }
+
+        fun isWebGoal(goal: String?): Boolean {
+            if (goal.isNullOrBlank()) return false
+            val lower = goal.lowercase()
+            if (lower.contains("http://") || lower.contains("https://") || lower.contains("www.") || lower.contains(".com")) return true
+            if (lower.contains("google") || lower.contains("search") || lower.contains("browse") || lower.contains("website") || lower.contains("web")) return true
+            if (lower.contains("খুঁজো") || lower.contains("সার্চ") || lower.contains("ব্রাউজ")) return true
+            val target = MiraAutomationBridge.extractTargetApp(goal)
+            return target != null && isBrowserPackage(target)
+        }
+
         fun isCriticalReplayStep(action: String): Boolean =
             action == TaskStep.ACTION_OPEN_APP || action == TaskStep.ACTION_TYPE_TEXT
 
@@ -1703,15 +1803,7 @@ class TaskExecutor(
          */
         fun openAppTargetReached(step: TaskStep, prePackage: String, postPackage: String): Boolean {
             val targetQuery = (step.stringParam("app") ?: step.stringParam("package") ?: "").trim()
-            if (targetQuery.isEmpty() || postPackage.isEmpty()) return false
-            if (postPackage == "io.github.ryoaonetsuki.mira" && !targetQuery.contains("mira", ignoreCase = true)) {
-                return false
-            }
-            val resolvedCandidates = ScreenAutomationService.resolveKnownAppPackages(targetQuery)
-            return postPackage.contains(targetQuery, ignoreCase = true) ||
-                resolvedCandidates.any {
-                    postPackage.equals(it, ignoreCase = true) || postPackage.contains(it, ignoreCase = true)
-                }
+            return matchesTarget(targetQuery, postPackage)
         }
 
         fun verifyEffect(
@@ -1719,8 +1811,12 @@ class TaskExecutor(
             prePackage: String,
             preSignature: Int,
             postPackage: String,
-            postSignature: Int
+            postSignature: Int,
+            goal: String? = null,
+            targetApp: String? = null
         ): Boolean {
+            val target = targetApp ?: goal?.let { MiraAutomationBridge.extractTargetApp(it) }
+            val isWeb = isWebGoal(goal) || (target != null && isBrowserPackage(target))
             return when (step.action) {
                 TaskStep.ACTION_OPEN_APP -> openAppTargetReached(step, prePackage, postPackage)
                 TaskStep.ACTION_CLICK_TEXT,
@@ -1733,7 +1829,25 @@ class TaskExecutor(
                 TaskStep.ACTION_PRESS_BACK,
                 TaskStep.ACTION_PRESS_HOME,
                 TaskStep.ACTION_PRESS_ENTER -> {
-                    postPackage != prePackage || postSignature != preSignature
+                    if (postPackage != prePackage && postPackage.isNotEmpty()) {
+                        if (step.action == TaskStep.ACTION_PRESS_HOME && isLauncherPackage(postPackage)) {
+                            true
+                        } else if (target != null) {
+                            if (matchesTarget(target, postPackage)) {
+                                true
+                            } else if (isWeb && isBrowserPackage(postPackage)) {
+                                true
+                            } else {
+                                false // Turn G: A wrong-package change is a failure, never an effect!
+                            }
+                        } else if (isWeb) {
+                            isBrowserPackage(postPackage)
+                        } else {
+                            true
+                        }
+                    } else {
+                        postSignature != preSignature
+                    }
                 }
                 else -> true
             }

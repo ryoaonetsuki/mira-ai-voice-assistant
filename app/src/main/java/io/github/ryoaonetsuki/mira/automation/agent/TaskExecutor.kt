@@ -6,6 +6,7 @@ import android.util.Log
 import io.github.ryoaonetsuki.mira.automation.MiraAutomationBridge
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -20,6 +21,12 @@ enum class TaskStatus {
     SUCCESS,
     FAILED,
     CANCELLED
+}
+
+enum class ExecutorState {
+    IDLE,
+    RUNNING,
+    PAUSED
 }
 
 data class TaskResult(
@@ -97,7 +104,8 @@ class TaskExecutor(
     // Turn F(a): cold app launch (YouTube commonly 2-5s) is polled instead of
     // a fixed settle + one retry.
     private val openAppPollTimeoutMs: Long = DEFAULT_OPEN_APP_POLL_TIMEOUT_MS,
-    private val openAppPollIntervalMs: Long = DEFAULT_OPEN_APP_POLL_INTERVAL_MS
+    private val openAppPollIntervalMs: Long = DEFAULT_OPEN_APP_POLL_INTERVAL_MS,
+    private val historyStore: TaskHistoryStore? = null
 ) {
     // Turn F(f): 700ms -> 350ms settle for non-open_app steps.
     private val settleDelayMs: Long = if (stepDelayMs == 0L) 0L else 350L
@@ -108,9 +116,35 @@ class TaskExecutor(
     private val effectiveOpenAppPollIntervalMs: Long =
         if (stepDelayMs == 0L) 0L else openAppPollIntervalMs
 
+    private val pauseLock = Any()
+
     @Volatile
     private var _isRunning: Boolean = false
-    val isRunning: Boolean get() = _isRunning
+    val isRunning: Boolean get() = _isRunning && !_isPaused
+
+    @Volatile
+    private var _isPaused: Boolean = false
+    val isPaused: Boolean get() = _isPaused
+
+    val state: ExecutorState
+        get() = when {
+            _isPaused -> ExecutorState.PAUSED
+            _isRunning -> ExecutorState.RUNNING
+            else -> ExecutorState.IDLE
+        }
+
+    val isBusy: Boolean get() = _isRunning || _isPaused
+
+    @Volatile
+    private var taskStartMs: Long = 0L
+
+    @Volatile
+    private var totalPausedMs: Long = 0L
+
+    @Volatile
+    private var pauseStartMs: Long = 0L
+
+    private val _runStepDescriptions = mutableListOf<String>()
 
     @Volatile
     private var _cancelRequested: Boolean = false
@@ -158,15 +192,76 @@ class TaskExecutor(
 
     private val recovery = RecoveryEngine()
 
+    fun pause() {
+        synchronized(pauseLock) {
+            if (!_isRunning || _isPaused) return
+            _isPaused = true
+            pauseStartMs = clockMs()
+            onProgress?.invoke(_currentStep, "Paused")
+        }
+    }
+
+    fun resume() {
+        synchronized(pauseLock) {
+            if (!_isPaused) return
+            if (pauseStartMs > 0L) {
+                totalPausedMs += (clockMs() - pauseStartMs).coerceAtLeast(0L)
+                pauseStartMs = 0L
+            }
+            _isPaused = false
+            onProgress?.invoke(_currentStep, "Resumed")
+        }
+    }
+
     fun cancel() {
         _cancelRequested = true
+        synchronized(pauseLock) {
+            if (_isPaused) {
+                if (pauseStartMs > 0L) {
+                    totalPausedMs += (clockMs() - pauseStartMs).coerceAtLeast(0L)
+                    pauseStartMs = 0L
+                }
+                _isPaused = false
+            }
+        }
+    }
+
+    fun activeElapsedMs(): Long {
+        val start = taskStartMs
+        if (start <= 0L) return 0L
+        val now = clockMs()
+        val currentPauseSpan = synchronized(pauseLock) {
+            if (_isPaused && pauseStartMs > 0L) {
+                (now - pauseStartMs).coerceAtLeast(0L)
+            } else {
+                0L
+            }
+        }
+        return ((now - start) - (totalPausedMs + currentPauseSpan)).coerceAtLeast(0L)
+    }
+
+    private suspend fun awaitIfPaused(): Boolean {
+        while (_isPaused) {
+            if (_cancelRequested) return false
+            delay(200L)
+        }
+        return !_cancelRequested
+    }
+
+    private fun recordStepDescription(desc: String) {
+        synchronized(_runStepDescriptions) {
+            if (_runStepDescriptions.size < 50) {
+                _runStepDescriptions.add(desc)
+            }
+        }
     }
 
     suspend fun replaySkillDirect(skill: Skill): TaskResult {
-        if (_isRunning) {
+        if (_isRunning || _isPaused) {
             return TaskResult(TaskStatus.FAILED, "Another task is already running", 0)
         }
         _isRunning = true
+        _isPaused = false
         _cancelRequested = false
         _lastDiagnosis = null
         _lastError = null
@@ -175,34 +270,65 @@ class TaskExecutor(
         _currentPhase = "starting"
         _phaseDetail = skill.goal
         _phaseStartTimeMs = clockMs()
+        taskStartMs = clockMs()
+        totalPausedMs = 0L
+        pauseStartMs = 0L
         recovery.reset()
+        synchronized(_runStepDescriptions) {
+            _runStepDescriptions.clear()
+        }
+
+        val startedAtWallMs = System.currentTimeMillis()
+        var finalResult: TaskResult? = null
 
         try {
-            val timedResult = withTimeoutOrNull(taskTimeoutMs) {
-                coroutineScope {
-                    val phaseWatcher = launch {
-                        while (isActive) {
-                            delay(1000L)
-                            val start = _phaseStartTimeMs
-                            if (start > 0L) {
-                                val elapsedSec = (clockMs() - start) / 1000L
-                                if (elapsedSec >= phaseWarningThresholdSec) {
-                                    val detailSuffix = if (_phaseDetail.isNotBlank()) " — ${_phaseDetail}" else ""
-                                    val warning = "Still ${_currentPhase}… (${elapsedSec}s)$detailSuffix"
-                                    _lastDiagnosis = warning
-                                    onProgress?.invoke(_currentStep, warning)
-                                }
+            var timedOut = false
+            coroutineScope {
+                val replayJob = async {
+                    replaySkillDirectInternal(skill)
+                }
+                val timeoutWatcher = launch {
+                    while (replayJob.isActive) {
+                        delay(100L)
+                        if (activeElapsedMs() >= taskTimeoutMs) {
+                            timedOut = true
+                            replayJob.cancel()
+                            break
+                        }
+                    }
+                }
+                val phaseWatcher = launch {
+                    while (replayJob.isActive) {
+                        delay(1000L)
+                        if (_isPaused) continue
+                        val start = _phaseStartTimeMs
+                        if (start > 0L) {
+                            val elapsedSec = (clockMs() - start) / 1000L
+                            if (elapsedSec >= phaseWarningThresholdSec) {
+                                val detailSuffix = if (_phaseDetail.isNotBlank()) " — ${_phaseDetail}" else ""
+                                val warning = "Still ${_currentPhase}… (${elapsedSec}s)$detailSuffix"
+                                _lastDiagnosis = warning
+                                onProgress?.invoke(_currentStep, warning)
                             }
                         }
                     }
-                    try {
-                        replaySkillDirectInternal(skill)
-                    } finally {
-                        phaseWatcher.cancel()
+                }
+
+                try {
+                    finalResult = replayJob.await()
+                } catch (e: CancellationException) {
+                    if (timedOut) {
+                        finalResult = null
+                    } else {
+                        throw e
                     }
+                } finally {
+                    timeoutWatcher.cancel()
+                    phaseWatcher.cancel()
                 }
             }
-            if (timedResult == null) {
+
+            if (finalResult == null) {
                 _cancelRequested = true
                 val step = _currentStep
                 val phase = _currentPhase
@@ -214,18 +340,64 @@ class TaskExecutor(
                 }
                 recordDiagnosis(timeoutMsg)
                 logWarn("Skill replay '${skill.goal}' timed out after ${taskTimeoutMs}ms: $timeoutMsg")
-                return TaskResult(
+                val timeoutResult = TaskResult(
                     status = TaskStatus.FAILED,
                     message = timeoutMsg,
                     stepsUsed = step
                 )
+                finalResult = timeoutResult
+                return timeoutResult
             }
-            return timedResult
+            return finalResult!!
+        } catch (e: CancellationException) {
+            if (finalResult == null) {
+                finalResult = TaskResult(
+                    status = TaskStatus.CANCELLED,
+                    message = "Task cancelled by user",
+                    stepsUsed = _currentStep
+                )
+            }
+            throw e
+        } catch (e: Throwable) {
+            if (finalResult == null) {
+                finalResult = TaskResult(
+                    status = TaskStatus.FAILED,
+                    message = e.message ?: "Task failed",
+                    stepsUsed = _currentStep
+                )
+            }
+            throw e
         } finally {
+            val resultToRecord = finalResult ?: TaskResult(
+                status = if (_cancelRequested) TaskStatus.CANCELLED else TaskStatus.FAILED,
+                message = _lastError ?: _lastDiagnosis ?: "Task finished",
+                stepsUsed = _currentStep
+            )
+            val finishedAtWallMs = System.currentTimeMillis()
+            val descriptions = synchronized(_runStepDescriptions) { _runStepDescriptions.toList() }
+            try {
+                historyStore?.record(
+                    TaskHistoryEntry(
+                        goal = skill.goal,
+                        status = resultToRecord.status,
+                        stepsUsed = resultToRecord.stepsUsed,
+                        startedAtMs = startedAtWallMs,
+                        finishedAtMs = finishedAtWallMs,
+                        stepDescriptions = descriptions
+                    )
+                )
+            } catch (e: Throwable) {
+                logWarn("Failed to record task history: ${e.message}")
+            }
+
             _isRunning = false
+            _isPaused = false
             _cancelRequested = false
             _currentPhase = "idle"
             _phaseStartTimeMs = 0L
+            taskStartMs = 0L
+            totalPausedMs = 0L
+            pauseStartMs = 0L
         }
     }
 
@@ -320,13 +492,16 @@ class TaskExecutor(
      * cheap — no screen dump happens inside the poll.
      */
     private suspend fun pollForOpenApp(step: TaskStep, prePackage: String): String {
-        val deadline = clockMs() + effectiveOpenAppPollTimeoutMs
+        var remainingMs = effectiveOpenAppPollTimeoutMs
         var current = automation.getCurrentPackage().orEmpty()
         while (true) {
             if (openAppTargetReached(step, prePackage, current)) return current
             if (_cancelRequested) return current
-            if (clockMs() >= deadline) return current
+            if (!awaitIfPaused()) return current
+            val pollStart = clockMs()
             delay(effectiveOpenAppPollIntervalMs)
+            remainingMs -= (clockMs() - pollStart)
+            if (remainingMs <= 0L) return current
             current = automation.getCurrentPackage().orEmpty()
         }
     }
@@ -392,7 +567,7 @@ class TaskExecutor(
         for ((rangeIndex, step) in range.withIndex()) {
             val stepIndex = from + rangeIndex
             val stepNumber = stepIndex + 1
-            if (_cancelRequested) {
+            if (!awaitIfPaused() || _cancelRequested) {
                 return ReplayOutcome(success = false, failedStepIndex = stepIndex, stepsCompleted = stepCount)
             }
             stepCount++
@@ -420,6 +595,9 @@ class TaskExecutor(
             // Turn G: no artificial action restrictions (owner order).
             if (step.action == TaskStep.ACTION_WAIT || step.action == TaskStep.ACTION_DONE) {
                 enterPhase("acting", stepNumber, "executing ${step.action} (step $stepNumber)")
+                if (!awaitIfPaused() || _cancelRequested) {
+                    return ReplayOutcome(success = false, failedStepIndex = stepIndex, stepsCompleted = stepCount)
+                }
                 _performAction(step, preNodes)
                 delay(stepDelayMs)
                 carriedNodes = null
@@ -430,12 +608,15 @@ class TaskExecutor(
 
             // (i) Dispatch with one retry after re-dumping the screen
             enterPhase("acting", stepNumber, "executing ${step.action} (step $stepNumber)")
+            if (!awaitIfPaused() || _cancelRequested) {
+                return ReplayOutcome(success = false, failedStepIndex = stepIndex, stepsCompleted = stepCount)
+            }
             var ok = _performAction(step, preNodes)
             if (!ok) {
                 val reason = lastActionError ?: "${step.action} dispatch failed"
                 logWarn("Replayed step $stepNumber/$totalSteps (${step.action}) dispatch failed ($reason) on attempt 1 — re-dumping screen and retrying once")
                 delay(stepDelayMs)
-                if (_cancelRequested) {
+                if (!awaitIfPaused() || _cancelRequested) {
                     return ReplayOutcome(success = false, failedStepIndex = stepIndex, stepsCompleted = stepCount)
                 }
                 enterPhase("observing", stepNumber, "re-reading screen for retry (step $stepNumber)")
@@ -443,6 +624,9 @@ class TaskExecutor(
                 prePackage = automation.getCurrentPackage().orEmpty()
                 preSignature = computeNodeSignature(preNodes)
                 enterPhase("acting", stepNumber, "retrying ${step.action} (step $stepNumber)")
+                if (!awaitIfPaused() || _cancelRequested) {
+                    return ReplayOutcome(success = false, failedStepIndex = stepIndex, stepsCompleted = stepCount)
+                }
                 ok = _performAction(step, preNodes)
             }
             if (!ok) {
@@ -466,13 +650,16 @@ class TaskExecutor(
 
             if (!effectVerified) {
                 logWarn("Replayed step $stepNumber/$totalSteps (${step.action}) had no verified effect — re-dumping screen and retrying once")
-                if (_cancelRequested) {
+                if (!awaitIfPaused() || _cancelRequested) {
                     return ReplayOutcome(success = false, failedStepIndex = stepIndex, stepsCompleted = stepCount)
                 }
                 preNodes = postNodes
                 prePackage = postPackage
                 preSignature = postSignature
                 enterPhase("acting", stepNumber, "retrying ${step.action} for effect verification (step $stepNumber)")
+                if (!awaitIfPaused() || _cancelRequested) {
+                    return ReplayOutcome(success = false, failedStepIndex = stepIndex, stepsCompleted = stepCount)
+                }
                 val retryDispatched = _performAction(step, preNodes)
                 if (retryDispatched) {
                     enterPhase(
@@ -532,6 +719,8 @@ class TaskExecutor(
         Companion.shouldAttachScreenshot(nodes, lastStepHadNoEffect, lastStepWasOpenApp)
 
     private suspend fun _performAction(step: TaskStep, nodes: List<ScreenNode>): Boolean {
+        if (!awaitIfPaused() || _cancelRequested) return false
+        recordStepDescription(describeStep(step))
         lastActionError = null
         return try {
             when (step.action) {

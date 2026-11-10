@@ -846,7 +846,7 @@ class MiraGeminiClient private constructor(
                 onSetOutputSuppressed = { suppressed ->
                     // Turn G (verified cut): the interrupt used to fire on
                     // BOTH paths, so every task-completion announcement
-                    // (announceOutcome calls setOutputSuppressed(false))
+                    // (task completion previously called setOutputSuppressed(false))
                     // cut whatever the model was saying mid-sentence — the
                     // voice kept "cutting" on commands. Interrupt ONLY when
                     // actually suppressing; releasing the gate just lets

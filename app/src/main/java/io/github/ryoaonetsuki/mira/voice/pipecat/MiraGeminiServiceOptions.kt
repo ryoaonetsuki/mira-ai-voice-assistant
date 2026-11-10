@@ -47,9 +47,9 @@ data class MiraGeminiServiceOptions(
         const val DEFAULT_AUTH_HEADER_NAME = "x-goog-api-key"
 
         /**
-         * Default phone tools declared in Gemini Live setup frame (Milestones 1, 2, 3).
+         * Default phone tools declared in Gemini Live setup frame (Milestones 1, 2, 3, 4).
          * Declares phone action tools: open_app, click_text, type_text, scroll, press_back, press_home, wait, get_screen,
-         * plus web_search and run_connector_command.
+         * web_search, run_connector_command, and run_skill.
          * Note: google_search grounding is NOT combined with function calling (prohibited by Live API).
          */
         fun defaultPhoneTools(): Value.Array {
@@ -182,6 +182,24 @@ data class MiraGeminiServiceOptions(
                                     )
                                 ),
                                 "required" to Value.Array(Value.Str("command"))
+                            )
+                        ),
+                        Value.Object(
+                            "name" to Value.Str("run_skill"),
+                            "description" to Value.Str("Replays a saved skill macro in one tool call for a given user goal or skill name."),
+                            "parameters" to Value.Object(
+                                "type" to Value.Str("OBJECT"),
+                                "properties" to Value.Object(
+                                    "goal" to Value.Object(
+                                        "type" to Value.Str("STRING"),
+                                        "description" to Value.Str("The user's goal or intent to match and replay a saved skill for")
+                                    ),
+                                    "skill" to Value.Object(
+                                        "type" to Value.Str("STRING"),
+                                        "description" to Value.Str("Optional specific skill name or ID to replay directly")
+                                    )
+                                ),
+                                "required" to Value.Array(Value.Str("goal"))
                             )
                         )
                     )

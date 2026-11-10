@@ -76,95 +76,6 @@ interface AutomationPort {
 /**
  * Safety gate evaluated BEFORE any atomic action executes.
  */
-object AutomationSafety {
-    private val BANKING_PACKAGES = setOf(
-        "com.google.android.apps.walletnfcrel",
-        "com.bkash",
-        "com.nagad",
-        "com.rocket"
-    )
-
-    private val BANKING_PACKAGE_KEYWORDS = listOf(
-        "bank",
-        "wallet",
-        "bkash",
-        "nagad",
-        "rocket",
-        "payment"
-    )
-
-    private val BLOCKED_WORD_PATTERNS = listOf(
-        Regex("""\bpay\b""", RegexOption.IGNORE_CASE),
-        Regex("""\bpayment\b""", RegexOption.IGNORE_CASE),
-        Regex("""\bpurchase\b""", RegexOption.IGNORE_CASE),
-        Regex("""\bbuy\s+now\b""", RegexOption.IGNORE_CASE),
-        Regex("""\bcheckout\b""", RegexOption.IGNORE_CASE),
-        Regex("""\bconfirm\s+payment\b""", RegexOption.IGNORE_CASE),
-        Regex("""\bdelete\b""", RegexOption.IGNORE_CASE),
-        Regex("""\bremove\b""", RegexOption.IGNORE_CASE),
-        Regex("""\bremove\s+account\b""", RegexOption.IGNORE_CASE),
-        Regex("""\bconfirm\s+delete\b""", RegexOption.IGNORE_CASE)
-    )
-
-    private val BLOCKED_BANGLA_WORDS = listOf(
-        "পেমেন্ট",
-        "কিনুন",
-        "মুছুন",
-        "ডিলিট"
-    )
-
-    private val BANKING_ALLOWED_ACTIONS = setOf(
-        TaskStep.ACTION_PRESS_BACK,
-        TaskStep.ACTION_PRESS_HOME,
-        TaskStep.ACTION_WAIT,
-        TaskStep.ACTION_DONE
-    )
-
-    fun isBlocked(step: TaskStep, currentPackage: String?): String? {
-        // (b) Current foreground package is banking/finance
-        if (currentPackage != null) {
-            val pkgLower = currentPackage.lowercase()
-            val isBankingApp = BANKING_PACKAGES.contains(pkgLower) ||
-                BANKING_PACKAGE_KEYWORDS.any { pkgLower.contains(it) }
-
-            if (isBankingApp && !BANKING_ALLOWED_ACTIONS.contains(step.action)) {
-                return "Restricted action '${step.action}' inside banking/finance app: $currentPackage"
-            }
-        }
-
-        // (c) Any click_text whose target text contains "confirm" + ("pay" | "purchase" | "delete")
-        if (step.action == TaskStep.ACTION_CLICK_TEXT) {
-            val targetText = (step.stringParam("text") ?: "").lowercase()
-            if (targetText.contains("confirm") &&
-                (targetText.contains("pay") || targetText.contains("purchase") || targetText.contains("delete"))
-            ) {
-                return "Confirmation of sensitive operation: '$targetText'"
-            }
-        }
-
-        // (a) Any step whose target text/params match sensitive payment/delete keywords
-        for ((_, value) in step.params) {
-            if (value == null) continue
-            val text = value.toString()
-            if (containsBlockedWording(text)) {
-                return "Contains sensitive keyword in parameter: '$text'"
-            }
-        }
-
-        return null
-    }
-
-    private fun containsBlockedWording(text: String): Boolean {
-        for (pattern in BLOCKED_WORD_PATTERNS) {
-            if (pattern.containsMatchIn(text)) return true
-        }
-        for (bangla in BLOCKED_BANGLA_WORDS) {
-            if (text.contains(bangla)) return true
-        }
-        return false
-    }
-}
-
 /**
  * The heart of autonomous phone control: Observe -> Think -> Act loop ported from Jarvis.
  */
@@ -180,6 +91,12 @@ class TaskExecutor(
     // JSON. Null in old call sites and in tests that do not plan — the AI
     // loop is then the only fallback.
     private val plan: (suspend (goal: String, screenDescription: String) -> String)? = null,
+    // Turn G: the SAME planning call, but WITH the screenshot attached, so
+    // the plan is made from what the screen actually shows (home screen
+    // first, then scroll/tap as the screen demands) instead of from the
+    // node-tree text alone. One vision call per goal — same round-trip
+    // count as text planning, just with pixels. Null falls back to [plan].
+    private val planWithVision: (suspend (goal: String, screenDescription: String, screenshotJpeg: ByteArray) -> String)? = null,
     private val taskTimeoutMs: Long = DEFAULT_TASK_TIMEOUT_MS,
     private val thinkTimeoutMs: Long = DEFAULT_THINK_TIMEOUT_MS,
     private val clockMs: () -> Long = { System.currentTimeMillis() },
@@ -408,11 +325,6 @@ class TaskExecutor(
     private suspend fun executeDirectOpenApp(target: String): TaskResult? {
         val step = TaskStep(action = TaskStep.ACTION_OPEN_APP, params = mapOf("app" to target))
         val prePackage = automation.getCurrentPackage().orEmpty()
-        val blocked = AutomationSafety.isBlocked(step, prePackage.ifEmpty { null })
-        if (blocked != null) {
-            recordDiagnosis("Direct action blocked for safety: $blocked")
-            return TaskResult(TaskStatus.FAILED, "Blocked for safety: $blocked — ask me first.", 0)
-        }
         _currentStep = 1
         enterPhase("acting", 1, "Opening $target")
         // startActivity with FLAG_ACTIVITY_NEW_TASK from the service context
@@ -421,13 +333,37 @@ class TaskExecutor(
         if (launched == null) return null // app not resolvable — let skill/AI try
         enterPhase("observing", 1, "waiting for app to open")
         val reached = pollForOpenApp(step, prePackage)
-        return if (openAppTargetReached(step, prePackage, reached)) {
+        if (!openAppTargetReached(step, prePackage, reached)) {
+            val msg = "Opened $target but it did not come to the foreground (current='$reached')"
+            recordDiagnosis(msg)
+            return TaskResult(TaskStatus.FAILED, msg, 1)
+        }
+        // Turn G: the package is right — now prove the app's screen is
+        // really there (pixels + node tree). A matching package with a blank
+        // screen is still loading, not done; say so honestly instead of
+        // declaring success on a black screen.
+        val screenNodes = verifyOpenAppScreen(step)
+        return if (screenNodes != null) {
             TaskResult(TaskStatus.SUCCESS, "Opened $target", 1)
         } else {
-            val msg = "Opened $target but it did not come to the foreground (current='$reached')"
+            val msg = "Opened $target but its screen is still blank — it may still be loading; try again in a moment"
             recordDiagnosis(msg)
             TaskResult(TaskStatus.FAILED, msg, 1)
         }
+    }
+
+    /**
+     * Turn G: after open_app, read the screen (one settle + re-read when
+     * blank). Returns the nodes when the target app shows content, null
+     * when its screen stays blank. Tests run with stepDelayMs == 0, where
+     * the settle is skipped and a single read decides.
+     */
+    private suspend fun verifyOpenAppScreen(step: TaskStep): List<ScreenNode>? {
+        val first = dumpScreenSafe()
+        if (first.isNotEmpty()) return first
+        if (stepDelayMs > 0L) delay(1500L)
+        val second = dumpScreenSafe()
+        return second.ifEmpty { null }
     }
 
     private suspend fun executeDirectTapLabel(label: String): TaskResult? {
@@ -447,8 +383,26 @@ class TaskExecutor(
     }
 
     private suspend fun executeDirectSearch(action: MiraAutomationBridge.DirectAction.Search): TaskResult? {
+        // Turn G (verified misroute): a search naming a known app ("search X
+        // on WhatsApp") used to open a Google web search in Chrome and call
+        // ANY package change success. A named app must NEVER route to a web
+        // search — open the app itself and let plan-once (vision) plan the
+        // in-app search from the app's real home screen.
+        val targetApp = action.targetApp
+        if (targetApp != null && targetApp != YOUTUBE_PACKAGE) {
+            val launched = automation.openApp(targetApp)
+            if (launched == null) {
+                val msg = "Could not open $targetApp to search for '${action.query}'"
+                recordDiagnosis(msg)
+                return TaskResult(TaskStatus.FAILED, msg, 1)
+            }
+            recordDiagnosis(
+                "Search for '${action.query}' is inside $targetApp, not the web — opened the app; planning the in-app search from its home screen."
+            )
+            return null // fall through to plan-once with the app open
+        }
         val encoded = URLEncoder.encode(action.query, "UTF-8")
-        val url = if (action.targetApp == YOUTUBE_PACKAGE) {
+        val url = if (targetApp == YOUTUBE_PACKAGE) {
             "https://www.youtube.com/results?search_query=$encoded"
         } else {
             "https://www.google.com/search?q=$encoded"
@@ -458,10 +412,16 @@ class TaskExecutor(
         enterPhase("acting", 1, "Searching for '${action.query}'")
         if (!automation.openUrl(url)) return null
         val current = pollForPackageChange(prePackage)
-        return if (current != prePackage) {
+        // Turn G: a search succeeds only when the intended viewer actually
+        // opened (browser, or YouTube for a YouTube search) — any other app
+        // (or no change) is a failure, not success.
+        val expected = targetApp == YOUTUBE_PACKAGE
+        val openedRightApp = current != prePackage &&
+            (isBrowserPackage(current) || (expected && current == YOUTUBE_PACKAGE))
+        return if (openedRightApp) {
             TaskResult(TaskStatus.SUCCESS, "Searched for '${action.query}'", 1)
         } else {
-            val msg = "Search did not open (current='$current')"
+            val msg = "Search did not open in the intended app (current='$current')"
             recordDiagnosis(msg)
             TaskResult(TaskStatus.FAILED, msg, 1)
         }
@@ -479,10 +439,12 @@ class TaskExecutor(
             return TaskResult(TaskStatus.FAILED, msg, 1)
         }
         val current = pollForPackageChange(prePackage)
-        return if (current != prePackage) {
+        // Turn G: the dialer must actually be the app that opened — any
+        // other app (e.g. a browser) is a failure, not success.
+        return if (current != prePackage && isDialerPackage(current)) {
             TaskResult(TaskStatus.SUCCESS, "Opened dialer for $number", 1)
         } else {
-            val msg = "Dialer did not come to the foreground"
+            val msg = "Dialer did not come to the foreground (current='$current')"
             recordDiagnosis(msg)
             TaskResult(TaskStatus.FAILED, msg, 1)
         }
@@ -508,7 +470,8 @@ class TaskExecutor(
      * immediately, so the second identical command replays instantly.
      */
     private suspend fun runPlanOnce(goal: String): TaskResult? {
-        val planner = plan ?: return null
+        val textPlanner = plan
+        if (textPlanner == null && planWithVision == null) return null
         enterPhase("observing", 0, "Observing screen to plan…")
         val nodes = dumpScreenSafe()
         val description = if (nodes.isEmpty()) {
@@ -516,10 +479,32 @@ class TaskExecutor(
         } else {
             automation.getCompressedScreenDescription(nodes, goal)
         }
+        // Turn G: the planner must SEE the screen. A screenshot is captured
+        // best-effort at the decision point; when one is available the
+        // vision planner decides from pixels + node text together. When no
+        // screenshot is available (service not ready, FLAG_SECURE), the text
+        // planner runs as before — a missing screenshot never fails a goal.
+        val screenshot = try {
+            automation.takeScreenshotJpeg()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            logWarn("Plan screenshot skipped: ${e.message}")
+            null
+        }
         enterPhase("thinking", 0, "planning the full command list…")
+        val useVision = screenshot != null && planWithVision != null
+        // Vision planner without a screenshot has no pixels to plan from.
+        if (!useVision && textPlanner == null) return null
         val raw: String
         try {
-            raw = withTimeout(thinkTimeoutMs) { planner(goal, description) }
+            raw = withTimeout(thinkTimeoutMs) {
+                if (useVision) {
+                    planWithVision!!(goal, description, screenshot!!)
+                } else {
+                    textPlanner!!(goal, description)
+                }
+            }
         } catch (e: TimeoutCancellationException) {
             val msg = "Planning timed out (think call exceeded ${thinkTimeoutMs / 1000}s)"
             recordDiagnosis(msg)
@@ -897,14 +882,9 @@ class TaskExecutor(
                 continue
             }
 
-            val blockedReason = AutomationSafety.isBlocked(decision, automation.getCurrentPackage())
-            if (blockedReason != null) {
-                val msg = "Blocked for safety: $blockedReason"
-                recordDiagnosis(msg)
-                logWarn(msg)
-                return AiResumeResult(false, null, msg)
-            }
-
+            // Turn G: no artificial action restrictions (owner order) — the
+            // model's own judgement decides what cannot be done; a model
+            // refusal is surfaced honestly instead of blocked in code.
             val prePackage = automation.getCurrentPackage().orEmpty()
             val preSignature = computeNodeSignature(nodes)
 
@@ -1094,13 +1074,7 @@ class TaskExecutor(
                 preSignature = computeNodeSignature(preNodes)
             }
 
-            val blocked = AutomationSafety.isBlocked(step, prePackage.ifEmpty { null })
-            if (blocked != null) {
-                recordDiagnosis("Replayed step blocked for safety: $blocked")
-                logWarn("Replayed step blocked for safety: $blocked")
-                return ReplayOutcome(success = false, failedStepIndex = stepIndex, stepsCompleted = stepCount)
-            }
-
+            // Turn G: no artificial action restrictions (owner order).
             if (step.action == TaskStep.ACTION_WAIT || step.action == TaskStep.ACTION_DONE) {
                 enterPhase("acting", stepNumber, "executing ${step.action} (step $stepNumber)")
                 _performAction(step, preNodes)
@@ -1125,12 +1099,6 @@ class TaskExecutor(
                 preNodes = dumpScreenSafe()
                 prePackage = automation.getCurrentPackage().orEmpty()
                 preSignature = computeNodeSignature(preNodes)
-                val retryBlocked = AutomationSafety.isBlocked(step, prePackage.ifEmpty { null })
-                if (retryBlocked != null) {
-                    recordDiagnosis("Replayed step blocked for safety on retry: $retryBlocked")
-                    logWarn("Replayed step blocked for safety on retry: $retryBlocked")
-                    return ReplayOutcome(success = false, failedStepIndex = stepIndex, stepsCompleted = stepCount)
-                }
                 enterPhase("acting", stepNumber, "retrying ${step.action} (step $stepNumber)")
                 ok = _performAction(step, preNodes)
             }
@@ -1161,12 +1129,6 @@ class TaskExecutor(
                 preNodes = postNodes
                 prePackage = postPackage
                 preSignature = postSignature
-                val retryBlocked = AutomationSafety.isBlocked(step, prePackage.ifEmpty { null })
-                if (retryBlocked != null) {
-                    recordDiagnosis("Replayed step blocked for safety on effect retry: $retryBlocked")
-                    logWarn("Replayed step blocked for safety on effect retry: $retryBlocked")
-                    return ReplayOutcome(success = false, failedStepIndex = stepIndex, stepsCompleted = stepCount)
-                }
                 enterPhase("acting", stepNumber, "retrying ${step.action} for effect verification (step $stepNumber)")
                 val retryDispatched = _performAction(step, preNodes)
                 if (retryDispatched) {
@@ -1233,6 +1195,9 @@ class TaskExecutor(
         var parseFailures = 0
         var step = 0
         var lastStepHadNoEffect = false
+        // Turn G: the step just executed opened an app — the next decision
+        // must SEE that app's home screen (screenshot) before acting.
+        var lastStepWasOpenApp = false
         // Best-of-all (Tapilot guardRepeatedGesture): stops a stuck loop
         // fast instead of burning all 15 steps on a screen that never changes.
         val loopGuard = LoopGuard()
@@ -1294,7 +1259,7 @@ class TaskExecutor(
             val raw: String
             try {
                 raw = withTimeout(thinkTimeoutMs) {
-                    _decideNextStep(goal, description, nodes, history, lastStepHadNoEffect)
+                    _decideNextStep(goal, description, nodes, history, lastStepHadNoEffect, lastStepWasOpenApp)
                 }
             } catch (e: TimeoutCancellationException) {
                 val detail = "think call exceeded ${thinkTimeoutMs / 1000}s"
@@ -1337,15 +1302,9 @@ class TaskExecutor(
             }
             parseFailures = 0
 
-            // --- Safety Gate (checked BEFORE action executes) ---
-            val blockedReason = AutomationSafety.isBlocked(decision, automation.getCurrentPackage())
-            if (blockedReason != null) {
-                val blockMessage = "Blocked for safety: $blockedReason — ask me first."
-                recordDiagnosis(blockMessage)
-                logWarn(blockMessage)
-                return TaskResult(TaskStatus.FAILED, blockMessage, step)
-            }
-
+            // Turn G: no artificial action restrictions (owner order) — the
+            // "Safety Gate" blocklist is removed entirely; the model's own
+            // judgement decides what cannot be done.
             // --- Act ---
             enterPhase("acting", step, decision.reasoning.ifEmpty { decision.action })
 
@@ -1462,18 +1421,21 @@ class TaskExecutor(
                 }
             }
 
+            // Turn G: remember whether this step opened an app, so the next
+            // decision looks at the new app's home screen (screenshot)
+            // before acting, instead of deciding from stale text.
+            lastStepWasOpenApp = decision.action == TaskStep.ACTION_OPEN_APP
+
             // Recovery safeguard
             if (recovery.shouldRecover) {
                 val recoveryStep = recovery.suggestRecovery()
-                val recBlocked = AutomationSafety.isBlocked(recoveryStep, automation.getCurrentPackage())
-                if (recBlocked == null) {
-                    onProgress?.invoke(step, "Recovery: ${recoveryStep.reasoning}")
-                    _performAction(recoveryStep, nodes)
-                    // The recovery action changed the screen — the carried
-                    // verification dump is stale, re-read next step.
-                    carriedNodes = null
-                    carriedDescription = null
-                }
+                onProgress?.invoke(step, "Recovery: ${recoveryStep.reasoning}")
+                _performAction(recoveryStep, nodes)
+                lastStepWasOpenApp = recoveryStep.action == TaskStep.ACTION_OPEN_APP
+                // The recovery action changed the screen — the carried
+                // verification dump is stale, re-read next step.
+                carriedNodes = null
+                carriedDescription = null
             }
 
             delay(stepDelayMs)
@@ -1486,17 +1448,22 @@ class TaskExecutor(
         )
     }
 
-    fun shouldAttachScreenshot(nodes: List<ScreenNode>, lastStepHadNoEffect: Boolean): Boolean =
-        Companion.shouldAttachScreenshot(nodes, lastStepHadNoEffect)
+    fun shouldAttachScreenshot(
+        nodes: List<ScreenNode>,
+        lastStepHadNoEffect: Boolean,
+        lastStepWasOpenApp: Boolean = false
+    ): Boolean =
+        Companion.shouldAttachScreenshot(nodes, lastStepHadNoEffect, lastStepWasOpenApp)
 
     private suspend fun _decideNextStep(
         goal: String,
         screenDescription: String,
         nodes: List<ScreenNode>,
         history: List<Pair<String, String>>,
-        lastStepHadNoEffect: Boolean
+        lastStepHadNoEffect: Boolean,
+        lastStepWasOpenApp: Boolean = false
     ): String {
-        val screenshot = if (shouldAttachScreenshot(nodes, lastStepHadNoEffect)) {
+        val screenshot = if (shouldAttachScreenshot(nodes, lastStepHadNoEffect, lastStepWasOpenApp)) {
             try {
                 automation.takeScreenshotJpeg()
             } catch (e: CancellationException) {
@@ -1699,6 +1666,24 @@ class TaskExecutor(
         /** Turn F-direct: YouTube package, for search URLs. */
         const val YOUTUBE_PACKAGE: String = "com.google.android.youtube"
 
+        /** Turn G: packages that count as "a browser opened" for a web search. */
+        fun isBrowserPackage(pkg: String): Boolean {
+            val lower = pkg.lowercase()
+            return lower.contains("chrome") || lower.contains("browser") ||
+                lower.contains("firefox") || lower.contains("brave") ||
+                lower.contains("opera") || lower.contains("edge") ||
+                lower.contains("samsung") && lower.contains("internet") ||
+                lower == "com.sec.android.app.sbrowser" ||
+                lower.contains("duckduckgo")
+        }
+
+        /** Turn G: packages that count as "the dialer opened" for a dial action. */
+        fun isDialerPackage(pkg: String): Boolean {
+            val lower = pkg.lowercase()
+            return lower.contains("dialer") || lower.contains("phone") ||
+                lower.contains("contacts")
+        }
+
         fun isCriticalReplayStep(action: String): Boolean =
             action == TaskStep.ACTION_OPEN_APP || action == TaskStep.ACTION_TYPE_TEXT
 
@@ -1711,6 +1696,10 @@ class TaskExecutor(
          * Turn F(a): does the current foreground package show the app an
          * open_app step asked for? "Already in target package" counts as
          * success — a cold start that is still launching is not a failure.
+         * Turn G: ONLY the target app counts. The old
+         * `postPackage != prePackage` fallback declared success whenever ANY
+         * app opened — Chrome opening after a WhatsApp request was reported
+         * as "Opened WhatsApp". A wrong package is a failure, never success.
          */
         fun openAppTargetReached(step: TaskStep, prePackage: String, postPackage: String): Boolean {
             val targetQuery = (step.stringParam("app") ?: step.stringParam("package") ?: "").trim()
@@ -1719,11 +1708,10 @@ class TaskExecutor(
                 return false
             }
             val resolvedCandidates = ScreenAutomationService.resolveKnownAppPackages(targetQuery)
-            val matchesTarget = postPackage.contains(targetQuery, ignoreCase = true) ||
+            return postPackage.contains(targetQuery, ignoreCase = true) ||
                 resolvedCandidates.any {
                     postPackage.equals(it, ignoreCase = true) || postPackage.contains(it, ignoreCase = true)
                 }
-            return postPackage != prePackage || matchesTarget
         }
 
         fun verifyEffect(
@@ -1751,13 +1739,27 @@ class TaskExecutor(
             }
         }
 
-        fun shouldAttachScreenshot(nodes: List<ScreenNode>, lastStepHadNoEffect: Boolean): Boolean {
-            // Turn F(d): a screenshot is a per-step tax (capture + base64 +
-            // vision call). Only pay it when the previous step had NO effect
-            // AND the text description is insufficient to decide the next
-            // action (empty screen, or most clickable nodes unlabeled).
-            if (!lastStepHadNoEffect) return false
+        /**
+         * Turn G: when does a decision need the screenshot (pixels) as well
+         * as the node-tree text? The agent must SEE the screen at decision
+         * points — after landing in a new app, and whenever the node tree
+         * says nothing at all (WebView / game / loading screen: pixels are
+         * the only signal). The old rule waited for a failed step AND
+         * insufficient text first, so the normal path decided blind.
+         * Vision is NOT paid on every micro-step: the fast direct path never
+         * calls it, and the AI loop pays it at most once per decision point.
+         */
+        fun shouldAttachScreenshot(
+            nodes: List<ScreenNode>,
+            lastStepHadNoEffect: Boolean,
+            lastStepWasOpenApp: Boolean = false
+        ): Boolean {
+            // (1) Just opened an app — look at its home screen before deciding.
+            if (lastStepWasOpenApp) return true
+            // (2) No nodes at all — pixels are the only signal.
             if (nodes.isEmpty()) return true
+            // (3) Previous step had NO effect AND the text is insufficient.
+            if (!lastStepHadNoEffect) return false
             val clickableNodes = nodes.filter { it.isClickable }
             if (clickableNodes.isNotEmpty()) {
                 val unlabeledCount = clickableNodes.count { it.text.isBlank() && it.contentDescription.isBlank() }

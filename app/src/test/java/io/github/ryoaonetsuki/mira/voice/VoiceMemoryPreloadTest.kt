@@ -127,11 +127,14 @@ class VoiceMemoryPreloadTest {
     fun testIsSensitiveFact_MatchesExpectedPatterns() {
         assertTrue("Password phrase must be sensitive", VoiceMemoryPreload.isSensitiveFact("my password is hunter2"))
         assertTrue("OTP phrase must be sensitive", VoiceMemoryPreload.isSensitiveFact("OTP 483920"))
+        assertTrue("PIN phrase must be sensitive", VoiceMemoryPreload.isSensitiveFact("my pin is 4832"))
         assertTrue("16-digit card with spaces must be sensitive", VoiceMemoryPreload.isSensitiveFact("4111 2222 3333 4444"))
         assertTrue("16-digit continuous card must be sensitive", VoiceMemoryPreload.isSensitiveFact("4111222233334444"))
 
         assertFalse("Normal preference must not be sensitive", VoiceMemoryPreload.isSensitiveFact("I like green tea"))
         assertFalse("Birthday statement must not be sensitive", VoiceMemoryPreload.isSensitiveFact("my birthday is in June"))
+        assertFalse("Shipping phrase must not be sensitive", VoiceMemoryPreload.isSensitiveFact("I love shipping"))
+        assertFalse("Shopping phrase must not be sensitive", VoiceMemoryPreload.isSensitiveFact("my shopping list"))
     }
 
     @Test

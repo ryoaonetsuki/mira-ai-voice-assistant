@@ -10,6 +10,7 @@ import io.github.ryoaonetsuki.mira.backend.ApiKeyResolver
 import io.github.ryoaonetsuki.mira.backend.KeySource
 import io.github.ryoaonetsuki.mira.data.local.entities.ChatMessageEntity
 import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
+import io.github.ryoaonetsuki.mira.network.ChatAttachment
 import io.github.ryoaonetsuki.mira.network.GeminiRestClient
 import kotlinx.coroutines.withTimeout
 
@@ -113,14 +114,13 @@ class MiraAutomationBridge(
         { currentGoal, screenDescription, history ->
             val key = apiKey()
             val entities = buildHistoryEntities(currentGoal, screenDescription, history)
+            // Turn F(c): fastest model first, SINGLE attempt, no ladder/retry —
+            // one slow think call must never eat the 120s task budget.
             val chatResult = withTimeout(TaskExecutor.DEFAULT_THINK_TIMEOUT_MS) {
-                restClient.generateChatResponse(
+                restClient.generateAutomationThink(
                     apiKey = key,
                     history = entities,
-                    systemPrompt = SYSTEM_PROMPT,
-                    model = "gemini-3.8-flash",
-                    enableThinking = false,
-                    isChatCall = false
+                    systemPrompt = SYSTEM_PROMPT
                 )
             }
             if (chatResult.isSuccess) {
@@ -136,14 +136,20 @@ class MiraAutomationBridge(
         { currentGoal, screenDescription, history, screenshotBytes ->
             val key = apiKey()
             val entities = buildHistoryEntities(currentGoal, screenDescription, history)
+            // Turn F(c): same fast single-attempt path as text think, with the
+            // screenshot attached — vision is a think call, not a chat call.
+            val base64Data = java.util.Base64.getEncoder().encodeToString(screenshotBytes)
+            val attachment = ChatAttachment(
+                mimeType = "image/jpeg",
+                base64Data = base64Data,
+                fileName = "screenshot.jpg"
+            )
             val visionResult = withTimeout(TaskExecutor.DEFAULT_THINK_TIMEOUT_MS) {
-                restClient.generateVision(
+                restClient.generateAutomationThink(
                     apiKey = key,
                     history = entities,
-                    imageBytes = screenshotBytes,
                     systemPrompt = SYSTEM_PROMPT,
-                    model = "gemini-3.8-flash",
-                    enableThinking = false
+                    attachments = listOf(attachment)
                 )
             }
             if (visionResult.isSuccess) {

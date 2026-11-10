@@ -163,19 +163,29 @@ class MiraAutomationBridge(
      * Turn F plan-once: ONE planning call per goal that returns the FULL
      * command list as JSON. Fastest model, single attempt, same 45s deadline
      * as the per-step think calls — the plan is one structured output, not a
-     * conversation.
+     * conversation. Best-of-all (Mika knowledge files): when the goal targets
+     * an app with a bundled usage note, the note is appended to the prompt so
+     * the plan uses that app's real buttons/flows instead of guessing.
      */
     private fun buildPlanLambda(
-        restClient: GeminiRestClient
+        restClient: GeminiRestClient,
+        knowledge: AppKnowledge? = null
     ): suspend (String, String) -> String =
         { currentGoal, screenDescription ->
             val key = apiKey()
             val entities = buildHistoryEntities(currentGoal, screenDescription, emptyList())
+            val target = extractTargetApp(currentGoal)
+            val note = knowledge?.noteForTarget(target)
+            val systemPrompt = if (note != null) {
+                "$PLAN_SYSTEM_PROMPT\n\nApp knowledge for this goal:\n$note"
+            } else {
+                PLAN_SYSTEM_PROMPT
+            }
             val planResult = withTimeout(TaskExecutor.DEFAULT_THINK_TIMEOUT_MS) {
                 restClient.generateAutomationThink(
                     apiKey = key,
                     history = entities,
-                    systemPrompt = PLAN_SYSTEM_PROMPT
+                    systemPrompt = systemPrompt
                 )
             }
             if (planResult.isSuccess) {
@@ -195,12 +205,21 @@ class MiraAutomationBridge(
         val automation: AutomationPort = ScreenAutomationService(ctx)
         val skills = SkillMemoryService.getInstance(ctx)
         val restClient = GeminiRestClient()
+        // Best-of-all (Mika): per-app knowledge files from assets; a missing
+        // file is simply no note, never a failure.
+        val knowledge = AppKnowledge { path ->
+            try {
+                ctx.assets.open(path).bufferedReader().use { it.readText() }
+            } catch (_: Throwable) {
+                null
+            }
+        }
         return TaskExecutor(
             automation = automation,
             skills = skills,
             think = buildThinkLambda(restClient),
             thinkWithVision = buildThinkVisionLambda(restClient),
-            plan = buildPlanLambda(restClient),
+            plan = buildPlanLambda(restClient, knowledge),
             taskTimeoutMs = taskTimeoutMs,
             onProgress = onProgress
         )
@@ -318,7 +337,7 @@ class MiraAutomationBridge(
          * the goal is already complete on the current screen.
          */
         private const val PLAN_SYSTEM_PROMPT =
-            "You plan Android phone tasks. Given the goal and the current screen, reply with ONLY one JSON object: {\"steps\": [{\"action\": \"<action>\", \"params\": {...}}, ...]} listing EVERY action needed to complete the goal, in order, from the current screen. Actions: click_text, click_at, type_text, press_enter, scroll, swipe, press_back, press_home, open_app, wait, done. Use click_text with the visible label when possible; use open_app with the app name to launch an app. Never invent coordinates outside the screen. Keep the list short (at most 10 steps). If the goal is already complete on the current screen, reply {\"done\": true}."
+            "You plan Android phone tasks. Given the goal and the current screen, reply with ONLY one JSON object: {\"steps\": [{\"action\": \"<action>\", \"params\": {...}}, ...]} listing EVERY action needed to complete the goal, in order, from the current screen. Actions: click_text, click_at, type_text, press_enter, scroll, swipe, press_back, press_home, open_app, wait, done, long_press (params x, y, durationMs), pinch (params centerX, centerY, direction in|out). Use click_text with the visible label when possible; use open_app with the app name to launch an app. Never invent coordinates outside the screen. Keep the list short (at most 10 steps). If the goal is already complete on the current screen, reply {\"done\": true}."
 
         @Volatile
         private var instance: MiraAutomationBridge? = null

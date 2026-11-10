@@ -547,9 +547,12 @@ class MicServiceFunctionCallTest {
             "get_screen",
             "web_search",
             "run_connector_command",
-            "run_skill"
+            "run_skill",
+            "remember_fact",
+            "recall_memory",
+            "forget_memory"
         )
-        assertEquals("defaultPhoneTools must declare exactly the 11 tools", expected, toolNames)
+        assertEquals("defaultPhoneTools must declare exactly the 14 tools", expected, toolNames)
     }
 
     @Test

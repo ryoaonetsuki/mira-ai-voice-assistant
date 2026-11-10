@@ -17,9 +17,14 @@ import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.IconCompat
 import io.github.ryoaonetsuki.mira.MainActivity
 import io.github.ryoaonetsuki.mira.R
+import io.github.ryoaonetsuki.mira.automation.MiraAutomationBridge
 import io.github.ryoaonetsuki.mira.automation.agent.AutomationPort
 import io.github.ryoaonetsuki.mira.automation.agent.ScreenAutomationService
+import io.github.ryoaonetsuki.mira.automation.agent.ScreenNode
+import io.github.ryoaonetsuki.mira.automation.agent.Skill
+import io.github.ryoaonetsuki.mira.automation.agent.SkillMemoryService
 import io.github.ryoaonetsuki.mira.automation.agent.TaskExecutor
+import io.github.ryoaonetsuki.mira.automation.agent.TaskStatus
 import io.github.ryoaonetsuki.mira.automation.agent.TaskStep
 import io.github.ryoaonetsuki.mira.data.local.MiraDatabase
 import io.github.ryoaonetsuki.mira.data.local.entities.NotificationEntity
@@ -175,14 +180,6 @@ class MicService : Service() {
     private val sessionGenerationToken = java.util.concurrent.atomic.AtomicLong(0L)
     @Volatile private var lastBotSpeakingEndTimeMs: Long = 0L
     @Volatile private var isTtsPlaying: Boolean = false
-    @Volatile internal var turnDispatchedToAutomation: Boolean = false
-    /**
-     * Turn F sequential tasks: commands spoken while a task runs are QUEUED
-     * (FIFO) and run the moment the slot clears — never lost, never a
-     * permanent "another task is already running" refusal. Guarded by its
-     * own monitor; see handleUserVoiceTurn / handleAutomationCommand.
-     */
-    private val automationQueue = ArrayDeque<String>()
     private val recentModelTranscripts = ArrayDeque<String>()
 
     private var cachedVoiceName: String = "Aoede"
@@ -850,9 +847,7 @@ class MicService : Service() {
                 }
             }
 
-            override fun onTurnComplete() {
-                turnDispatchedToAutomation = false
-            }
+            override fun onTurnComplete() {}
 
             override fun onModelTranscript(text: String) {
                 noteAudioFrame()
@@ -968,7 +963,8 @@ class MicService : Service() {
         pollIntervalMs: Long = 200L,
         settleDelayMs: Long = 100L,
         targetApp: String? = null,
-        goal: String? = null
+        goal: String? = null,
+        skillsService: SkillMemoryService? = null
     ): Value.Object = io.github.ryoaonetsuki.mira.service.executeFunctionCall(
         automationPort = automationPort,
         context = context,
@@ -979,7 +975,8 @@ class MicService : Service() {
         pollIntervalMs = pollIntervalMs,
         settleDelayMs = settleDelayMs,
         targetApp = targetApp ?: currentAutomationTarget,
-        goal = goal ?: lastAutomationGoal
+        goal = goal ?: lastAutomationGoal,
+        skillsService = skillsService
     ).also { response ->
         val success = (response.value["success"] as? Value.Bool)?.value == true
         if (success && name.equals("open_app", ignoreCase = true)) {
@@ -996,9 +993,8 @@ class MicService : Service() {
             Log.i(TAG, "MIRA_LIVE_VOICE: Ignoring turn (empty or echo of own speech): $cleanText")
             return
         }
-        val words = cleanText.split("\\s+".toRegex()).filter { it.isNotBlank() }
 
-        // One routing decision (pure, unit-tested): echo / stop / phone command / Live answers by itself.
+        // One routing decision (pure, unit-tested): echo / stop / Live answers by itself.
         val recentSpeech = synchronized(recentModelTranscripts) { recentModelTranscripts.toList() } +
             listOfNotNull(_modelTranscript.value.takeIf { it.isNotBlank() })
         when (io.github.ryoaonetsuki.mira.voice.VoiceTurnRouter.route(cleanText, recentSpeech, automationBridge.isRunning)) {
@@ -1008,7 +1004,6 @@ class MicService : Service() {
             }
             io.github.ryoaonetsuki.mira.voice.VoiceTurnRoute.STOP_AUTOMATION -> {
                 automationBridge.cancel()
-                synchronized(automationQueue) { automationQueue.clear() }
                 serviceScope.launch(Dispatchers.IO) {
                     try {
                         val db = MiraDatabase.getInstance(applicationContext)
@@ -1025,159 +1020,7 @@ class MicService : Service() {
                 }
                 return
             }
-            io.github.ryoaonetsuki.mira.voice.VoiceTurnRoute.AUTOMATION -> {
-                // Turn F sequential tasks: a command spoken while a task runs
-                // is queued and runs the moment the slot clears — never lost.
-                val queued = synchronized(automationQueue) {
-                    if (turnDispatchedToAutomation) {
-                        if (automationQueue.size >= MAX_QUEUED_AUTOMATION_COMMANDS) {
-                            _statusText.value = "Too many queued commands — try again in a moment"
-                            Log.i(TAG, "MIRA_LIVE_VOICE: Automation queue full; dropping: $cleanText")
-                            true
-                        } else {
-                            automationQueue.addLast(cleanText)
-                            _statusText.value = "Queued: $cleanText"
-                            Log.i(TAG, "MIRA_LIVE_VOICE: Automation busy; queued: $cleanText")
-                            true
-                        }
-                    } else {
-                        turnDispatchedToAutomation = true
-                        false
-                    }
-                }
-                if (queued) return
-                handleAutomationCommand(cleanText)
-                return
-            }
             io.github.ryoaonetsuki.mira.voice.VoiceTurnRoute.LIVE_ANSWERS -> Unit
-        }
-    }
-
-    /**
-     * Explicit user phone command (the only way an automation goal starts).
-     * Turn F: the voice is NEVER muted during tasks — no setOutputSuppressed,
-     * no enableMic(false), no _isMuted, no isTtsPlaying. The mic stays live
-     * so the next command can be spoken (and queued) at any time. The
-     * double-answer risk is handled without muting: the turn was already
-     * routed away from Live, the only messages sent to Live are the short
-     * "working on it" ack (AI path) and the outcome note, and the echo
-     * detector ignores Live's own speech. The outcome is handed to Live as
-     * context so IT announces it in its own words. When Live is not
-     * connected, the outcome is delivered as written status/transcript text
-     * and notification — never TTS.
-     */
-    private fun handleAutomationCommand(cleanText: String) {
-        val token = sessionGenerationToken.get()
-        lastAutomationGoal = cleanText
-        callStateStore.setLastGoal(cleanText)
-        _statusText.value = "Running: $cleanText..."
-        _modelTranscript.value = "Running: $cleanText..."
-        val serviceEnabled = MiraAccessibilityService.isEnabled(applicationContext)
-        serviceScope.launch(Dispatchers.IO) {
-            try {
-                val isBangla = io.github.ryoaonetsuki.mira.identity.MiraIdentityInterceptor.detectIsBangla(cleanText, cachedLanguage)
-                if (!serviceEnabled) {
-                    val disabledMessage = if (isBangla) {
-                        "ফোন নিয়ন্ত্রণের জন্য Mira অ্যাক্সেসিবিলিটি সার্ভিস চালু করতে হবে।"
-                    } else {
-                        "Please enable Mira screen control in accessibility settings to control the phone."
-                    }
-                    _modelTranscript.value = disabledMessage
-                    try {
-                        val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        }
-                        applicationContext.startActivity(intent)
-                    } catch (e: Exception) {
-                        Log.w(TAG, "MIRA_LIVE_VOICE: Could not open accessibility settings: ${e.message}")
-                    }
-                    announceOutcome(
-                        token,
-                        io.github.ryoaonetsuki.mira.voice.VoiceTurnRouter.buildAccessibilityNote(cachedLanguage),
-                        disabledMessage
-                    )
-                    return@launch
-                }
-
-                // AI path only: a short spoken acknowledgement so the user
-                // hears the task started. The direct path finishes in ~1s —
-                // its result note arrives almost immediately, so no ack.
-                if (!automationBridge.isDirectGoal(cleanText)) {
-                    announceWorking(token)
-                }
-
-                val result = automationBridge.executeGoal(cleanText) { _, desc ->
-                    _statusText.value = "Running: $cleanText ($desc)"
-                }
-                try {
-                    val db = MiraDatabase.getInstance(applicationContext)
-                    db.notificationDao().insertNotification(
-                        NotificationEntity(
-                            title = if (result.status == io.github.ryoaonetsuki.mira.automation.agent.TaskStatus.SUCCESS)
-                                "Task Completed" else "Task Failed",
-                            message = result.message,
-                            type = "macro"
-                        )
-                    )
-                } catch (e: Exception) {
-                    Log.w(TAG, "MIRA_LIVE_VOICE: Could not record automation notification: ${e.message}")
-                }
-                announceOutcome(
-                    token,
-                    io.github.ryoaonetsuki.mira.voice.VoiceTurnRouter.buildResultNote(
-                        result.message,
-                        cachedLanguage,
-                        result.status == io.github.ryoaonetsuki.mira.automation.agent.TaskStatus.SUCCESS
-                    ),
-                    result.message
-                )
-            } catch (e: Exception) {
-                Log.e(TAG, "MIRA_LIVE_VOICE: Error executing voice automation: ${e.message}", e)
-            } finally {
-                // The executor slot clears the moment the task completes (the
-                // bridge clears its active executor in finally) — drain the
-                // queue under the same lock so the next spoken command runs
-                // immediately with no re-setup and no lost command.
-                val next: String?
-                synchronized(automationQueue) {
-                    turnDispatchedToAutomation = false
-                    _statusText.value = ""
-                    next = automationQueue.removeFirstOrNull()
-                    if (next != null) turnDispatchedToAutomation = true
-                }
-                if (next != null) handleAutomationCommand(next)
-            }
-        }
-    }
-
-    /** Short "working on it" note for the AI path (Live speaks it in its own voice). */
-    private fun announceWorking(token: Long) {
-        if (!io.github.ryoaonetsuki.mira.voice.VoiceTurnRouter.mayAnnounceAutomationResult(goalFromUserCommand = true)) return
-        if (sessionGenerationToken.get() != token) return
-        val liveConnected = sessionManager?.state?.value == SessionManagerState.CONNECTED
-        if (liveConnected) {
-            sessionManager?.sendUserMessage(io.github.ryoaonetsuki.mira.voice.VoiceTurnRouter.buildWorkingNote(cachedLanguage))
-        }
-    }
-
-    /**
-     * Announce the outcome of a user-requested action through the single Live voice. Skipped if the
-     * session that issued the command is gone (no stale/foreign announcements). When Live is not
-     * connected, deliver the result as written text only (never TTS).
-     */
-    private suspend fun announceOutcome(token: Long, liveNote: String, fallbackText: String) {
-        if (!io.github.ryoaonetsuki.mira.voice.VoiceTurnRouter.mayAnnounceAutomationResult(goalFromUserCommand = true)) return
-        if (sessionGenerationToken.get() != token) {
-            Log.i(TAG, "MIRA_LIVE_VOICE: Session changed while action ran; not announcing")
-            return
-        }
-        val liveConnected = sessionManager?.state?.value == SessionManagerState.CONNECTED
-        if (liveConnected) {
-            sessionManager?.setOutputSuppressed(false)
-            sessionManager?.sendUserMessage(liveNote)
-        } else if (fallbackText.isNotBlank()) {
-            _modelTranscript.value = fallbackText
-            recordRecentModelTranscript(fallbackText)
         }
     }
 
@@ -1191,7 +1034,6 @@ class MicService : Service() {
     private fun stopLiveVoiceSessionInternal() {
         sessionGenerationToken.incrementAndGet()
         automationBridge.cancel()
-        synchronized(automationQueue) { automationQueue.clear() }
         _statusText.value = ""
         startVoiceSessionJob?.cancel()
         startVoiceSessionJob = null
@@ -1200,7 +1042,6 @@ class MicService : Service() {
         livenessWatchdogJob?.cancel()
         livenessWatchdogJob = null
         isTtsPlaying = false
-        turnDispatchedToAutomation = false
         connectingWatchdogJob?.cancel()
         connectingWatchdogJob = null
         handledTranscripts.clear()
@@ -1280,8 +1121,7 @@ class MicService : Service() {
 
     companion object {
         private const val TAG = "MIRA_LIVE_VOICE"
-        /** Turn F: max voice automation commands queued while a task runs. */
-        private const val MAX_QUEUED_AUTOMATION_COMMANDS = 5
+        @Volatile var lastExecutedStep: TaskStep? = null
         private const val CHANNEL_ID = CallNotificationFactory.CHANNEL_ID
         private const val MIC_CHANNEL_ID = "mira_mic_channel"
         private const val NOTIFICATION_ID = 1001
@@ -1436,7 +1276,8 @@ internal suspend fun executeFunctionCall(
     pollIntervalMs: Long = 200L,
     settleDelayMs: Long = 100L,
     targetApp: String? = null,
-    goal: String? = null
+    goal: String? = null,
+    skillsService: SkillMemoryService? = null
 ): Value.Object {
     val normName = name.lowercase(Locale.ROOT)
     val resolvedTarget = targetApp
@@ -1446,6 +1287,41 @@ internal suspend fun executeFunctionCall(
     val resolvedGoal = goal
         ?: (typedArgs["goal"]?.toString() ?: rawArgs["goal"])
 
+    val skills = skillsService ?: context?.let {
+        try {
+            SkillMemoryService.getInstance(it)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    // Phone-action tool findMatch check: when a phone-action tool (open_app, click_text, type_text, scroll)
+    // is invoked and SkillMemoryService.findMatch matches the current goal, replay the skill directly
+    // instead of executing the single step, and return the replay result as the tool result.
+    val isPhoneAction = normName in setOf("open_app", "click_text", "type_text", "scroll")
+    if (isPhoneAction && !resolvedGoal.isNullOrBlank() && skills != null) {
+        val matchedSkill = skills.findMatch(resolvedGoal)
+        if (matchedSkill != null) {
+            val executor = TaskExecutor(
+                automation = automationPort,
+                skills = skills,
+                stepDelayMs = if (pollTimeoutMs == 0L) 0L else 600L
+            )
+            val replayResult = executor.replaySkillDirect(matchedSkill)
+            val postPackage = automationPort.getCurrentPackage().orEmpty()
+            val postNodes = automationPort.dumpScreen()
+            return buildActionResult(
+                automationPort = automationPort,
+                outcome = replayResult.message,
+                success = replayResult.status == TaskStatus.SUCCESS,
+                postPackage = postPackage,
+                postNodes = postNodes,
+                isStepOpenApp = matchedSkill.steps.any { it.action == TaskStep.ACTION_OPEN_APP },
+                descriptionContext = matchedSkill.goal
+            )
+        }
+    }
+
     when (normName) {
         "open_app" -> {
             val appTarget = (typedArgs["app"]?.toString() ?: rawArgs["app"] ?: rawArgs["package"] ?: rawArgs["name"] ?: "").trim()
@@ -1453,11 +1329,21 @@ internal suspend fun executeFunctionCall(
                 return Value.Object("error" to Value.Str("Missing app argument"))
             }
 
+            // Direct fast path grammar: resolve app target
+            val directAction = MiraAutomationBridge.parseDirectAction(appTarget)
+                ?: MiraAutomationBridge.parseDirectAction("open $appTarget")
+            val resolvedApp = if (directAction is MiraAutomationBridge.DirectAction.OpenApp) {
+                directAction.target
+            } else {
+                MiraAutomationBridge.extractTargetApp(appTarget) ?: appTarget
+            }
+
             val prePackage = automationPort.getCurrentPackage().orEmpty()
-            automationPort.openApp(appTarget)
+            automationPort.openApp(resolvedApp)
 
             // Poll for target app foreground (fix #3 form: wait for foreground package before returning screen)
-            val step = TaskStep(action = TaskStep.ACTION_OPEN_APP, params = mapOf("app" to appTarget))
+            val step = TaskStep(action = TaskStep.ACTION_OPEN_APP, params = mapOf("app" to resolvedApp))
+            MicService.lastExecutedStep = step
             val deadline = System.currentTimeMillis() + pollTimeoutMs
             var currentPackage = automationPort.getCurrentPackage().orEmpty()
             while (System.currentTimeMillis() < deadline) {
@@ -1474,9 +1360,9 @@ internal suspend fun executeFunctionCall(
             val postNodes = automationPort.dumpScreen()
 
             val outcome = if (targetReached) {
-                "Successfully opened $appTarget (package: $postPackage)"
+                "Successfully opened $resolvedApp (package: $postPackage)"
             } else {
-                "Dispatched open for $appTarget (current package: $postPackage)"
+                "Dispatched open for $resolvedApp (current package: $postPackage)"
             }
 
             return buildActionResult(
@@ -1486,7 +1372,7 @@ internal suspend fun executeFunctionCall(
                 postPackage = postPackage,
                 postNodes = postNodes,
                 isStepOpenApp = true,
-                descriptionContext = "Opened $appTarget"
+                descriptionContext = "Opened $resolvedApp"
             )
         }
 
@@ -1496,12 +1382,12 @@ internal suspend fun executeFunctionCall(
                 return Value.Object("error" to Value.Str("Missing text argument for click_text"))
             }
 
-            val fallbackX = when (val x = typedArgs["x"]) {
+            var fallbackX = when (val x = typedArgs["x"]) {
                 is Number -> x.toInt()
                 is String -> x.toIntOrNull()
                 else -> rawArgs["x"]?.toIntOrNull()
             }
-            val fallbackY = when (val y = typedArgs["y"]) {
+            var fallbackY = when (val y = typedArgs["y"]) {
                 is Number -> y.toInt()
                 is String -> y.toIntOrNull()
                 else -> rawArgs["y"]?.toIntOrNull()
@@ -1510,6 +1396,17 @@ internal suspend fun executeFunctionCall(
             val prePackage = automationPort.getCurrentPackage().orEmpty()
             val preNodes = automationPort.dumpScreen()
             val preSignature = TaskExecutor.computeNodeSignature(preNodes)
+
+            // Planner coordinates (fix 5, new form): resolve fallback coordinates from preNodes if not passed
+            if (fallbackX == null || fallbackY == null) {
+                val match = preNodes.firstOrNull {
+                    it.text.contains(text, ignoreCase = true) || it.contentDescription.contains(text, ignoreCase = true)
+                }
+                if (match != null && match.centerX > 0 && match.centerY > 0) {
+                    if (fallbackX == null) fallbackX = match.centerX
+                    if (fallbackY == null) fallbackY = match.centerY
+                }
+            }
 
             val actionSuccess = automationPort.clickText(text, preNodes, fallbackX, fallbackY)
             if (settleDelayMs > 0L) {
@@ -1521,10 +1418,17 @@ internal suspend fun executeFunctionCall(
             val postSignature = TaskExecutor.computeNodeSignature(postNodes)
 
             val stepParams = mutableMapOf<String, Any?>("text" to text).apply {
-                if (fallbackX != null) put("fallbackX", fallbackX)
-                if (fallbackY != null) put("fallbackY", fallbackY)
+                if (fallbackX != null) {
+                    put("fallbackX", fallbackX)
+                    put("x", fallbackX)
+                }
+                if (fallbackY != null) {
+                    put("fallbackY", fallbackY)
+                    put("y", fallbackY)
+                }
             }
             val step = TaskStep(action = TaskStep.ACTION_CLICK_TEXT, params = stepParams)
+            MicService.lastExecutedStep = step
 
             val effectiveTarget = resolvedTarget ?: if (prePackage.isNotEmpty() && !TaskExecutor.isLauncherPackage(prePackage) && prePackage != "io.github.ryoaonetsuki.mira") prePackage else null
             val wrongPackage = isWrongPackageChange(step.action, prePackage, postPackage, effectiveTarget, resolvedGoal)
@@ -1584,6 +1488,7 @@ internal suspend fun executeFunctionCall(
             val postSignature = TaskExecutor.computeNodeSignature(postNodes)
 
             val step = TaskStep(action = TaskStep.ACTION_TYPE_TEXT, params = mapOf("text" to text))
+            MicService.lastExecutedStep = step
             val effectiveTarget = resolvedTarget ?: if (prePackage.isNotEmpty() && !TaskExecutor.isLauncherPackage(prePackage) && prePackage != "io.github.ryoaonetsuki.mira") prePackage else null
             val wrongPackage = isWrongPackageChange(step.action, prePackage, postPackage, effectiveTarget, resolvedGoal)
 
@@ -1635,6 +1540,7 @@ internal suspend fun executeFunctionCall(
             val postSignature = TaskExecutor.computeNodeSignature(postNodes)
 
             val step = TaskStep(action = TaskStep.ACTION_SCROLL, params = mapOf("direction" to direction))
+            MicService.lastExecutedStep = step
             val effectiveTarget = resolvedTarget ?: if (prePackage.isNotEmpty() && !TaskExecutor.isLauncherPackage(prePackage) && prePackage != "io.github.ryoaonetsuki.mira") prePackage else null
             val wrongPackage = isWrongPackageChange(step.action, prePackage, postPackage, effectiveTarget, resolvedGoal)
 
@@ -1684,6 +1590,7 @@ internal suspend fun executeFunctionCall(
             val postSignature = TaskExecutor.computeNodeSignature(postNodes)
 
             val step = TaskStep(action = TaskStep.ACTION_PRESS_BACK)
+            MicService.lastExecutedStep = step
             val effectiveTarget = resolvedTarget ?: if (prePackage.isNotEmpty() && !TaskExecutor.isLauncherPackage(prePackage) && prePackage != "io.github.ryoaonetsuki.mira") prePackage else null
             val wrongPackage = isWrongPackageChange(step.action, prePackage, postPackage, effectiveTarget, resolvedGoal)
 
@@ -1733,6 +1640,7 @@ internal suspend fun executeFunctionCall(
             val postSignature = TaskExecutor.computeNodeSignature(postNodes)
 
             val step = TaskStep(action = TaskStep.ACTION_PRESS_HOME)
+            MicService.lastExecutedStep = step
             val homeReached = TaskExecutor.isLauncherPackage(postPackage)
             val effectVerified = actionSuccess && (homeReached || TaskExecutor.verifyEffect(
                 step = step,
@@ -1801,6 +1709,62 @@ internal suspend fun executeFunctionCall(
                 postNodes = postNodes,
                 isStepOpenApp = false,
                 descriptionContext = "Current screen"
+            )
+        }
+
+        "run_skill" -> {
+            val goalArg = (typedArgs["goal"]?.toString() ?: rawArgs["goal"] ?: resolvedGoal ?: "").trim()
+            val skillArg = (typedArgs["skill"]?.toString() ?: rawArgs["skill"] ?: "").trim()
+            if (goalArg.isEmpty() && skillArg.isEmpty()) {
+                return Value.Object(
+                    "result" to Value.Str("Missing goal argument for run_skill"),
+                    "success" to Value.Bool(false)
+                )
+            }
+            if (skills == null) {
+                return Value.Object(
+                    "result" to Value.Str("Skill memory service not available"),
+                    "success" to Value.Bool(false)
+                )
+            }
+            val matchedSkill = if (skillArg.isNotEmpty()) {
+                skills.all().firstOrNull { it.id == skillArg || it.goal.equals(skillArg, ignoreCase = true) }
+                    ?: skills.findMatch(skillArg)
+                    ?: if (goalArg.isNotEmpty()) skills.findMatch(goalArg) else null
+            } else {
+                skills.findMatch(goalArg)
+            }
+
+            if (matchedSkill == null) {
+                val postPackage = automationPort.getCurrentPackage().orEmpty()
+                val postNodes = automationPort.dumpScreen()
+                return buildActionResult(
+                    automationPort = automationPort,
+                    outcome = "No saved skill macro found matching '${if (skillArg.isNotEmpty()) skillArg else goalArg}'",
+                    success = false,
+                    postPackage = postPackage,
+                    postNodes = postNodes,
+                    isStepOpenApp = false,
+                    descriptionContext = if (skillArg.isNotEmpty()) skillArg else goalArg
+                )
+            }
+
+            val executor = TaskExecutor(
+                automation = automationPort,
+                skills = skills,
+                stepDelayMs = if (pollTimeoutMs == 0L) 0L else 600L
+            )
+            val replayResult = executor.replaySkillDirect(matchedSkill)
+            val postPackage = automationPort.getCurrentPackage().orEmpty()
+            val postNodes = automationPort.dumpScreen()
+            return buildActionResult(
+                automationPort = automationPort,
+                outcome = replayResult.message,
+                success = replayResult.status == TaskStatus.SUCCESS,
+                postPackage = postPackage,
+                postNodes = postNodes,
+                isStepOpenApp = matchedSkill.steps.any { it.action == TaskStep.ACTION_OPEN_APP },
+                descriptionContext = matchedSkill.goal
             )
         }
 

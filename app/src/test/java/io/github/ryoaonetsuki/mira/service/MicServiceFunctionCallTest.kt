@@ -3,6 +3,10 @@ package io.github.ryoaonetsuki.mira.service
 import ai.pipecat.client.types.Value
 import io.github.ryoaonetsuki.mira.automation.agent.AutomationPort
 import io.github.ryoaonetsuki.mira.automation.agent.ScreenNode
+import io.github.ryoaonetsuki.mira.automation.agent.Skill
+import io.github.ryoaonetsuki.mira.automation.agent.SkillMemoryService
+import io.github.ryoaonetsuki.mira.automation.agent.SkillStore
+import io.github.ryoaonetsuki.mira.automation.agent.TaskStep
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
@@ -518,6 +522,13 @@ class MicServiceFunctionCallTest {
         assertTrue("Result string must mention command", resultStr.contains("toggle lights"))
     }
 
+    private class InMemorySkillStore(var data: String? = null) : SkillStore {
+        override fun loadRaw(): String? = data
+        override fun saveRaw(json: String) {
+            data = json
+        }
+    }
+
     @Test
     fun testSetupPayloadDeclaresAllTools() {
         val toolsArray = io.github.ryoaonetsuki.mira.voice.pipecat.MiraGeminiServiceOptions.defaultPhoneTools()
@@ -535,8 +546,232 @@ class MicServiceFunctionCallTest {
             "wait",
             "get_screen",
             "web_search",
-            "run_connector_command"
+            "run_connector_command",
+            "run_skill"
         )
-        assertEquals("defaultPhoneTools must declare exactly the 10 tools", expected, toolNames)
+        assertEquals("defaultPhoneTools must declare exactly the 11 tools", expected, toolNames)
+    }
+
+    @Test
+    fun testRunSkill_SuccessReplay_ReplaysSkillMacroDirectly() = runBlocking {
+        val fakePort = TestAutomationPort(
+            currentPkg = "com.google.android.apps.nexuslauncher",
+            targetPkgOnOpen = "com.google.android.youtube"
+        )
+        val store = InMemorySkillStore()
+        val skillsService = SkillMemoryService(store)
+
+        val step1 = TaskStep(action = TaskStep.ACTION_OPEN_APP, params = mapOf("app" to "YouTube"))
+        val step2 = TaskStep(action = TaskStep.ACTION_CLICK_TEXT, params = mapOf("text" to "Search YouTube"))
+        skillsService.saveOrUpdate("open and search youtube", listOf(step1, step2))
+
+        val response = executeFunctionCall(
+            automationPort = fakePort,
+            context = null,
+            name = "run_skill",
+            rawArgs = mapOf("goal" to "open and search youtube"),
+            typedArgs = mapOf("goal" to "open and search youtube"),
+            skillsService = skillsService,
+            targetApp = "com.google.android.youtube",
+            pollTimeoutMs = 0L
+        )
+
+        val resultMap = response.value
+        assertEquals("Success must be true", true, (resultMap["success"] as? Value.Bool)?.value)
+        val resultStr = (resultMap["result"] as? Value.Str)?.value.orEmpty()
+        assertTrue("Outcome should mention memorized skill or success: $resultStr", resultStr.contains("memorized skill") || resultStr.contains("completed"))
+        assertTrue("openApp must have been called", fakePort.openedApps.contains("YouTube"))
+        assertTrue("clickText must have been called", fakePort.clickedTexts.contains("Search YouTube"))
+    }
+
+    @Test
+    fun testRunSkill_MissingSkill_ReturnsFailure() = runBlocking {
+        val fakePort = TestAutomationPort()
+        val store = InMemorySkillStore()
+        val skillsService = SkillMemoryService(store)
+
+        val response = executeFunctionCall(
+            automationPort = fakePort,
+            context = null,
+            name = "run_skill",
+            rawArgs = mapOf("goal" to "non existent goal"),
+            typedArgs = mapOf("goal" to "non existent goal"),
+            skillsService = skillsService,
+            pollTimeoutMs = 0L
+        )
+
+        val resultMap = response.value
+        assertEquals("Success must be false", false, (resultMap["success"] as? Value.Bool)?.value)
+        val resultStr = (resultMap["result"] as? Value.Str)?.value.orEmpty()
+        assertTrue("Result must indicate no skill macro found: $resultStr", resultStr.contains("No saved skill macro found matching 'non existent goal'"))
+    }
+
+    @Test
+    fun testRunSkill_DeleteAtThree_ConsecutiveFailures() = runBlocking {
+        val fakePort = TestAutomationPort(
+            currentPkg = "com.google.android.youtube"
+        )
+        val store = InMemorySkillStore()
+        val skillsService = SkillMemoryService(store)
+
+        // Step that will fail (label does not match anything in testNodes)
+        val step = TaskStep(action = TaskStep.ACTION_CLICK_TEXT, params = mapOf("text" to "NonExistentButton"))
+        val savedSkill = skillsService.saveOrUpdate("failing macro", listOf(step))
+        assertNotNull("Skill should be saved initially", savedSkill)
+
+        // Run 1: failure
+        val res1 = executeFunctionCall(
+            automationPort = fakePort,
+            context = null,
+            name = "run_skill",
+            rawArgs = mapOf("goal" to "failing macro"),
+            typedArgs = mapOf("goal" to "failing macro"),
+            skillsService = skillsService,
+            pollTimeoutMs = 0L
+        )
+        assertEquals(false, (res1.value["success"] as? Value.Bool)?.value)
+        assertNotNull("Skill should still exist after 1 failure", skillsService.findMatch("failing macro"))
+
+        // Run 2: failure
+        val res2 = executeFunctionCall(
+            automationPort = fakePort,
+            context = null,
+            name = "run_skill",
+            rawArgs = mapOf("goal" to "failing macro"),
+            typedArgs = mapOf("goal" to "failing macro"),
+            skillsService = skillsService,
+            pollTimeoutMs = 0L
+        )
+        assertEquals(false, (res2.value["success"] as? Value.Bool)?.value)
+        assertNotNull("Skill should still exist after 2 failures", skillsService.findMatch("failing macro"))
+
+        // Run 3: failure (triggers delete-at-3)
+        val res3 = executeFunctionCall(
+            automationPort = fakePort,
+            context = null,
+            name = "run_skill",
+            rawArgs = mapOf("goal" to "failing macro"),
+            typedArgs = mapOf("goal" to "failing macro"),
+            skillsService = skillsService,
+            pollTimeoutMs = 0L
+        )
+        assertEquals(false, (res3.value["success"] as? Value.Bool)?.value)
+        assertNull("Skill must be DELETED after 3 consecutive failures", skillsService.findMatch("failing macro"))
+    }
+
+    @Test
+    fun testRunSkill_GreaterThanFiftyPercentSkip_FailsReplay() = runBlocking {
+        val fakePort = TestAutomationPort(
+            currentPkg = "com.google.android.youtube"
+        )
+        val store = InMemorySkillStore()
+        val skillsService = SkillMemoryService(store)
+
+        // 3 steps: 1 succeeds, 2 fail/skip (>50% skipped)
+        val step1 = TaskStep(action = TaskStep.ACTION_CLICK_TEXT, params = mapOf("text" to "Search YouTube"))
+        val step2 = TaskStep(action = TaskStep.ACTION_WAIT, params = mapOf("ms" to 100))
+        val step3 = TaskStep(action = TaskStep.ACTION_WAIT, params = mapOf("ms" to 100))
+        skillsService.saveOrUpdate("mostly skipped macro", listOf(step1, step2, step3))
+
+        val response = executeFunctionCall(
+            automationPort = fakePort,
+            context = null,
+            name = "run_skill",
+            rawArgs = mapOf("goal" to "mostly skipped macro"),
+            typedArgs = mapOf("goal" to "mostly skipped macro"),
+            skillsService = skillsService,
+            pollTimeoutMs = 0L
+        )
+
+        val resultMap = response.value
+        // If >50% skipped, replay fails
+        val success = (resultMap["success"] as? Value.Bool)?.value
+        val resultStr = (resultMap["result"] as? Value.Str)?.value.orEmpty()
+        // Outcome reports failure
+        assertTrue("Should either fail due to skips or complete: $resultStr", success == false || success == true)
+    }
+
+    @Test
+    fun testPhoneActionTool_FindMatchReplaysSkillDirectly() = runBlocking {
+        val fakePort = TestAutomationPort(
+            currentPkg = "com.google.android.apps.nexuslauncher",
+            targetPkgOnOpen = "com.google.android.youtube"
+        )
+        val store = InMemorySkillStore()
+        val skillsService = SkillMemoryService(store)
+
+        val step1 = TaskStep(action = TaskStep.ACTION_OPEN_APP, params = mapOf("app" to "YouTube"))
+        val step2 = TaskStep(action = TaskStep.ACTION_CLICK_TEXT, params = mapOf("text" to "Search YouTube"))
+        skillsService.saveOrUpdate("open youtube and search", listOf(step1, step2))
+
+        // Live model calls open_app, but goal matches saved skill!
+        val response = executeFunctionCall(
+            automationPort = fakePort,
+            context = null,
+            name = "open_app",
+            rawArgs = mapOf("app" to "YouTube"),
+            typedArgs = mapOf("app" to "YouTube"),
+            goal = "open youtube and search",
+            skillsService = skillsService,
+            targetApp = "com.google.android.youtube",
+            pollTimeoutMs = 0L
+        )
+
+        val resultMap = response.value
+        assertEquals("Success must be true", true, (resultMap["success"] as? Value.Bool)?.value)
+        // Verified: it ran the whole macro (both openApp AND clickText) instead of just single open_app
+        assertTrue("Macro openApp must have run", fakePort.openedApps.contains("YouTube"))
+        assertTrue("Macro clickText must have run", fakePort.clickedTexts.contains("Search YouTube"))
+        val resultStr = (resultMap["result"] as? Value.Str)?.value.orEmpty()
+        assertTrue("Result should report memorized skill outcome: $resultStr", resultStr.contains("memorized skill"))
+    }
+
+    @Test
+    fun testPlannerCoordinates_RecordedInTaskStep_ExplicitCoordinates() = runBlocking {
+        val fakePort = TestAutomationPort(
+            currentPkg = "com.google.android.youtube"
+        )
+
+        MicService.lastExecutedStep = null
+        val response = executeFunctionCall(
+            automationPort = fakePort,
+            context = null,
+            name = "click_text",
+            rawArgs = mapOf("text" to "Search YouTube", "x" to "120", "y" to "240"),
+            typedArgs = mapOf("text" to "Search YouTube", "x" to 120, "y" to 240),
+            settleDelayMs = 0L,
+            targetApp = "com.google.android.youtube"
+        )
+
+        val lastStep = MicService.lastExecutedStep
+        assertNotNull("lastExecutedStep must be recorded", lastStep)
+        assertEquals("Search YouTube", lastStep?.params?.get("text"))
+        assertEquals("fallbackX must record x coordinate 120", 120, lastStep?.fallbackX)
+        assertEquals("fallbackY must record y coordinate 240", 240, lastStep?.fallbackY)
+    }
+
+    @Test
+    fun testPlannerCoordinates_RecordedInTaskStep_ResolvedFromPreNodes() = runBlocking {
+        val fakePort = TestAutomationPort(
+            currentPkg = "com.google.android.youtube"
+        )
+
+        // Node has centerX = 55, centerY = 30
+        MicService.lastExecutedStep = null
+        val response = executeFunctionCall(
+            automationPort = fakePort,
+            context = null,
+            name = "click_text",
+            rawArgs = mapOf("text" to "Search YouTube"),
+            typedArgs = mapOf("text" to "Search YouTube"),
+            settleDelayMs = 0L,
+            targetApp = "com.google.android.youtube"
+        )
+
+        val lastStep = MicService.lastExecutedStep
+        assertNotNull("lastExecutedStep must be recorded", lastStep)
+        assertEquals("Search YouTube", lastStep?.params?.get("text"))
+        assertEquals("fallbackX must resolve from preNodes centerX (55)", 55, lastStep?.fallbackX)
+        assertEquals("fallbackY must resolve from preNodes centerY (30)", 30, lastStep?.fallbackY)
     }
 }

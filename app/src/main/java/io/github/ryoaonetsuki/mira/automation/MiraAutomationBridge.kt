@@ -83,161 +83,6 @@ class MiraAutomationBridge(
         }
     }
 
-    private fun buildHistoryEntities(
-        currentGoal: String,
-        screenDescription: String,
-        history: List<Pair<String, String>>
-    ): ArrayList<ChatMessageEntity> {
-        val entities = ArrayList<ChatMessageEntity>(history.size + 1)
-        for ((role, content) in history) {
-            entities.add(
-                ChatMessageEntity(
-                    conversationId = "automation",
-                    role = if (role == "assistant" || role == "model") "model" else "user",
-                    content = content
-                )
-            )
-        }
-        entities.add(
-            ChatMessageEntity(
-                conversationId = "automation",
-                role = "user",
-                content = "Goal: $currentGoal\nScreen:\n$screenDescription"
-            )
-        )
-        return entities
-    }
-
-    private fun buildThinkLambda(
-        restClient: GeminiRestClient
-    ): suspend (String, String, List<Pair<String, String>>) -> String =
-        { currentGoal, screenDescription, history ->
-            val key = apiKey()
-            val entities = buildHistoryEntities(currentGoal, screenDescription, history)
-            // Turn F(c): fastest model first, SINGLE attempt, no ladder/retry —
-            // one slow think call must never eat the 120s task budget.
-            val chatResult = withTimeout(TaskExecutor.DEFAULT_THINK_TIMEOUT_MS) {
-                restClient.generateAutomationThink(
-                    apiKey = key,
-                    history = entities,
-                    systemPrompt = SYSTEM_PROMPT
-                )
-            }
-            if (chatResult.isSuccess) {
-                chatResult.getOrNull()?.text ?: ""
-            } else {
-                throw chatResult.exceptionOrNull() ?: Exception("LLM call failed")
-            }
-        }
-
-    private fun buildThinkVisionLambda(
-        restClient: GeminiRestClient
-    ): suspend (String, String, List<Pair<String, String>>, ByteArray) -> String =
-        { currentGoal, screenDescription, history, screenshotBytes ->
-            val key = apiKey()
-            val entities = buildHistoryEntities(currentGoal, screenDescription, history)
-            // Turn F(c): same fast single-attempt path as text think, with the
-            // screenshot attached — vision is a think call, not a chat call.
-            val base64Data = java.util.Base64.getEncoder().encodeToString(screenshotBytes)
-            val attachment = ChatAttachment(
-                mimeType = "image/jpeg",
-                base64Data = base64Data,
-                fileName = "screenshot.jpg"
-            )
-            val visionResult = withTimeout(TaskExecutor.DEFAULT_THINK_TIMEOUT_MS) {
-                restClient.generateAutomationThink(
-                    apiKey = key,
-                    history = entities,
-                    systemPrompt = SYSTEM_PROMPT,
-                    attachments = listOf(attachment)
-                )
-            }
-            if (visionResult.isSuccess) {
-                visionResult.getOrNull()?.text ?: ""
-            } else {
-                throw visionResult.exceptionOrNull() ?: Exception("LLM vision call failed")
-            }
-        }
-
-    /**
-     * Turn F plan-once: ONE planning call per goal that returns the FULL
-     * command list as JSON. Fastest model, single attempt, same 45s deadline
-     * as the per-step think calls — the plan is one structured output, not a
-     * conversation. Best-of-all (Mika knowledge files): when the goal targets
-     * an app with a bundled usage note, the note is appended to the prompt so
-     * the plan uses that app's real buttons/flows instead of guessing.
-     */
-    private fun buildPlanLambda(
-        restClient: GeminiRestClient,
-        knowledge: AppKnowledge? = null
-    ): suspend (String, String) -> String =
-        { currentGoal, screenDescription ->
-            val key = apiKey()
-            val entities = buildHistoryEntities(currentGoal, screenDescription, emptyList())
-            val target = extractTargetApp(currentGoal)
-            val note = knowledge?.noteForTarget(target)
-            val systemPrompt = if (note != null) {
-                "$PLAN_SYSTEM_PROMPT\n\nApp knowledge for this goal:\n$note"
-            } else {
-                PLAN_SYSTEM_PROMPT
-            }
-            val planResult = withTimeout(TaskExecutor.DEFAULT_THINK_TIMEOUT_MS) {
-                restClient.generateAutomationThink(
-                    apiKey = key,
-                    history = entities,
-                    systemPrompt = systemPrompt
-                )
-            }
-            if (planResult.isSuccess) {
-                planResult.getOrNull()?.text ?: ""
-            } else {
-                throw planResult.exceptionOrNull() ?: Exception("LLM call failed")
-            }
-        }
-
-    /**
-     * Turn G: the SAME one-shot planning call, but WITH the screenshot
-     * attached — the plan is made from pixels + node text together, so the
-     * agent plans from what the screen actually shows (home screen first,
-     * then scroll/tap as the screen demands). Same model, same single
-     * attempt and deadline as the text planner; the vision lambda is a
-     * think call, not a chat call.
-     */
-    private fun buildPlanVisionLambda(
-        restClient: GeminiRestClient,
-        knowledge: AppKnowledge? = null
-    ): suspend (String, String, ByteArray) -> String =
-        { currentGoal, screenDescription, screenshotBytes ->
-            val key = apiKey()
-            val entities = buildHistoryEntities(currentGoal, screenDescription, emptyList())
-            val target = extractTargetApp(currentGoal)
-            val note = knowledge?.noteForTarget(target)
-            val systemPrompt = if (note != null) {
-                "$PLAN_SYSTEM_PROMPT\n\nApp knowledge for this goal:\n$note"
-            } else {
-                PLAN_SYSTEM_PROMPT
-            }
-            val base64Data = java.util.Base64.getEncoder().encodeToString(screenshotBytes)
-            val attachment = ChatAttachment(
-                mimeType = "image/jpeg",
-                base64Data = base64Data,
-                fileName = "screenshot.jpg"
-            )
-            val planResult = withTimeout(TaskExecutor.DEFAULT_THINK_TIMEOUT_MS) {
-                restClient.generateAutomationThink(
-                    apiKey = key,
-                    history = entities,
-                    systemPrompt = systemPrompt,
-                    attachments = listOf(attachment)
-                )
-            }
-            if (planResult.isSuccess) {
-                planResult.getOrNull()?.text ?: ""
-            } else {
-                throw planResult.exceptionOrNull() ?: Exception("LLM vision call failed")
-            }
-        }
-
     private fun createDefaultExecutor(onProgress: ((step: Int, description: String) -> Unit)? = null): TaskExecutor {
         executorFactory?.let {
             val exec = it()
@@ -247,23 +92,9 @@ class MiraAutomationBridge(
         val ctx = requireNotNull(context) { "Context is required when no executorFactory is provided" }
         val automation: AutomationPort = ScreenAutomationService(ctx)
         val skills = SkillMemoryService.getInstance(ctx)
-        val restClient = GeminiRestClient()
-        // Best-of-all (Mika): per-app knowledge files from assets; a missing
-        // file is simply no note, never a failure.
-        val knowledge = AppKnowledge { path ->
-            try {
-                ctx.assets.open(path).bufferedReader().use { it.readText() }
-            } catch (_: Throwable) {
-                null
-            }
-        }
         return TaskExecutor(
             automation = automation,
             skills = skills,
-            think = buildThinkLambda(restClient),
-            thinkWithVision = buildThinkVisionLambda(restClient),
-            plan = buildPlanLambda(restClient, knowledge),
-            planWithVision = buildPlanVisionLambda(restClient, knowledge),
             taskTimeoutMs = taskTimeoutMs,
             onProgress = onProgress
         )
@@ -370,19 +201,6 @@ class MiraAutomationBridge(
     fun isDirectGoal(goal: String): Boolean = parseDirectAction(goal) != null
 
     companion object {
-        private const val SYSTEM_PROMPT =
-            "You control an Android phone. Reply with ONLY one JSON action object {action, params, reasoning, is_complete}. Actions: click_text, click_at, type_text, press_enter, scroll, swipe, press_back, press_home, open_app, wait, done. Screen description and goal are provided. Never invent coordinates outside the screen. If the goal is complete, reply done. Decide from the screenshot AND the node list together — when a screenshot is attached, look at it: work out which app and screen you are on, and only then act. If you just opened an app, you are on its home screen — read it before acting. Scroll only if the thing you need is not visible; never tap something you cannot see on the screen."
-        /**
-         * Plan-once prompt (Turn F): ONE planning call per goal. The model
-         * returns the COMPLETE command list up front — the executor then runs
-         * it directly with no further LLM calls. Reply with ONLY one JSON
-         * object: {"steps": [{"action": ..., "params": {...}}, ...]} using the
-         * same 11 actions as the single-step prompt, or {"done": true} when
-         * the goal is already complete on the current screen.
-         */
-        private const val PLAN_SYSTEM_PROMPT =
-            "You plan Android phone tasks. Given the goal and the current screen, reply with ONLY one JSON object: {\"steps\": [{\"action\": \"<action>\", \"params\": {...}}, ...]} listing EVERY action needed to complete the goal, in order, from the current screen. Actions: click_text, click_at, type_text, press_enter, scroll, swipe, press_back, press_home, open_app, wait, done, long_press (params x, y, durationMs), pinch (params centerX, centerY, direction in|out). Use click_text with the visible label and coordinates (params text, x, y) when possible; use open_app with the app name to launch an app. Never invent coordinates outside the screen. Keep the list short (at most 10 steps). If the goal is already complete on the current screen, reply {\"done\": true}. Plan from the screenshot AND the node list together: first work out from the screenshot which app and screen you are on. If you are not on the target app's home screen, get there first (open_app / press_home / press_back as needed). Then look at the screen and decide each next step from what you can actually SEE — scroll only if the thing you need is not visible; never tap something you cannot see on the screen."
-
         @Volatile
         private var instance: MiraAutomationBridge? = null
 

@@ -172,12 +172,12 @@ class MicServiceFunctionCallTest {
             settleDelayMs = 10L
         )
 
-        assertEquals("Should have opened YouTube", listOf("YouTube"), fakePort.openedApps)
+        assertEquals("Should have opened YouTube", listOf("com.google.android.youtube"), fakePort.openedApps)
         assertEquals("Foreground package should match YouTube", "com.google.android.youtube", fakePort.currentPkg)
 
         val resultMap = response.value
         val resultStr = (resultMap["result"] as? Value.Str)?.value.orEmpty()
-        assertTrue("Result message should indicate success: $resultStr", resultStr.contains("Successfully opened YouTube"))
+        assertTrue("Result message should indicate success: $resultStr", resultStr.contains("Successfully opened com.google.android.youtube"))
 
         val successBool = (resultMap["success"] as? Value.Bool)?.value
         assertEquals("Success field must be true", true, successBool)

@@ -2305,4 +2305,233 @@ class TaskExecutorTest {
         )
         assertEquals("Plan (0 steps): nothing to do.", executor.formatPlan(emptyList()))
     }
+
+    // --- Turn G Residual Tests (Items 3, 4, 5, 7, 8) ---
+
+    @Test
+    fun testSearchPath_PollsForOpenAppBeforePlanOnce() = runBlocking {
+        // Item 3: Direct search inside a known app (e.g. whatsapp) must poll/settle
+        // before falling through to plan-once.
+        val fakePort = FakeAutomationPort(
+            currentPkg = "io.github.ryoaonetsuki.mira",
+            packageAppearAfterChecks = 2 // Takes 2 checks before package appears
+        )
+        val executor = TaskExecutor(
+            automation = fakePort,
+            skills = SkillMemoryService(InMemorySkillStore()),
+            stepDelayMs = 10L,
+            openAppPollTimeoutMs = 1000L,
+            openAppPollIntervalMs = 10L,
+            plan = { _, _ ->
+                """{"action": "done", "is_complete": true}"""
+            }
+        )
+
+        // Goal: search for John on WhatsApp
+        executor.executeGoal("search John on WhatsApp")
+        assertTrue("openApp must have been called for whatsapp", fakePort.actionsPerformed.any { it.startsWith("openApp:") && it.contains("whatsapp") })
+        assertEquals("com.whatsapp", fakePort.currentPkg)
+    }
+
+    @Test
+    fun testGoalAwareVerifyEffect_RejectsWrongPackage() {
+        val clickStep = TaskStep(action = TaskStep.ACTION_CLICK_TEXT, params = mapOf("text" to "Send"))
+        val homeStep = TaskStep(action = TaskStep.ACTION_PRESS_HOME)
+
+        // Goal has target WhatsApp: changing package to Chrome is a WRONG package failure
+        val wrongPkgResult = TaskExecutor.verifyEffect(
+            step = clickStep,
+            prePackage = "com.whatsapp",
+            preSignature = 100,
+            postPackage = "com.android.chrome",
+            postSignature = 200,
+            goal = "send message on WhatsApp"
+        )
+        assertFalse("Wrong package change to Chrome must NOT verify as effect for WhatsApp goal", wrongPkgResult)
+
+        // Staying in same package with node signature change verifies
+        val samePkgResult = TaskExecutor.verifyEffect(
+            step = clickStep,
+            prePackage = "com.whatsapp",
+            preSignature = 100,
+            postPackage = "com.whatsapp",
+            postSignature = 200,
+            goal = "send message on WhatsApp"
+        )
+        assertTrue("Signature change in same package must verify", samePkgResult)
+
+        // WhatsApp Business alias counts as target
+        val aliasPkgResult = TaskExecutor.verifyEffect(
+            step = clickStep,
+            prePackage = "io.github.ryoaonetsuki.mira",
+            preSignature = 100,
+            postPackage = "com.whatsapp.w4b",
+            postSignature = 200,
+            goal = "send message on WhatsApp"
+        )
+        assertTrue("WhatsApp Business alias must count as target", aliasPkgResult)
+
+        // Press home to launcher verifies
+        val homeResult = TaskExecutor.verifyEffect(
+            step = homeStep,
+            prePackage = "com.whatsapp",
+            preSignature = 100,
+            postPackage = "com.google.android.apps.nexuslauncher",
+            postSignature = 200,
+            goal = "send message on WhatsApp"
+        )
+        assertTrue("Press home to launcher package must verify", homeResult)
+
+        // Web goal: browser package verifies
+        val webBrowserResult = TaskExecutor.verifyEffect(
+            step = clickStep,
+            prePackage = "io.github.ryoaonetsuki.mira",
+            preSignature = 100,
+            postPackage = "com.android.chrome",
+            postSignature = 200,
+            goal = "search weather on google"
+        )
+        assertTrue("Browser package must verify for web goal", webBrowserResult)
+
+        // Web goal: non-browser package does not verify
+        val webNonBrowserResult = TaskExecutor.verifyEffect(
+            step = clickStep,
+            prePackage = "io.github.ryoaonetsuki.mira",
+            preSignature = 100,
+            postPackage = "com.google.android.youtube",
+            postSignature = 200,
+            goal = "search weather on google"
+        )
+        assertFalse("Non-browser package must NOT verify for web goal", webNonBrowserResult)
+    }
+
+    @Test
+    fun testPlannerCoordinates_SurvivePlanParsingAndFallback() {
+        val executor = TaskExecutor(
+            automation = FakeAutomationPort(),
+            skills = SkillMemoryService(InMemorySkillStore()),
+            stepDelayMs = 0
+        )
+
+        // Normal params with x and y
+        val planWithCoords = executor.parseAiPlan(
+            """{"steps": [{"action": "click_text", "params": {"text": "Send", "x": 500, "y": 800}}]}"""
+        )
+        assertNotNull(planWithCoords)
+        val step1 = planWithCoords!!.steps[0]
+        assertEquals("click_text", step1.action)
+        assertEquals("Send", step1.stringParam("text"))
+        assertEquals(500, step1.intParam("x"))
+        assertEquals(800, step1.intParam("y"))
+
+        // Top level coordinates
+        val planTopLevel = executor.parseAiPlan(
+            """{"steps": [{"action": "click_text", "text": "Next", "x": 350, "y": 650}]}"""
+        )
+        assertNotNull(planTopLevel)
+        val step2 = planTopLevel!!.steps[0]
+        assertEquals("click_text", step2.action)
+        assertEquals("Next", step2.stringParam("text"))
+        assertEquals(350, step2.intParam("fallbackX") ?: step2.intParam("x"))
+        assertEquals(650, step2.intParam("fallbackY") ?: step2.intParam("y"))
+
+        // Normalized alias "click" with label and coordinates preserves as click_text with fallback
+        val planNormalized = executor.parseAiPlan(
+            """{"steps": [{"action": "click", "params": {"label": "Submit", "x": 200, "y": 400}}]}"""
+        )
+        assertNotNull(planNormalized)
+        val step3 = planNormalized!!.steps[0]
+        assertEquals("click_text", step3.action)
+        assertEquals("Submit", step3.stringParam("text"))
+        assertEquals(200, step3.intParam("fallbackX") ?: step3.intParam("x"))
+        assertEquals(400, step3.intParam("fallbackY") ?: step3.intParam("y"))
+    }
+
+    @Test
+    fun testStructuralHomeFirst_RepairsPlanWhenOffTarget() {
+        val executor = TaskExecutor(
+            automation = FakeAutomationPort(),
+            skills = SkillMemoryService(InMemorySkillStore()),
+            stepDelayMs = 0
+        )
+
+        val rawPlan = """{"steps": [{"action": "click_text", "params": {"text": "Chat"}}]}"""
+
+        // Current package is Chrome, but goal is WhatsApp -> must repair by prepending open_app
+        val repaired = executor.parseAiPlan(
+            raw = rawPlan,
+            goal = "WhatsApp খুলো এবং হাই বলো",
+            currentPackage = "com.android.chrome"
+        )
+        assertNotNull(repaired)
+        assertEquals(2, repaired!!.steps.size)
+        assertEquals("open_app", repaired.steps[0].action)
+        assertEquals("com.whatsapp", repaired.steps[0].stringParam("app"))
+        assertEquals("click_text", repaired.steps[1].action)
+
+        // Current package already matches WhatsApp -> no repair needed
+        val alreadyOnTarget = executor.parseAiPlan(
+            raw = rawPlan,
+            goal = "WhatsApp খুলো এবং হাই বলো",
+            currentPackage = "com.whatsapp"
+        )
+        assertNotNull(alreadyOnTarget)
+        assertEquals(1, alreadyOnTarget!!.steps.size)
+        assertEquals("click_text", alreadyOnTarget.steps[0].action)
+
+        // Plan that already starts with open_app -> no duplicate open_app prepended
+        val openAppPlan = """{"steps": [{"action": "open_app", "params": {"app": "whatsapp"}}, {"action": "click_text", "params": {"text": "Chat"}}]}"""
+        val openAppParsed = executor.parseAiPlan(
+            raw = openAppPlan,
+            goal = "WhatsApp খুলো এবং হাই বলো",
+            currentPackage = "com.android.chrome"
+        )
+        assertNotNull(openAppParsed)
+        assertEquals(2, openAppParsed!!.steps.size)
+        assertEquals("open_app", openAppParsed.steps[0].action)
+
+        // Plan that starts with press_home -> no duplicate open_app prepended
+        val homePlan = """{"steps": [{"action": "press_home"}, {"action": "click_text", "params": {"text": "Chat"}}]}"""
+        val homeParsed = executor.parseAiPlan(
+            raw = homePlan,
+            goal = "WhatsApp খুলো এবং হাই বলো",
+            currentPackage = "com.android.chrome"
+        )
+        assertNotNull(homeParsed)
+        assertEquals(2, homeParsed!!.steps.size)
+        assertEquals("press_home", homeParsed.steps[0].action)
+    }
+
+    @Test
+    fun testCumulativeThinkBudget_StopsStartingNewThinkCalls() = runBlocking {
+        var clock = 1000L
+        var thinkCallCount = 0
+        val fakePort = FakeAutomationPort(
+            currentPkg = "io.github.ryoaonetsuki.mira",
+            simulateEffect = false // Force AI loop to keep trying
+        )
+
+        val executor = TaskExecutor(
+            automation = fakePort,
+            skills = SkillMemoryService(InMemorySkillStore()),
+            stepDelayMs = 0,
+            cumulativeThinkBudgetMs = 500L, // 500ms budget
+            thinkTimeoutMs = 10_000L,
+            clockMs = { clock },
+            think = { _, _, _ ->
+                thinkCallCount++
+                clock += 300L // Each think call consumes 300ms
+                """{"action": "scroll", "params": {"direction": "down"}}"""
+            }
+        )
+
+        // Goal that falls through to AI loop (e.g. unknown custom goal)
+        val result = executor.executeGoal("unknown custom task that loops")
+        assertEquals(TaskStatus.FAILED, result.status)
+        assertTrue(
+            "Diagnosis must record cumulative think budget exhausted, got: ${executor.lastDiagnosis}",
+            executor.lastDiagnosis?.contains("Per-task think budget exhausted") == true
+        )
+        assertEquals("Should stop starting new think calls once cumulative budget is exhausted", 2, thinkCallCount)
+    }
 }

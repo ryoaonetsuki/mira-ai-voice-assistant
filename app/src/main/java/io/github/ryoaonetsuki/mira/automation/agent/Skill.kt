@@ -41,14 +41,55 @@ data class Skill(
   }
 
   companion object {
+    private val BANGLA_SUFFIXES = listOf(
+        "গুলো", "গুলা", "খানি", "খানা", "দের", "ের", "এর", "তে", "টা", "টি", "কে", "র", "ে", "এ"
+    )
+
+    private fun stripBanglaSuffix(token: String): String {
+        if (!token.any { it in '\u0980'..'\u09FF' }) return token
+        for (suffix in BANGLA_SUFFIXES) {
+            if (token.endsWith(suffix) && token.length - suffix.length >= 3) {
+                return token.substring(0, token.length - suffix.length)
+            }
+        }
+        return token
+    }
+
     fun normalize(input: String): String {
-      return input.lowercase().trim().replace(Regex("\\s+"), " ")
+        var text = input.lowercase().trim().replace(Regex("\\s+"), " ")
+        if (text.any { it in '\u0980'..'\u09FF' }) {
+            // Turn G: Bangla normalization — treat verb equivalents as same intent token
+            text = text
+                .replace("ওপেন করো", "খুলো")
+                .replace("ওপেন কর", "খুলো")
+                .replace("খোলো", "খুলো")
+                .replace("চালু করো", "খুলো")
+                .replace("চালু কর", "খুলো")
+                .replace("সার্চ করো", "খুঁজো")
+                .replace("সার্চ কর", "খুঁজো")
+                .replace("খুজো", "খুঁজো")
+                .replace("প্লে করো", "চালাও")
+                .replace("প্লে কর", "চালাও")
+                .replace("বাজাও", "চালাও")
+                .replace("সেন্ড করো", "পাঠাও")
+                .replace("সেন্ড কর", "পাঠাও")
+                .replace("ফোন করো", "কল")
+                .replace("কল করো", "কল")
+                .replace("বন্ধ করো", "বন্ধ")
+                .replace("বন্ধ কর", "বন্ধ")
+
+            // Strip particles and suffixes from nouns/tokens
+            text = text.split(" ").joinToString(" ") { word ->
+                stripBanglaSuffix(word)
+            }
+        }
+        return text
     }
 
     private fun tokens(normalizedOrRaw: String): Set<String> {
       return normalize(normalizedOrRaw)
         .split(" ")
-        .filter { it.length > 2 }
+        .filter { it.length > 2 || (it.length >= 2 && it.any { c -> c in '\u0980'..'\u09FF' }) }
         .toSet()
     }
 

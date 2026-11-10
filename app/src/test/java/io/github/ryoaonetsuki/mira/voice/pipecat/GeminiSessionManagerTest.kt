@@ -1053,8 +1053,8 @@ class GeminiSessionManagerTest {
         val sessionResumption = modelConfigObj.value["sessionResumption"] as Value.Object
         assertEquals(
             "Next attempt must still carry the preserved handle",
-            Value.String("handle_must_survive_stage4_silence"),
-            sessionResumption.value["handle"]
+            "handle_must_survive_stage4_silence",
+            (sessionResumption.value["handle"] as Value.Str).value
         )
     }
 }

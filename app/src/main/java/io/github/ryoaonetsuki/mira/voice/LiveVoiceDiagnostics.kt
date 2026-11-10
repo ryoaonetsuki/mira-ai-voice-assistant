@@ -46,7 +46,15 @@ data class VoiceDiagnosticsData(
     val aecAvailable: Boolean = false,
     val aecEnabled: Boolean = false,
     val aecEngine: String = "UNKNOWN",
-    val audioMode: String = "MODE_NORMAL"
+    val audioMode: String = "MODE_NORMAL",
+    // Turn G call-continuity diagnostics: WHY the call dropped / came back.
+    // Values are reason labels only (mic-died, socket-dropped, watchdog,
+    // retries-exhausted, service-killed) — never handles, keys or audio.
+    val lastDropReason: String? = null,
+    val micRestartCount: Int = 0,
+    val autoRestartCount: Int = 0,
+    val lastAutoRestartAt: Long? = null,
+    val lastResumedWithContext: Boolean? = null
 )
 
 object LiveVoiceDiagnostics {
@@ -158,6 +166,36 @@ object LiveVoiceDiagnostics {
 
     fun updateSessionManagerState(state: String) {
         _data.value = _data.value.copy(sessionManagerState = state)
+    }
+
+    // Turn G call-continuity diagnostics: record WHY a session dropped or
+    // restarted, so the next phone test can tell which suspect fired
+    // (mic-died vs socket-dropped vs watchdog vs service-killed). The reason
+    // is also the visible lastError, so it shows on the diagnostics screen.
+    fun recordDropReason(reason: String) {
+        _data.value = _data.value.copy(lastDropReason = reason, lastError = reason)
+        addFrameLog("DROP_REASON reason=$reason")
+    }
+
+    /** The mic capture path recovered by itself (AudioIn recreated AudioRecord). */
+    fun recordMicRestart() {
+        _data.value = _data.value.copy(micRestartCount = _data.value.micRestartCount + 1)
+        addFrameLog("MIC_RESTART count=${_data.value.micRestartCount}")
+    }
+
+    /** A fresh session was auto-started after a terminal error while the call was expected live. */
+    fun recordAutoRestart(reason: String) {
+        _data.value = _data.value.copy(
+            autoRestartCount = _data.value.autoRestartCount + 1,
+            lastAutoRestartAt = System.currentTimeMillis()
+        )
+        addFrameLog("AUTO_RESTART reason=$reason count=${_data.value.autoRestartCount}")
+    }
+
+    /** Whether the latest (re)connect resumed the previous session or started fresh. */
+    fun recordResumedWithContext(resumed: Boolean) {
+        _data.value = _data.value.copy(lastResumedWithContext = resumed)
+        addFrameLog("SESSION_RESUMED resumed=$resumed")
     }
 
     // Acoustic Echo Cancellation Diagnostics (ROUND 20)

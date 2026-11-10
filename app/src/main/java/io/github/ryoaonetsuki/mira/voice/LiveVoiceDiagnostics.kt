@@ -54,7 +54,8 @@ data class VoiceDiagnosticsData(
     val micRestartCount: Int = 0,
     val autoRestartCount: Int = 0,
     val lastAutoRestartAt: Long? = null,
-    val lastResumedWithContext: Boolean? = null
+    val lastResumedWithContext: Boolean? = null,
+    val interruptedCount: Int = 0
 )
 
 object LiveVoiceDiagnostics {
@@ -196,6 +197,12 @@ object LiveVoiceDiagnostics {
     fun recordResumedWithContext(resumed: Boolean) {
         _data.value = _data.value.copy(lastResumedWithContext = resumed)
         addFrameLog("SESSION_RESUMED resumed=$resumed")
+    }
+
+    /** Server-driven barge-in: the user interrupted model output. */
+    fun recordInterrupted() {
+        _data.value = _data.value.copy(interruptedCount = _data.value.interruptedCount + 1)
+        addFrameLog("INTERRUPTED count=${_data.value.interruptedCount}")
     }
 
     // Acoustic Echo Cancellation Diagnostics (ROUND 20)

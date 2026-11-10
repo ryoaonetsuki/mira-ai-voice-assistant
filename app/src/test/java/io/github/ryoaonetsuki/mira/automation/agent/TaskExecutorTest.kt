@@ -23,6 +23,10 @@ class TaskExecutorTest {
         var noEffectClickTexts: Set<String> = emptySet(),
         var screenshotBytes: ByteArray? = byteArrayOf(1, 2, 3),
         val actionsPerformed: MutableList<String> = mutableListOf(),
+        // Turn F(a): when > 0, openApp does not flip the foreground package
+        // until this many getCurrentPackage() checks have passed — simulates
+        // a cold app start (YouTube commonly 2-5s).
+        var packageAppearAfterChecks: Int = 0,
         var screenNodes: List<ScreenNode> = listOf(
             ScreenNode(
                 index = 0,
@@ -45,6 +49,17 @@ class TaskExecutorTest {
         )
     ) : AutomationPort {
         private var mutationTick = 0
+
+        /** Turn F(e): how many screen reads the executor performed. */
+        var dumpCount: Int = 0
+            private set
+
+        /** Turn F(a): how many foreground-package checks the executor made. */
+        var packageCheckCount: Int = 0
+            private set
+
+        private var pendingPkg: String? = null
+        private var packageChecksSinceOpen: Int = 0
 
         private fun mutateScreenState(label: String) {
             if (!simulateEffect) return
@@ -73,7 +88,10 @@ class TaskExecutorTest {
 
         override fun isServiceEnabled(): Boolean = serviceEnabled
         override fun dumpScreen(): List<ScreenNode> = screenNodes
-        override fun getScreenElements(): List<ScreenNode> = screenNodes
+        override fun getScreenElements(): List<ScreenNode> {
+            dumpCount++
+            return screenNodes
+        }
         override fun formatNodes(nodes: List<ScreenNode>): String = "nodes count: ${nodes.size}"
         override fun getCompressedScreenDescription(nodes: List<ScreenNode>, goal: String): String =
             "Screen description for $goal"
@@ -158,13 +176,27 @@ class TaskExecutorTest {
             actionsPerformed.add("openApp:$trimmed")
             val launchedPkg = ScreenAutomationService.resolveKnownAppPackage(trimmed) ?: "com.example.$trimmed"
             if (simulateEffect) {
-                currentPkg = launchedPkg
+                // Package appears after packageAppearAfterChecks checks (cold
+                // start); the screen itself mutates immediately.
+                pendingPkg = launchedPkg
+                packageChecksSinceOpen = 0
                 mutateScreenState("opened:$launchedPkg")
             }
             return launchedPkg
         }
 
-        override fun getCurrentPackage(): String? = currentPkg
+        override fun getCurrentPackage(): String? {
+            packageCheckCount++
+            val pending = pendingPkg
+            if (pending != null) {
+                packageChecksSinceOpen++
+                if (packageChecksSinceOpen > packageAppearAfterChecks) {
+                    currentPkg = pending
+                    pendingPkg = null
+                }
+            }
+            return currentPkg
+        }
 
         override suspend fun takeScreenshotJpeg(maxWidthPx: Int): ByteArray? = screenshotBytes
     }
@@ -813,28 +845,54 @@ class TaskExecutorTest {
             stepDelayMs = 0
         )
 
-        // 1. Empty nodes -> true
-        assertTrue(executor.shouldAttachScreenshot(emptyList(), lastStepHadNoEffect = false))
+        // Turn F(d): a screenshot is paid ONLY when the previous step had no
+        // effect AND the text description is insufficient.
+        // 1. Empty nodes + previous step had effect -> false (step-1 hint text suffices)
+        assertFalse(executor.shouldAttachScreenshot(emptyList(), lastStepHadNoEffect = false))
+        // 2. Empty nodes + previous step had NO effect -> true
+        assertTrue(executor.shouldAttachScreenshot(emptyList(), lastStepHadNoEffect = true))
 
-        // 2. >50% clickable nodes unlabeled -> true
+        // 3. >50% clickable nodes unlabeled + previous step had effect -> false
         val unlabeledNodes = listOf(
             ScreenNode(0, "", "", "android.view.View", "", isClickable = true, isEditable = false, isScrollable = false, isCheckable = false, isEnabled = true, 0, 0, 10, 10, 5, 5),
             ScreenNode(1, "", "", "android.view.View", "", isClickable = true, isEditable = false, isScrollable = false, isCheckable = false, isEnabled = true, 0, 0, 10, 10, 5, 5),
             ScreenNode(2, "Search", "", "android.widget.Button", "", isClickable = true, isEditable = false, isScrollable = false, isCheckable = false, isEnabled = true, 0, 0, 10, 10, 5, 5)
         )
-        assertTrue(executor.shouldAttachScreenshot(unlabeledNodes, lastStepHadNoEffect = false))
+        assertFalse(executor.shouldAttachScreenshot(unlabeledNodes, lastStepHadNoEffect = false))
+        // 4. >50% clickable nodes unlabeled + previous step had NO effect -> true
+        assertTrue(executor.shouldAttachScreenshot(unlabeledNodes, lastStepHadNoEffect = true))
 
-        // 3. Labeled nodes + previous step had effect -> false
+        // 5. Labeled nodes + previous step had effect -> false
         assertFalse(executor.shouldAttachScreenshot(fakePort.screenNodes, lastStepHadNoEffect = false))
+        // 6. Labeled nodes + previous step had NO effect -> false (text is sufficient)
+        assertFalse(executor.shouldAttachScreenshot(fakePort.screenNodes, lastStepHadNoEffect = true))
 
-        // 4. Labeled nodes + previous step had NO effect -> true
-        assertTrue(executor.shouldAttachScreenshot(fakePort.screenNodes, lastStepHadNoEffect = true))
-
-        // 5. End-to-end: unlabeled screen routes through thinkWithVision
-        fakePort.screenNodes = unlabeledNodes
-        val result = executor.executeGoal("open youtube")
+        // 7. End-to-end: unlabeled screen starts TEXT-ONLY; only after a
+        // no-effect step does the next think route through thinkWithVision.
+        val visionPort = FakeAutomationPort(
+            serviceEnabled = true,
+            noEffectClickTexts = setOf("Home"),
+            screenNodes = unlabeledNodes
+        )
+        val visionSkills = SkillMemoryService(InMemorySkillStore())
+        var visionThinkTurns = 0
+        val visionExecutor = TaskExecutor(
+            automation = visionPort,
+            skills = visionSkills,
+            think = { _, _, _ ->
+                visionThinkTurns++
+                """{"action": "click_text", "params": {"text": "Home"}}"""
+            },
+            thinkWithVision = { _, _, _, bytes ->
+                visionCalled = bytes.isNotEmpty()
+                """{"action": "open_app", "params": {"app": "youtube"}, "is_complete": true}"""
+            },
+            stepDelayMs = 0
+        )
+        val result = visionExecutor.executeGoal("open youtube")
         assertEquals(TaskStatus.SUCCESS, result.status)
-        assertTrue("thinkWithVision must be invoked when >50% clickable nodes lack labels", visionCalled)
+        assertEquals("First AI step on an unlabeled screen must use text-only think", 1, visionThinkTurns)
+        assertTrue("thinkWithVision must be invoked on the step after a no-effect step on an unlabeled screen", visionCalled)
     }
 
     // =========================================================================
@@ -842,8 +900,10 @@ class TaskExecutorTest {
     // =========================================================================
 
     @Test
-    fun testC2_ReplaySkillDirect_FallsBackToAiLoopWhenThinkPresent_AndMarksOutcomeCorrectly() = runBlocking {
-        // Replay fails (actionSuccess = false initially, then flipped to true during AI fallback)
+    fun testC2_ReplaySkillDirect_ResumesWithAiForFailedStepOnly_AndMarksOutcomeCorrectly() = runBlocking {
+        // Turn F(b): replay fails on the stale click; the AI fixes ONLY that
+        // step (open_app) and replay RESUMES with the remaining steps —
+        // the goal is never restarted from scratch via the AI loop.
         val fakePort = FakeAutomationPort(serviceEnabled = true, actionSuccess = false)
         val skills = SkillMemoryService(InMemorySkillStore())
         val savedSkill = skills.saveOrUpdate(
@@ -870,7 +930,7 @@ class TaskExecutorTest {
         val result = executor.replaySkillDirect(savedSkill)
         assertEquals(TaskStatus.SUCCESS, result.status)
         assertTrue("Message must state it completed via AI fallback", result.message.contains("AI fallback"))
-        assertTrue(thinkTurn >= 2)
+        assertEquals("Resume must fix the failed step with exactly one AI turn (no full AI-loop restart)", 1, thinkTurn)
 
         // Skill must still exist, consecutiveFailures == 0, successCount == 1, and steps refreshed
         val updatedSkill = skills.findMatch("open youtube")
@@ -889,10 +949,12 @@ class TaskExecutorTest {
             steps = listOf(TaskStep(action = "click_text", params = mapOf("text" to "StaleVideoTitle")))
         )
 
+        var thinkTurn = 0
         val executor = TaskExecutor(
             automation = fakePort,
             skills = skills,
             think = { _, _, _ ->
+                thinkTurn++
                 """{"action": "click_text", "params": {"text": "StillFailing"}}"""
             },
             maxSteps = 2,
@@ -902,6 +964,11 @@ class TaskExecutorTest {
         val result = executor.replaySkillDirect(savedSkill)
         assertEquals(TaskStatus.FAILED, result.status)
         assertTrue(result.message.contains("AI fallback"))
+        assertEquals(
+            "Resume must spend exactly ${TaskExecutor.AI_RESUME_MAX_ATTEMPTS} AI turns on the failed step, then stop",
+            TaskExecutor.AI_RESUME_MAX_ATTEMPTS,
+            thinkTurn
+        )
 
         // C1 + C2: Skill is NOT deleted after 1 failure; consecutiveFailures is incremented to 1
         val retained = skills.findMatch("open youtube")
@@ -1233,5 +1300,194 @@ class TaskExecutorTest {
         executor.executeGoal("test progress warning")
         val hasStillWarning = progressMessages.any { it.contains("Still thinking…") }
         assertTrue("Expected progress callback to emit 'Still thinking…' warning", hasStillWarning)
+    }
+
+    // =========================================================================
+    // Round 25 Fix Turn F — Phone Control Speed + AI-Reply Hang
+    // =========================================================================
+
+    @Test
+    fun testF_OpenAppPolling_ColdStartSucceeds() = runBlocking {
+        // YouTube cold start: the package only appears after several
+        // foreground-package checks. The old fixed 1200ms settle + one
+        // retry called this a failure; polling must wait it out.
+        val fakePort = FakeAutomationPort(
+            serviceEnabled = true,
+            packageAppearAfterChecks = 3
+        )
+        val skills = SkillMemoryService(InMemorySkillStore())
+        val skill = Skill(
+            goal = "yt",
+            steps = listOf(
+                TaskStep(action = TaskStep.ACTION_OPEN_APP, params = mapOf("app" to "youtube")),
+                TaskStep(action = TaskStep.ACTION_CLICK_TEXT, params = mapOf("text" to "Search"))
+            )
+        )
+        val executor = TaskExecutor(
+            automation = fakePort,
+            skills = skills,
+            stepDelayMs = 1L,
+            openAppPollTimeoutMs = 5_000L,
+            openAppPollIntervalMs = 100L
+        )
+
+        val result = executor.replaySkillDirect(skill)
+        assertEquals(TaskStatus.SUCCESS, result.status)
+        assertTrue(fakePort.actionsPerformed.contains("openApp:youtube"))
+        assertTrue(fakePort.actionsPerformed.contains("clickText:Search"))
+        assertTrue(
+            "Replay must have polled the foreground package while the app was launching",
+            fakePort.packageCheckCount >= 3
+        )
+    }
+
+    @Test
+    fun testF_OpenAppPolling_AlreadyInTargetPackage_SucceedsImmediately() = runBlocking {
+        // Already in the target app counts as success — no waiting.
+        val fakePort = FakeAutomationPort(
+            serviceEnabled = true,
+            currentPkg = "com.google.android.youtube"
+        )
+        val skills = SkillMemoryService(InMemorySkillStore())
+        val skill = Skill(
+            goal = "yt",
+            steps = listOf(
+                TaskStep(action = TaskStep.ACTION_OPEN_APP, params = mapOf("app" to "youtube"))
+            )
+        )
+        val executor = TaskExecutor(automation = fakePort, skills = skills, stepDelayMs = 0)
+
+        val result = executor.replaySkillDirect(skill)
+        assertEquals(TaskStatus.SUCCESS, result.status)
+        assertTrue(
+            "Polling must succeed on the first check when already in the target package",
+            fakePort.packageCheckCount <= 3
+        )
+    }
+
+    @Test
+    fun testF_Resume_FailedStepFixedByAi_ContinuesRemainingSteps() = runBlocking {
+        // Replay fails at step 1 (open_app dispatch fails); the AI fixes
+        // ONLY step 1, then replay RESUMES with steps 2-3 — the goal is
+        // never restarted from scratch via the AI loop.
+        val fakePort = FakeAutomationPort(serviceEnabled = true, actionSuccess = false)
+        val skills = SkillMemoryService(InMemorySkillStore())
+        val skill = Skill(
+            goal = "yt",
+            steps = listOf(
+                TaskStep(action = TaskStep.ACTION_OPEN_APP, params = mapOf("app" to "youtube")),
+                TaskStep(action = TaskStep.ACTION_CLICK_TEXT, params = mapOf("text" to "Library")),
+                TaskStep(action = TaskStep.ACTION_CLICK_TEXT, params = mapOf("text" to "Search"))
+            )
+        )
+
+        var thinkTurn = 0
+        val executor = TaskExecutor(
+            automation = fakePort,
+            skills = skills,
+            think = { _, _, _ ->
+                thinkTurn++
+                fakePort.actionSuccess = true
+                """{"action": "open_app", "params": {"app": "youtube"}}"""
+            },
+            stepDelayMs = 0
+        )
+
+        val result = executor.replaySkillDirect(skill)
+        assertEquals(TaskStatus.SUCCESS, result.status)
+        assertTrue("Message must state it completed via AI fallback", result.message.contains("AI fallback"))
+        assertEquals("Resume must fix the failed step with exactly one AI turn", 1, thinkTurn)
+        assertEquals(
+            "AI-fixed step 1, then the remaining recorded steps replay in order",
+            listOf("openApp:youtube", "clickText:Library", "clickText:Search"),
+            fakePort.actionsPerformed
+        )
+    }
+
+    @Test
+    fun testF_Resume_HungThink_FailsAtDeadline() = runBlocking {
+        // Turn F(g): a hung think call on the replay-fallback path must fail
+        // at the think deadline (~45s in production, 1s here), not hang
+        // until the 120s task timeout.
+        val fakePort = FakeAutomationPort(serviceEnabled = true, actionSuccess = false)
+        val skills = SkillMemoryService(InMemorySkillStore())
+        val skill = Skill(
+            goal = "yt",
+            steps = listOf(
+                TaskStep(action = TaskStep.ACTION_CLICK_TEXT, params = mapOf("text" to "Search"))
+            )
+        )
+        val executor = TaskExecutor(
+            automation = fakePort,
+            skills = skills,
+            think = { _, _, _ ->
+                kotlinx.coroutines.delay(5_000L) // Far beyond the 100ms think deadline
+                """{"action": "done", "is_complete": true}"""
+            },
+            stepDelayMs = 0L,
+            thinkTimeoutMs = 1_000L,
+            taskTimeoutMs = 10_000L
+        )
+
+        val startMs = System.currentTimeMillis()
+        val result = executor.replaySkillDirect(skill)
+        val elapsedMs = System.currentTimeMillis() - startMs
+
+        assertEquals(TaskStatus.FAILED, result.status)
+        assertTrue(
+            "Failure must name the AI-reply timeout but was: ${result.message}",
+            result.message.contains("Timed out while waiting for the AI reply")
+        )
+        assertTrue("Hung think must fail at the deadline, not run the full task timeout (was ${elapsedMs}ms)", elapsedMs < 3_000L)
+        assertNotNull(executor.lastDiagnosis)
+        assertTrue(executor.lastDiagnosis!!.contains("Timed out while waiting for the AI reply"))
+    }
+
+    @Test
+    fun testF_Replay_ReusesPostDumpAsNextPreDump() = runBlocking {
+        // Turn F(e): a 3-step replay used to dump 6x (pre + post per step);
+        // the post-verification dump is now the next step's pre-dump.
+        val fakePort = FakeAutomationPort(serviceEnabled = true)
+        val skills = SkillMemoryService(InMemorySkillStore())
+        val skill = Skill(
+            goal = "yt",
+            steps = listOf(
+                TaskStep(action = TaskStep.ACTION_CLICK_TEXT, params = mapOf("text" to "A")),
+                TaskStep(action = TaskStep.ACTION_CLICK_TEXT, params = mapOf("text" to "B")),
+                TaskStep(action = TaskStep.ACTION_CLICK_TEXT, params = mapOf("text" to "C"))
+            )
+        )
+        val executor = TaskExecutor(automation = fakePort, skills = skills, stepDelayMs = 0)
+
+        val ok = executor.replaySkill(skill)
+        assertTrue(ok)
+        assertEquals("3-step replay must read the screen 4x (pre + 3 posts), not 6x", 4, fakePort.dumpCount)
+    }
+
+    @Test
+    fun testF_RunAiLoop_ReusesVerifyDump_NextObserve() = runBlocking {
+        // Turn F(e): the AI loop used to dump twice per step (observe +
+        // verify); the verification dump is now the next step's observe.
+        val fakePort = FakeAutomationPort(serviceEnabled = true)
+        val skills = SkillMemoryService(InMemorySkillStore())
+        var thinkTurn = 0
+        val executor = TaskExecutor(
+            automation = fakePort,
+            skills = skills,
+            think = { _, _, _ ->
+                thinkTurn++
+                if (thinkTurn == 1) {
+                    """{"action": "open_app", "params": {"app": "youtube"}}"""
+                } else {
+                    """{"action": "done", "is_complete": true}"""
+                }
+            },
+            stepDelayMs = 0
+        )
+
+        val result = executor.executeGoal("open youtube")
+        assertEquals(TaskStatus.SUCCESS, result.status)
+        assertEquals(2, result.stepsUsed)
+        assertEquals("2-step AI loop must read the screen 2x (observe + verify), not 3x", 2, fakePort.dumpCount)
     }
 }

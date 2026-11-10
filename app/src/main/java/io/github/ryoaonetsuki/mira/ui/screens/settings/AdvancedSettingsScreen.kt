@@ -21,11 +21,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.fragment.app.FragmentActivity
 import io.github.ryoaonetsuki.mira.R
+import io.github.ryoaonetsuki.mira.automation.agent.SkillSettings
 import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
 import io.github.ryoaonetsuki.mira.data.preferences.UserPreferences
 import io.github.ryoaonetsuki.mira.service.MiraAccessibilityService
@@ -45,6 +47,8 @@ fun AdvancedSettingsScreen(
     val scope = rememberCoroutineScope()
     val userPrefs = remember { UserPreferences(context) }
     val securePrefs = remember { SecurePreferences(context) }
+    val skillSettings = remember { SkillSettings.getInstance(context) }
+    val skillsEnabled by skillSettings.skillsEnabledFlow.collectAsState()
 
     val orbStyle by userPrefs.orbStyleFlow.collectAsState(initial = "Mira Neon")
 
@@ -193,6 +197,51 @@ fun AdvancedSettingsScreen(
                                 fontWeight = FontWeight.SemiBold
                             )
                         }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                MiraCard(modifier = Modifier.fillMaxWidth()) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .background(palette.primary.copy(alpha = 0.15f))
+                        ) {
+                            Icon(
+                                painter = painterResource(
+                                    id = if (skillsEnabled)
+                                        R.drawable.ic_fluent_flash_24_filled
+                                    else
+                                        R.drawable.ic_fluent_flash_24_regular
+                                ),
+                                contentDescription = null,
+                                tint = palette.primary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = stringResource(R.string.skills_enabled_title),
+                                fontSize = 14.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = palette.textPrimary
+                            )
+                            Text(
+                                text = stringResource(R.string.skills_enabled_desc),
+                                fontSize = 12.sp,
+                                color = palette.textSecondary
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        MiraSwitch(
+                            checked = skillsEnabled,
+                            onCheckedChange = { skillSettings.set(it) }
+                        )
                     }
                 }
             }

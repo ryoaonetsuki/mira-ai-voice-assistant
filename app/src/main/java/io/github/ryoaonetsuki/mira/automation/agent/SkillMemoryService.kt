@@ -39,7 +39,8 @@ class SharedPreferencesSkillStore(
  * deliberately simple — skills are small and few.
  */
 class SkillMemoryService(
-  private val store: SkillStore
+  private val store: SkillStore,
+  private val isSkillsEnabled: () -> Boolean = { true }
 ) {
   private val lock = Any()
   private var cache: MutableList<Skill>? = null
@@ -112,6 +113,7 @@ class SkillMemoryService(
    * then exact normalized match, then token Jaccard similarity >= 0.75.
    */
   fun findMatch(goal: String): Skill? = synchronized(lock) {
+    if (!isSkillsEnabled()) return null
     val clean = goal.trim()
     if (clean.isEmpty()) return null
     val skills = load()
@@ -146,6 +148,13 @@ class SkillMemoryService(
    * steps are stripped since replay ends when the list is exhausted.
    */
   fun saveOrUpdate(goal: String, steps: List<TaskStep>): Skill = synchronized(lock) {
+    if (!isSkillsEnabled()) {
+      val skills = load()
+      val normalized = Skill.normalize(goal)
+      val existingIndex = skills.indexOfFirst { it.normalizedGoal == normalized }
+      if (existingIndex >= 0) return skills[existingIndex]
+      return Skill(goal = goal, steps = emptyList())
+    }
     val skills = load()
     val cleaned = steps.filter { it.action != TaskStep.ACTION_DONE && it.isSupported }
     val normalized = Skill.normalize(goal)
@@ -280,8 +289,14 @@ class SkillMemoryService(
 
     fun getInstance(context: Context): SkillMemoryService {
       return instance ?: synchronized(this) {
-        instance ?: SkillMemoryService(SharedPreferencesSkillStore(context)).also {
-          instance = it
+        instance ?: run {
+          val settings = SkillSettings.getInstance(context)
+          SkillMemoryService(
+            store = SharedPreferencesSkillStore(context),
+            isSkillsEnabled = { settings.isSkillsEnabled }
+          ).also {
+            instance = it
+          }
         }
       }
     }

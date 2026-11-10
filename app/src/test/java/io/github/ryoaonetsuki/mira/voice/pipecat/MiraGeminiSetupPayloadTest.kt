@@ -111,7 +111,7 @@ class MiraGeminiSetupPayloadTest {
         assertNotNull("tools[0] must be Value.Object", toolDeclObj)
         val funcDecls = toolDeclObj!!.value["functionDeclarations"] as? Value.Array
         assertNotNull("functionDeclarations must be present", funcDecls)
-        assertEquals("Must declare all 14 phone tools", 14, funcDecls!!.value.size)
+        assertEquals("Must declare all 17 phone tools", 17, funcDecls!!.value.size)
 
         val declaredNames = funcDecls.value.mapNotNull {
             ((it as? Value.Object)?.value?.get("name") as? Value.Str)?.value
@@ -119,6 +119,9 @@ class MiraGeminiSetupPayloadTest {
         val expectedTools = listOf(
             "open_app",
             "click_text",
+            "tap_number",
+            "show_numbers",
+            "hide_numbers",
             "type_text",
             "scroll",
             "press_back",

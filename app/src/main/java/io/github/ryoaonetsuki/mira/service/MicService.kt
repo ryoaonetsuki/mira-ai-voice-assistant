@@ -156,6 +156,13 @@ class MicService : Service() {
     @Volatile private var lastBotSpeakingEndTimeMs: Long = 0L
     @Volatile private var isTtsPlaying: Boolean = false
     @Volatile internal var turnDispatchedToAutomation: Boolean = false
+    /**
+     * Turn F sequential tasks: commands spoken while a task runs are QUEUED
+     * (FIFO) and run the moment the slot clears — never lost, never a
+     * permanent "another task is already running" refusal. Guarded by its
+     * own monitor; see handleUserVoiceTurn / handleAutomationCommand.
+     */
+    private val automationQueue = ArrayDeque<String>()
     private val recentModelTranscripts = ArrayDeque<String>()
 
     private var cachedVoiceName: String = "Aoede"
@@ -770,6 +777,7 @@ class MicService : Service() {
             }
             io.github.ryoaonetsuki.mira.voice.VoiceTurnRoute.STOP_AUTOMATION -> {
                 automationBridge.cancel()
+                synchronized(automationQueue) { automationQueue.clear() }
                 serviceScope.launch(Dispatchers.IO) {
                     try {
                         val db = MiraDatabase.getInstance(applicationContext)
@@ -787,11 +795,26 @@ class MicService : Service() {
                 return
             }
             io.github.ryoaonetsuki.mira.voice.VoiceTurnRoute.AUTOMATION -> {
-                if (turnDispatchedToAutomation) {
-                    Log.i(TAG, "MIRA_LIVE_VOICE: Turn already dispatched to automation; skipping duplicate: $cleanText")
-                    return
+                // Turn F sequential tasks: a command spoken while a task runs
+                // is queued and runs the moment the slot clears — never lost.
+                val queued = synchronized(automationQueue) {
+                    if (turnDispatchedToAutomation) {
+                        if (automationQueue.size >= MAX_QUEUED_AUTOMATION_COMMANDS) {
+                            _statusText.value = "Too many queued commands — try again in a moment"
+                            Log.i(TAG, "MIRA_LIVE_VOICE: Automation queue full; dropping: $cleanText")
+                            true
+                        } else {
+                            automationQueue.addLast(cleanText)
+                            _statusText.value = "Queued: $cleanText"
+                            Log.i(TAG, "MIRA_LIVE_VOICE: Automation busy; queued: $cleanText")
+                            true
+                        }
+                    } else {
+                        turnDispatchedToAutomation = true
+                        false
+                    }
                 }
-                turnDispatchedToAutomation = true
+                if (queued) return
                 handleAutomationCommand(cleanText)
                 return
             }
@@ -868,23 +891,24 @@ class MicService : Service() {
     }
 
     /**
-     * Explicit user phone command (the only way an automation goal starts). ONE voice: Live's audio is
-     * gated off while the action runs (reliable flag, not a text "keep silent"), then the outcome is
-     * handed to Live as context so IT announces it in its own words. When Live is not connected,
-     * the outcome is delivered as written status/transcript text and notification — never TTS.
+     * Explicit user phone command (the only way an automation goal starts).
+     * Turn F: the voice is NEVER muted during tasks — no setOutputSuppressed,
+     * no enableMic(false), no _isMuted, no isTtsPlaying. The mic stays live
+     * so the next command can be spoken (and queued) at any time. The
+     * double-answer risk is handled without muting: the turn was already
+     * routed away from Live, the only messages sent to Live are the short
+     * "working on it" ack (AI path) and the outcome note, and the echo
+     * detector ignores Live's own speech. The outcome is handed to Live as
+     * context so IT announces it in its own words. When Live is not
+     * connected, the outcome is delivered as written status/transcript text
+     * and notification — never TTS.
      */
     private fun handleAutomationCommand(cleanText: String) {
-        val session = sessionManager
         val token = sessionGenerationToken.get()
-        session?.setOutputSuppressed(true)
         _statusText.value = "Running: $cleanText..."
         _modelTranscript.value = "Running: $cleanText..."
         val serviceEnabled = MiraAccessibilityService.isEnabled(applicationContext)
         serviceScope.launch(Dispatchers.IO) {
-            val wasMuted = _isMuted.value
-            _isMuted.value = true
-            sessionManager?.enableMic(false)
-            isTtsPlaying = true
             try {
                 val isBangla = io.github.ryoaonetsuki.mira.identity.MiraIdentityInterceptor.detectIsBangla(cleanText, cachedLanguage)
                 if (!serviceEnabled) {
@@ -908,6 +932,13 @@ class MicService : Service() {
                         disabledMessage
                     )
                     return@launch
+                }
+
+                // AI path only: a short spoken acknowledgement so the user
+                // hears the task started. The direct path finishes in ~1s —
+                // its result note arrives almost immediately, so no ack.
+                if (!automationBridge.isDirectGoal(cleanText)) {
+                    announceWorking(token)
                 }
 
                 val result = automationBridge.executeGoal(cleanText) { _, desc ->
@@ -938,18 +969,29 @@ class MicService : Service() {
             } catch (e: Exception) {
                 Log.e(TAG, "MIRA_LIVE_VOICE: Error executing voice automation: ${e.message}", e)
             } finally {
-                // Always release the gate, even on failure/cancel, so Live is never left muted.
-                turnDispatchedToAutomation = false
-                _statusText.value = ""
-                session?.setOutputSuppressed(false)
-                delay(300L)
-                lastBotSpeakingEndTimeMs = android.os.SystemClock.elapsedRealtime()
-                isTtsPlaying = false
-                if (!wasMuted) {
-                    _isMuted.value = false
-                    sessionManager?.enableMic(true)
+                // The executor slot clears the moment the task completes (the
+                // bridge clears its active executor in finally) — drain the
+                // queue under the same lock so the next spoken command runs
+                // immediately with no re-setup and no lost command.
+                val next: String?
+                synchronized(automationQueue) {
+                    turnDispatchedToAutomation = false
+                    _statusText.value = ""
+                    next = automationQueue.removeFirstOrNull()
+                    if (next != null) turnDispatchedToAutomation = true
                 }
+                if (next != null) handleAutomationCommand(next)
             }
+        }
+    }
+
+    /** Short "working on it" note for the AI path (Live speaks it in its own voice). */
+    private fun announceWorking(token: Long) {
+        if (!io.github.ryoaonetsuki.mira.voice.VoiceTurnRouter.mayAnnounceAutomationResult(goalFromUserCommand = true)) return
+        if (sessionGenerationToken.get() != token) return
+        val liveConnected = sessionManager?.state?.value == SessionManagerState.CONNECTED
+        if (liveConnected) {
+            sessionManager?.sendUserMessage(io.github.ryoaonetsuki.mira.voice.VoiceTurnRouter.buildWorkingNote(cachedLanguage))
         }
     }
 
@@ -984,6 +1026,7 @@ class MicService : Service() {
     private fun stopLiveVoiceSessionInternal() {
         sessionGenerationToken.incrementAndGet()
         automationBridge.cancel()
+        synchronized(automationQueue) { automationQueue.clear() }
         _statusText.value = ""
         startVoiceSessionJob?.cancel()
         startVoiceSessionJob = null
@@ -1071,6 +1114,8 @@ class MicService : Service() {
 
     companion object {
         private const val TAG = "MIRA_LIVE_VOICE"
+        /** Turn F: max voice automation commands queued while a task runs. */
+        private const val MAX_QUEUED_AUTOMATION_COMMANDS = 5
         private const val CHANNEL_ID = CallNotificationFactory.CHANNEL_ID
         private const val MIC_CHANNEL_ID = "mira_mic_channel"
         private const val NOTIFICATION_ID = 1001

@@ -17,6 +17,10 @@ import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.IconCompat
 import io.github.ryoaonetsuki.mira.MainActivity
 import io.github.ryoaonetsuki.mira.R
+import io.github.ryoaonetsuki.mira.automation.agent.AutomationPort
+import io.github.ryoaonetsuki.mira.automation.agent.ScreenAutomationService
+import io.github.ryoaonetsuki.mira.automation.agent.TaskExecutor
+import io.github.ryoaonetsuki.mira.automation.agent.TaskStep
 import io.github.ryoaonetsuki.mira.data.local.MiraDatabase
 import io.github.ryoaonetsuki.mira.data.local.entities.NotificationEntity
 import io.github.ryoaonetsuki.mira.data.preferences.SecurePreferences
@@ -191,6 +195,11 @@ class MicService : Service() {
     private val automationBridge by lazy {
         io.github.ryoaonetsuki.mira.automation.MiraAutomationBridge.getInstance(applicationContext)
     }
+
+    internal var automationPortProvider: () -> AutomationPort = {
+        ScreenAutomationService(applicationContext)
+    }
+    internal val automationPort: AutomationPort get() = automationPortProvider()
 
     private val notificationController by lazy {
         CallNotificationController(
@@ -912,37 +921,37 @@ class MicService : Service() {
 
             override fun onFunctionCall(id: String, name: String, args: Value.Array, rawArgs: Map<String, String>) {
                 Log.i(TAG, "MIRA_LIVE_VOICE: onFunctionCall: id=$id name=$name rawArgs=$rawArgs")
-                handleFunctionCall(id, name, args, rawArgs)
+                handleFunctionCall(id, name, args, rawArgs, emptyMap())
+            }
+
+            override fun onFunctionCall(
+                id: String,
+                name: String,
+                args: Value.Array,
+                rawArgs: Map<String, String>,
+                typedArgs: Map<String, Any?>
+            ) {
+                Log.i(TAG, "MIRA_LIVE_VOICE: onFunctionCall: id=$id name=$name rawArgs=$rawArgs typedArgs=$typedArgs")
+                handleFunctionCall(id, name, args, rawArgs, typedArgs)
             }
         }
     }
 
-    private fun handleFunctionCall(id: String, name: String, args: Value.Array, rawArgs: Map<String, String>) {
+    private fun handleFunctionCall(
+        id: String,
+        name: String,
+        args: Value.Array,
+        rawArgs: Map<String, String>,
+        typedArgs: Map<String, Any?> = emptyMap()
+    ) {
         serviceScope.launch(Dispatchers.IO) {
             try {
-                // Forward function calls through the existing function-call / command handling path (preserve rawArgs keys)
-                val query = rawArgs["query"] ?: rawArgs["text"] ?: rawArgs["command"] ?: rawArgs.values.firstOrNull() ?: ""
-                var resultString: String? = null
-                if (query.isNotBlank() && ConnectorIntentHandler.isConnectorCommand(query)) {
-                    resultString = ConnectorIntentHandler.handleCommand(applicationContext, query)
-                    if (resultString != null) {
-                        val db = MiraDatabase.getInstance(applicationContext)
-                        db.notificationDao().insertNotification(
-                            NotificationEntity(
-                                title = "Connector Action",
-                                message = resultString,
-                                type = "connector"
-                            )
-                        )
-                    }
-                } else if (name.equals("search", ignoreCase = true) || name.equals("web_search", ignoreCase = true)) {
-                    val searchResults = FreeWebSearch.search(query, maxResults = 3)
-                    resultString = searchResults.joinToString("\n") { "${it.title}: ${it.snippet}" }
-                }
-
-                val finalResult = resultString ?: "Executed $name"
-                val responseObj = Value.Object(
-                    "result" to Value.Str(finalResult)
+                val responseObj = executeFunctionCall(
+                    automationPort = automationPort,
+                    context = applicationContext,
+                    name = name,
+                    rawArgs = rawArgs,
+                    typedArgs = typedArgs
                 )
                 sessionManager?.sendFunctionResponse(id, name, responseObj)
             } catch (e: Exception) {
@@ -954,6 +963,26 @@ class MicService : Service() {
             }
         }
     }
+
+    internal suspend fun executeFunctionCall(
+        automationPort: AutomationPort,
+        context: Context?,
+        name: String,
+        rawArgs: Map<String, String>,
+        typedArgs: Map<String, Any?> = emptyMap(),
+        pollTimeoutMs: Long = 4000L,
+        pollIntervalMs: Long = 200L,
+        settleDelayMs: Long = 100L
+    ): Value.Object = io.github.ryoaonetsuki.mira.service.executeFunctionCall(
+        automationPort = automationPort,
+        context = context,
+        name = name,
+        rawArgs = rawArgs,
+        typedArgs = typedArgs,
+        pollTimeoutMs = pollTimeoutMs,
+        pollIntervalMs = pollIntervalMs,
+        settleDelayMs = settleDelayMs
+    )
 
     private fun handleUserVoiceTurn(text: String) {
         val cleanText = text.trim()
@@ -1394,4 +1423,114 @@ class MicService : Service() {
             context.startService(intent)
         }
     }
+}
+
+internal suspend fun executeFunctionCall(
+    automationPort: AutomationPort,
+    context: Context?,
+    name: String,
+    rawArgs: Map<String, String>,
+    typedArgs: Map<String, Any?> = emptyMap(),
+    pollTimeoutMs: Long = 4000L,
+    pollIntervalMs: Long = 200L,
+    settleDelayMs: Long = 100L
+): Value.Object {
+    if (name.equals("open_app", ignoreCase = true)) {
+        val appTarget = (typedArgs["app"]?.toString() ?: rawArgs["app"] ?: rawArgs["package"] ?: rawArgs["name"] ?: "").trim()
+        if (appTarget.isEmpty()) {
+            return Value.Object("error" to Value.Str("Missing app argument"))
+        }
+
+        val prePackage = automationPort.getCurrentPackage().orEmpty()
+        automationPort.openApp(appTarget)
+
+        // Poll for target app foreground (fix #3 form: wait for foreground package before returning screen)
+        val step = TaskStep(action = TaskStep.ACTION_OPEN_APP, params = mapOf("app" to appTarget))
+        val deadline = System.currentTimeMillis() + pollTimeoutMs
+        var currentPackage = automationPort.getCurrentPackage().orEmpty()
+        while (System.currentTimeMillis() < deadline) {
+            if (TaskExecutor.openAppTargetReached(step, prePackage, currentPackage)) break
+            delay(pollIntervalMs)
+            currentPackage = automationPort.getCurrentPackage().orEmpty()
+        }
+        if (settleDelayMs > 0L) {
+            delay(settleDelayMs)
+        }
+
+        val postPackage = automationPort.getCurrentPackage().orEmpty()
+        val targetReached = TaskExecutor.openAppTargetReached(step, prePackage, postPackage)
+
+        // Fresh screen context attached: node-tree text always
+        val nodes = automationPort.dumpScreen()
+        val screenText = if (nodes.isNotEmpty()) {
+            automationPort.getCompressedScreenDescription(nodes, "Opened $appTarget")
+        } else {
+            "Screen has no accessible UI elements (empty node tree)"
+        }
+
+        // Screenshot only at existing shouldAttachScreenshot decision points (after open_app, empty node trees, no-effect + insufficient text)
+        val attachScreenshot = TaskExecutor.shouldAttachScreenshot(
+            nodes = nodes,
+            lastStepHadNoEffect = !targetReached,
+            lastStepWasOpenApp = true
+        )
+        var screenshotBase64: String? = null
+        if (attachScreenshot) {
+            try {
+                val jpegBytes = automationPort.takeScreenshotJpeg(720)
+                if (jpegBytes != null && jpegBytes.isNotEmpty()) {
+                    screenshotBase64 = java.util.Base64.getEncoder().encodeToString(jpegBytes)
+                }
+            } catch (e: Exception) {
+                Log.w("MicService", "Failed to capture screenshot for open_app tool result: ${e.message}")
+            }
+        }
+
+        val outcome = if (targetReached) {
+            "Successfully opened $appTarget (package: $postPackage)"
+        } else {
+            "Dispatched open for $appTarget (current package: $postPackage)"
+        }
+
+        val resultMap = mutableMapOf<String, Value>(
+            "result" to Value.Str(outcome),
+            "success" to Value.Bool(targetReached),
+            "package" to Value.Str(postPackage),
+            "screen" to Value.Str(screenText),
+            "screen_text" to Value.Str(screenText)
+        )
+        if (screenshotBase64 != null) {
+            resultMap["screenshot"] = Value.Str(screenshotBase64)
+        }
+        return Value.Object(resultMap)
+    }
+
+    // Existing search/web_search and connector handling (preserve rawArgs keys)
+    val query = (rawArgs["query"] ?: rawArgs["text"] ?: rawArgs["command"] ?: rawArgs.values.firstOrNull() ?: "").trim()
+    var resultString: String? = null
+    if (query.isNotBlank() && ConnectorIntentHandler.isConnectorCommand(query)) {
+        if (context != null) {
+            resultString = ConnectorIntentHandler.handleCommand(context, query)
+            if (resultString != null) {
+                val db = MiraDatabase.getInstance(context)
+                db.notificationDao().insertNotification(
+                    NotificationEntity(
+                        title = "Connector Action",
+                        message = resultString,
+                        type = "connector"
+                    )
+                )
+            }
+        } else {
+            resultString = "Executed connector command: $query"
+        }
+    } else if (name.equals("search", ignoreCase = true) || name.equals("web_search", ignoreCase = true)) {
+        val searchResults = FreeWebSearch.search(query, maxResults = 3)
+        resultString = searchResults.joinToString("\n") { "${it.title}: ${it.snippet}" }
+    }
+
+    val finalResult = resultString ?: "Executed $name"
+    return Value.Object(
+        "result" to Value.Str(finalResult)
+    )
 }

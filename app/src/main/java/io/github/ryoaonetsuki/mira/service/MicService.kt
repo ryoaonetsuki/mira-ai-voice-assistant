@@ -202,6 +202,100 @@ class MicService : Service() {
     }
     internal val automationPort: AutomationPort get() = automationPortProvider()
 
+    private val userTurnWatchdog by lazy {
+        TurnWatchdog(
+            scope = serviceScope,
+            kind = WatchdogKind.USER_TURN
+        ).apply {
+            setOnFire { transcript ->
+                handleUserTurnWatchdogFired(transcript)
+            }
+        }
+    }
+
+    private val postCallWatchdog by lazy {
+        TurnWatchdog(
+            scope = serviceScope,
+            kind = WatchdogKind.POST_FUNCTION_CALL
+        ).apply {
+            setOnFire { outcome ->
+                handlePostCallWatchdogFired(outcome)
+            }
+        }
+    }
+
+    private fun handleUserTurnWatchdogFired(transcript: String) {
+        val isConnected = sessionManager?.state?.value == SessionManagerState.CONNECTED
+        Log.i(TAG, "MIRA_LIVE_VOICE: User turn watchdog fired (connected=$isConnected): $transcript")
+        if (isConnected) {
+            Log.i(TAG, "MIRA_LIVE_VOICE: Injecting user turn nudge into same Live session: $transcript")
+            sessionManager?.sendUserMessage(transcript)
+        } else {
+            val action = WatchdogActionResolver.resolve(isLiveConnected = false, isUserInitiated = true)
+            Log.i(TAG, "MIRA_LIVE_VOICE: Live not connected, action=$action; running direct path for: $transcript")
+            serviceScope.launch(Dispatchers.IO) {
+                val directAction = MiraAutomationBridge.parseDirectAction(transcript)
+                if (directAction != null) {
+                    val steps = TurnWatchdog.directActionToSteps(directAction)
+                    if (steps.isNotEmpty()) {
+                        val skill = Skill(goal = transcript, steps = steps)
+                        val result = automationBridge.executeSkill(skill)
+                        recordAutomationNotification(
+                            title = "Direct Action ${if (result.status == TaskStatus.SUCCESS) "Completed" else "Failed"}",
+                            message = "${result.message} ($transcript)"
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private fun handlePostCallWatchdogFired(outcome: String) {
+        val isConnected = sessionManager?.state?.value == SessionManagerState.CONNECTED
+        Log.i(TAG, "MIRA_LIVE_VOICE: Post-call watchdog fired (connected=$isConnected, outcome=$outcome)")
+        if (isConnected) {
+            val nudge = TurnWatchdog.formatPostCallNudge(outcome)
+            Log.i(TAG, "MIRA_LIVE_VOICE: Injecting post-call outcome nudge into same Live session: $nudge")
+            sessionManager?.sendUserMessage(nudge)
+        }
+    }
+
+    private fun recordAutomationNotification(title: String, message: String) {
+        serviceScope.launch(Dispatchers.IO) {
+            try {
+                val db = MiraDatabase.getInstance(applicationContext)
+                db.notificationDao().insertNotification(
+                    NotificationEntity(
+                        title = title,
+                        message = message,
+                        type = "automation"
+                    )
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "MIRA_LIVE_VOICE: Could not record notification: ${e.message}")
+            }
+        }
+    }
+
+    private fun extractOutcomeString(response: Value.Object): String {
+        val map = response.value
+        (map["result"] as? Value.Str)?.value?.let { if (it.isNotBlank()) return it }
+        (map["message"] as? Value.Str)?.value?.let { if (it.isNotBlank()) return it }
+        (map["error"] as? Value.Str)?.value?.let { if (it.isNotBlank()) return "Error: $it" }
+        val success = (map["success"] as? Value.Bool)?.value
+        val target = (map["package"] as? Value.Str)?.value ?: (map["target"] as? Value.Str)?.value
+        if (success == true) {
+            return if (!target.isNullOrBlank()) "Successfully opened $target" else "Action completed successfully"
+        } else if (success == false) {
+            return if (!target.isNullOrBlank()) "Failed to open $target" else "Action failed"
+        }
+        val entries = map.entries.mapNotNull { (k, v) ->
+            val vStr = (v as? Value.Str)?.value ?: (v as? Value.Bool)?.value?.toString()
+            if (vStr != null) "$k: $vStr" else null
+        }
+        return if (entries.isNotEmpty()) entries.take(2).joinToString(", ") else "Action completed"
+    }
+
     private val notificationController by lazy {
         CallNotificationController(
             startForegroundAction = { id, notification ->
@@ -830,6 +924,10 @@ class MicService : Service() {
             }
 
             override fun onBotSpeakingChanged(isSpeaking: Boolean) {
+                if (isSpeaking) {
+                    userTurnWatchdog.cancel()
+                    postCallWatchdog.cancel()
+                }
                 Log.d(TAG, "MIRA_LIVE_VOICE: onBotSpeakingChanged: $isSpeaking")
                 if (isSpeaking && _liveState.value != LiveState.ERROR && _liveState.value != LiveState.IDLE) {
                     _liveState.value = LiveState.SPEAKING
@@ -887,6 +985,8 @@ class MicService : Service() {
             override fun onTurnComplete() {}
 
             override fun onModelTranscript(text: String) {
+                userTurnWatchdog.cancel()
+                postCallWatchdog.cancel()
                 noteAudioFrame()
                 Log.i(TAG, "MIRA_LIVE_VOICE: Model transcript: $text")
                 val sanitized = io.github.ryoaonetsuki.mira.identity.MiraOutputFilter.sanitizeForVoice(text)
@@ -951,6 +1051,7 @@ class MicService : Service() {
             }
 
             override fun onFunctionCall(id: String, name: String, args: Value.Array, rawArgs: Map<String, String>) {
+                userTurnWatchdog.cancel()
                 Log.i(TAG, "MIRA_LIVE_VOICE: onFunctionCall: id=$id name=$name rawArgs=$rawArgs")
                 handleFunctionCall(id, name, args, rawArgs, emptyMap())
             }
@@ -962,6 +1063,7 @@ class MicService : Service() {
                 rawArgs: Map<String, String>,
                 typedArgs: Map<String, Any?>
             ) {
+                userTurnWatchdog.cancel()
                 Log.i(TAG, "MIRA_LIVE_VOICE: onFunctionCall: id=$id name=$name rawArgs=$rawArgs typedArgs=$typedArgs")
                 handleFunctionCall(id, name, args, rawArgs, typedArgs)
             }
@@ -975,6 +1077,10 @@ class MicService : Service() {
         rawArgs: Map<String, String>,
         typedArgs: Map<String, Any?> = emptyMap()
     ) {
+        userTurnWatchdog.cancel()
+        _voiceStage.value = VoiceStage.THINKING
+        _statusText.value = "Running: $name"
+        postCallNotificationIfForeground()
         serviceScope.launch(Dispatchers.IO) {
             try {
                 val responseObj = executeFunctionCall(
@@ -987,12 +1093,18 @@ class MicService : Service() {
                     goal = lastAutomationGoal
                 )
                 sessionManager?.sendFunctionResponse(id, name, responseObj)
+                val outcome = extractOutcomeString(responseObj)
+                postCallWatchdog.arm(outcome, TurnWatchdog.DEFAULT_POST_CALL_TIMEOUT_MS)
             } catch (e: Exception) {
                 Log.e(TAG, "MIRA_LIVE_VOICE: Error handling function call $name: ${e.message}", e)
                 val errObj = Value.Object(
                     "error" to Value.Str(e.message ?: "Function execution failed")
                 )
                 sessionManager?.sendFunctionResponse(id, name, errObj)
+                postCallWatchdog.arm("Function failed: ${e.message}", TurnWatchdog.DEFAULT_POST_CALL_TIMEOUT_MS)
+            } finally {
+                _statusText.value = ""
+                postCallNotificationIfForeground()
             }
         }
     }
@@ -1047,6 +1159,8 @@ class MicService : Service() {
                 return
             }
             io.github.ryoaonetsuki.mira.voice.VoiceTurnRoute.STOP_AUTOMATION -> {
+                userTurnWatchdog.cancel()
+                postCallWatchdog.cancel()
                 automationBridge.cancel()
                 serviceScope.launch(Dispatchers.IO) {
                     try {
@@ -1064,7 +1178,9 @@ class MicService : Service() {
                 }
                 return
             }
-            io.github.ryoaonetsuki.mira.voice.VoiceTurnRoute.LIVE_ANSWERS -> Unit
+            io.github.ryoaonetsuki.mira.voice.VoiceTurnRoute.LIVE_ANSWERS -> {
+                userTurnWatchdog.arm(cleanText, TurnWatchdog.DEFAULT_USER_TURN_TIMEOUT_MS)
+            }
         }
     }
 
@@ -1076,6 +1192,8 @@ class MicService : Service() {
     }
 
     private fun stopLiveVoiceSessionInternal() {
+        userTurnWatchdog.cancel()
+        postCallWatchdog.cancel()
         sessionGenerationToken.incrementAndGet()
         automationBridge.cancel()
         _statusText.value = ""

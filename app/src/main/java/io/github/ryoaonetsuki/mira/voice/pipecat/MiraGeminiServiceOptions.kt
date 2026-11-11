@@ -93,6 +93,24 @@ data class MiraGeminiServiceOptions(
                             )
                         ),
                         Value.Object(
+                            "name" to Value.Str("click_at"),
+                            "description" to Value.Str("Taps the screen at the given (x, y) coordinates. Use when an element has no text label or when coordinates are known."),
+                            "parameters" to Value.Object(
+                                "type" to Value.Str("OBJECT"),
+                                "properties" to Value.Object(
+                                    "x" to Value.Object(
+                                        "type" to Value.Str("NUMBER"),
+                                        "description" to Value.Str("X coordinate in screen pixels or 0-1000 scale")
+                                    ),
+                                    "y" to Value.Object(
+                                        "type" to Value.Str("NUMBER"),
+                                        "description" to Value.Str("Y coordinate in screen pixels or 0-1000 scale")
+                                    )
+                                ),
+                                "required" to Value.Array(Value.Str("x"), Value.Str("y"))
+                            )
+                        ),
+                        Value.Object(
                             "name" to Value.Str("tap_number"),
                             "description" to Value.Str("Taps the on-screen element with the given number from the tap-number overlay (see show_numbers). Numbers are 1-based and refer only to tappable elements."),
                             "parameters" to Value.Object(

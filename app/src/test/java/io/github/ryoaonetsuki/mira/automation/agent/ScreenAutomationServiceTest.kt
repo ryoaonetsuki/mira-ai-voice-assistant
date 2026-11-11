@@ -546,4 +546,70 @@ class ScreenAutomationServiceTest {
         assertNotNull("openApp with launcher3 must return non-null", launcher3Result)
         assertEquals("com.android.launcher3", launcher3Result)
     }
+
+    // =========================================================================
+    // 7. Round 3: Play Store & Missing Everyday App Aliases & isTargetPackage
+    // =========================================================================
+
+    @Test
+    fun knownAppAliases_containsPlayStoreAndEverydayApps() {
+        // KNOWN_APP_ALIASES / BANGLA_TO_ENGLISH_LABEL are private; verify through
+        // the public resolvers (alias name -> package, Bangla name -> English label).
+        assertTrue(
+            ScreenAutomationService.resolveKnownAppPackages("play store").contains("com.android.vending")
+        )
+        assertTrue(
+            ScreenAutomationService.resolveKnownAppPackages("google play store").contains("com.android.vending")
+        )
+        assertTrue(
+            ScreenAutomationService.resolveKnownAppPackages("photos").contains("com.google.android.apps.photos")
+        )
+        assertTrue(
+            ScreenAutomationService.resolveKnownAppPackages("drive").contains("com.google.android.apps.docs")
+        )
+        assertTrue(
+            ScreenAutomationService.resolveKnownAppPackages("files").contains("com.google.android.apps.nbu.files")
+        )
+        assertTrue(
+            ScreenAutomationService.resolveKnownAppPackages("clock").contains("com.google.android.deskclock")
+        )
+        assertTrue(
+            ScreenAutomationService.resolveKnownAppPackages("calculator").contains("com.google.android.calculator")
+        )
+        assertTrue(
+            ScreenAutomationService.resolveKnownAppPackages("calendar").contains("com.google.android.calendar")
+        )
+        assertTrue(
+            ScreenAutomationService.resolveKnownAppPackages("contacts").contains("com.google.android.contacts")
+        )
+        assertTrue(
+            ScreenAutomationService.resolveKnownAppPackages("keep").contains("com.google.android.keep")
+        )
+        assertTrue(
+            ScreenAutomationService.resolveKnownAppPackages("play games").contains("com.google.android.play.games")
+        )
+    }
+
+    @Test
+    fun banglaToEnglishLabel_containsPlayStoreAndEverydayApps() {
+        assertEquals("Play Store", ScreenAutomationService.resolveEnglishLabelFallback("প্লে স্টোর"))
+        assertEquals("Photos", ScreenAutomationService.resolveEnglishLabelFallback("ফটোস"))
+        assertEquals("Drive", ScreenAutomationService.resolveEnglishLabelFallback("ড্রাইভ"))
+        assertEquals("Files", ScreenAutomationService.resolveEnglishLabelFallback("ফাইলস"))
+        assertEquals("Clock", ScreenAutomationService.resolveEnglishLabelFallback("ক্লক"))
+        assertEquals("Calculator", ScreenAutomationService.resolveEnglishLabelFallback("ক্যালকুলেটর"))
+        assertEquals("Calendar", ScreenAutomationService.resolveEnglishLabelFallback("ক্যালেন্ডার"))
+        assertEquals("Contacts", ScreenAutomationService.resolveEnglishLabelFallback("কন্টাক্টস"))
+    }
+
+    @Test
+    fun isTargetPackage_delegatesToMatchesTargetWhenNoContext() {
+        val service = ScreenAutomationService(context = null)
+        assertTrue(service.isTargetPackage("play store", "com.android.vending"))
+        assertTrue(service.isTargetPackage("প্লে স্টোর", "com.android.vending"))
+        assertTrue(service.isTargetPackage("google play store", "com.android.vending"))
+        assertTrue(service.isTargetPackage("photos", "com.google.android.apps.photos"))
+        assertTrue(service.isTargetPackage("drive", "com.google.android.apps.docs"))
+        assertFalse(service.isTargetPackage("whatsapp", "com.android.vending"))
+    }
 }

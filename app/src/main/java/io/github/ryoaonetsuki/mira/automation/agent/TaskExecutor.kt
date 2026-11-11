@@ -64,8 +64,14 @@ interface AutomationPort {
     }
     fun clickNumber(number: Int): Boolean = clickNumber(number, dumpScreen())
     fun showTapNumbers(): List<Pair<Int, ScreenNode>> = emptyList()
+    fun showTapNumbersDetailed(): TapNumbersResult {
+        val list = showTapNumbers()
+        return if (list.isNotEmpty()) TapNumbersResult.Success(list) else TapNumbersResult.NoTappableElements
+    }
     fun hideTapNumbers() {}
     fun clickAt(x: Float, y: Float): Boolean
+    fun isInsideImeArea(x: Int, y: Int): Boolean = false
+    fun getScreenDimensions(): Pair<Int, Int>? = null
     /** Long-press at a point (flutter_automate GestureEngine.longClick, MIT). */
     fun longPress(x: Float, y: Float, durationMs: Long = 500): Boolean = false
     /** Two-finger pinch (flutter_automate GestureEngine.pinchIn/pinchOut, MIT): [zoomIn] moves the fingers apart, else together. */
@@ -88,6 +94,13 @@ interface AutomationPort {
     fun isInputFocused(): Boolean = false
     fun setTextOnFocused(text: String): Boolean = typeText(text)
     fun getFocusedText(): String? = null
+}
+
+sealed class TapNumbersResult {
+    data class Success(val numbered: List<Pair<Int, ScreenNode>>) : TapNumbersResult()
+    object NoTappableElements : TapNumbersResult()
+    object PermissionMissing : TapNumbersResult()
+    data class Error(val message: String) : TapNumbersResult()
 }
 
 data class TypeFlowResult(
@@ -752,8 +765,15 @@ class TaskExecutor(
 
     internal suspend fun resolveVisionCoordinates(target: String, nodes: List<ScreenNode>): Pair<Int, Int>? {
         visionLocator?.let { return it(target, nodes) }
-        val jpeg = automation.takeScreenshotJpeg(720) ?: return null
-        val key = apiKeyProvider?.invoke()?.takeIf { it.isNotBlank() } ?: return null
+        val jpeg = automation.takeScreenshotJpeg(720) ?: run {
+            logWarn("TaskExecutor vision locator failed: screenshot capture returned null")
+            return null
+        }
+        val key = apiKeyProvider?.invoke()?.takeIf { it.isNotBlank() } ?: run {
+            logWarn("TaskExecutor vision locator failed: apiKeyProvider returned null or blank")
+            return null
+        }
+        val dimensions = automation.getScreenDimensions() ?: Pair(1080, 2400)
         val nodeText = automation.formatNodes(nodes)
         return try {
             val rest = io.github.ryoaonetsuki.mira.network.GeminiRestClient()
@@ -761,11 +781,13 @@ class TaskExecutor(
                 apiKey = key,
                 imageBytes = jpeg,
                 targetDescription = target,
-                nodeDump = nodeText
+                nodeDump = nodeText,
+                screenWidth = dimensions.first,
+                screenHeight = dimensions.second
             )
             res.getOrNull()
         } catch (e: Exception) {
-            logWarn("Vision locator failed for '$target': ${e.message}")
+            logWarn("TaskExecutor vision locator failed for '$target': ${e.message}")
             null
         }
     }
@@ -809,12 +831,21 @@ class TaskExecutor(
                     success
                 }
                 TaskStep.ACTION_SHOW_NUMBERS -> {
-                    val numbered = automation.showTapNumbers()
-                    if (numbered.isEmpty()) {
-                        lastActionError = "show_numbers failed: no tappable elements found, or the \"Display over other apps\" permission is not granted (enable it in setup)"
-                        false
-                    } else {
-                        true
+                    val detailed = automation.showTapNumbersDetailed()
+                    when (detailed) {
+                        is TapNumbersResult.Success -> true
+                        is TapNumbersResult.PermissionMissing -> {
+                            lastActionError = "show_numbers failed: 'Display over other apps' permission is not granted (enable it in setup)"
+                            false
+                        }
+                        is TapNumbersResult.NoTappableElements -> {
+                            lastActionError = "show_numbers failed: no tappable elements found on screen"
+                            false
+                        }
+                        is TapNumbersResult.Error -> {
+                            lastActionError = "show_numbers failed: ${detailed.message}"
+                            false
+                        }
                     }
                 }
                 TaskStep.ACTION_HIDE_NUMBERS -> {
@@ -830,9 +861,54 @@ class TaskExecutor(
                         lastActionError = "click_at missing y coordinate"
                         return false
                     }
-                    val success = automation.clickAt(x.toFloat(), y.toFloat())
+
+                    // Symptom 3 fix: re-validate recorded tap coordinate against fresh screen state
+                    // (1) Check if coordinates fall inside the keyboard / IME area
+                    if (automation.isInsideImeArea(x, y)) {
+                        logWarn("Dropping coordinate tap ($x, $y) inside keyboard/IME area to prevent tapping keyboard settings")
+                        if (automation.isInputFocused()) {
+                            logInfo("Replacing coordinate tap ($x, $y) inside keyboard area with pressEnter")
+                            return automation.pressEnter()
+                        }
+                        return true
+                    }
+
+                    // (2) Check if layout shifted or target node moved
+                    val targetNode = nodes.firstOrNull { it.isClickable && x in it.left..it.right && y in it.top..it.bottom }
+                    val targetText = step.stringParam("text") ?: step.stringParam("target")
+                    val viewId = step.stringParam("viewId")
+
+                    val actualX: Float
+                    val actualY: Float
+                    if (targetNode != null) {
+                        actualX = x.toFloat()
+                        actualY = y.toFloat()
+                    } else if (!targetText.isNullOrBlank() || !viewId.isNullOrBlank()) {
+                        val reResolved = nodes.firstOrNull { node ->
+                            node.isClickable && (
+                                (!targetText.isNullOrBlank() && (node.text.contains(targetText, ignoreCase = true) || node.contentDescription.contains(targetText, ignoreCase = true))) ||
+                                (!viewId.isNullOrBlank() && node.viewId.equals(viewId, ignoreCase = true))
+                            )
+                        }
+                        if (reResolved != null && reResolved.centerX > 0 && reResolved.centerY > 0) {
+                            logInfo("Re-resolved moved node '$targetText' from ($x, $y) to (${reResolved.centerX}, ${reResolved.centerY})")
+                            actualX = reResolved.centerX.toFloat()
+                            actualY = reResolved.centerY.toFloat()
+                        } else {
+                            logWarn("Stale recorded coordinate ($x, $y): target '$targetText' not found at coordinates in fresh node dump — skipping blind tap")
+                            return true
+                        }
+                    } else if (nodes.isNotEmpty() && !nodes.any { x in it.left..it.right && y in it.top..it.bottom }) {
+                        logWarn("Stale recorded coordinate ($x, $y): no clickable element found at coordinates in fresh node dump — skipping blind tap")
+                        return true
+                    } else {
+                        actualX = x.toFloat()
+                        actualY = y.toFloat()
+                    }
+
+                    val success = automation.clickAt(actualX, actualY)
                     if (!success) {
-                        lastActionError = "click_at ($x, $y) failed (gesture rejected or callback timed out)"
+                        lastActionError = "click_at ($actualX, $actualY) failed (gesture rejected or callback timed out)"
                     }
                     success
                 }

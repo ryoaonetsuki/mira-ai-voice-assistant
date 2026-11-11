@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Rect
 import android.net.Uri
+import android.os.Bundle
 import android.util.Log
 import android.view.accessibility.AccessibilityNodeInfo
 import io.github.ryoaonetsuki.mira.service.MiraAccessibilityService
@@ -370,6 +371,65 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
             Log.e(TAG, "typeText failed", e)
             false
         }
+    }
+
+    override fun isInputFocused(): Boolean {
+        return try {
+            val service = MiraAccessibilityService.instance ?: return false
+            val root = service.rootInActiveWindow ?: return false
+            val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            focused != null && (focused.isEditable || focused.className?.contains("EditText", ignoreCase = true) == true)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Log.e(TAG, "isInputFocused failed", e)
+            false
+        }
+    }
+
+    override fun setTextOnFocused(text: String): Boolean {
+        return try {
+            val service = MiraAccessibilityService.instance ?: return false
+            val root = service.rootInActiveWindow ?: return false
+            val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+                ?: findFirstEditable(root)
+                ?: return false
+            focused.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+            val args = Bundle().apply {
+                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+            }
+            focused.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Log.e(TAG, "setTextOnFocused failed", e)
+            false
+        }
+    }
+
+    override fun getFocusedText(): String? {
+        return try {
+            val service = MiraAccessibilityService.instance ?: return null
+            val root = service.rootInActiveWindow ?: return null
+            val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+                ?: findFirstEditable(root)
+            focused?.text?.toString()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Log.e(TAG, "getFocusedText failed", e)
+            null
+        }
+    }
+
+    private fun findFirstEditable(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+        if (node == null) return null
+        if (node.isEditable && node.isVisibleToUser && node.isEnabled) return node
+        for (i in 0 until node.childCount) {
+            val found = findFirstEditable(node.getChild(i))
+            if (found != null) return found
+        }
+        return null
     }
 
     override fun pressEnter(): Boolean {

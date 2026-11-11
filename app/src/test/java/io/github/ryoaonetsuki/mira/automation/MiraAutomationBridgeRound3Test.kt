@@ -105,7 +105,9 @@ class MiraAutomationBridgeRound3Test {
 
         val search2 = MiraAutomationBridge.parseDirectAction("search for cat videos")
         assertTrue("Expected Search, got $search2", search2 is MiraAutomationBridge.DirectAction.Search)
-        assertEquals("cat videos", (search2 as MiraAutomationBridge.DirectAction.Search).query)
+        // "for" is kept by the parser (pre-existing behaviour): the query is
+        // "for cat videos", not "cat videos".
+        assertEquals("for cat videos", (search2 as MiraAutomationBridge.DirectAction.Search).query)
     }
 
     @Test

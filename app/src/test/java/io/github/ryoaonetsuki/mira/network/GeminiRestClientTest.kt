@@ -470,6 +470,37 @@ class GeminiRestClientTest {
     }
 
     @Test
+    fun testParseVisionCoordinates_Box2dFormat_ScalesToCenter() {
+        // [ymin, xmin, ymax, xmax] format
+        val raw = """{"box_2d": [200, 100, 400, 300]}"""
+        val coords = GeminiRestClient.parseVisionCoordinates(raw, 1000, 1000)
+        assertNotNull(coords)
+        // center X = (100 + 300) / 2 = 200, center Y = (200 + 400) / 2 = 300
+        assertEquals(200, coords!!.first)
+        assertEquals(300, coords.second)
+    }
+
+    @Test
+    fun testParseVisionCoordinates_TopLevelArrayFormat_ScalesCorrectly() {
+        // [y, x] top-level array format
+        val raw = """[300, 400]"""
+        val coords = GeminiRestClient.parseVisionCoordinates(raw, 1000, 2000)
+        assertNotNull(coords)
+        // x = 400/1000 * 1000 = 400; y = 300/1000 * 2000 = 600
+        assertEquals(400, coords!!.first)
+        assertEquals(600, coords.second)
+    }
+
+    @Test
+    fun testParseVisionCoordinates_DecimalRegex_ParsesSuccessfully() {
+        val raw = """{"x": 250.5, "y": 500.2}"""
+        val coords = GeminiRestClient.parseVisionCoordinates(raw, 1000, 1000)
+        assertNotNull(coords)
+        assertEquals(250, coords!!.first)
+        assertEquals(500, coords.second)
+    }
+
+    @Test
     fun testParseVisionCoordinates_UnparseableProse_ReturnsNull() {
         val prose = "I cannot find the search magnifier on this screen."
         val coords = GeminiRestClient.parseVisionCoordinates(prose, 1080, 2400)

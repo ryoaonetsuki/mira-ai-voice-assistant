@@ -1412,7 +1412,7 @@ class MicService : Service() {
     }
 }
 
-internal fun getEffectiveGeminiApiKey(context: Context?): String? {
+internal suspend fun getEffectiveGeminiApiKey(context: Context?): String? {
     if (context == null) return null
     return try {
         val resolver = io.github.ryoaonetsuki.mira.backend.ApiKeyResolver(context)

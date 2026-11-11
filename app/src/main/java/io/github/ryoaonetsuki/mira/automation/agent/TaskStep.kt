@@ -113,6 +113,7 @@ data class TaskStep(
     // two-finger pinch were the two gesture primitives Mira lacked.
     const val ACTION_LONG_PRESS: String = "long_press"
     const val ACTION_PINCH: String = "pinch"
+    const val ACTION_DIAL: String = "dial"
 
     // Lowercase constant aliases matching Dart naming conventions
     const val actionClickText: String = ACTION_CLICK_TEXT
@@ -131,6 +132,7 @@ data class TaskStep(
     const val actionDone: String = ACTION_DONE
     const val actionLongPress: String = ACTION_LONG_PRESS
     const val actionPinch: String = ACTION_PINCH
+    const val actionDial: String = ACTION_DIAL
 
     val supportedActions: Set<String> = setOf(
       ACTION_CLICK_TEXT,
@@ -148,7 +150,8 @@ data class TaskStep(
       ACTION_WAIT,
       ACTION_DONE,
       ACTION_LONG_PRESS,
-      ACTION_PINCH
+      ACTION_PINCH,
+      ACTION_DIAL
     )
 
     fun fromJson(json: JSONObject): TaskStep {

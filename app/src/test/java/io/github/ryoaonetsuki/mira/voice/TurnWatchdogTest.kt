@@ -153,4 +153,67 @@ class TurnWatchdogTest {
         assertEquals("Successfully opened com.whatsapp", TurnWatchdog.extractOutcomeFromMap(mapOf("success" to true, "package" to "com.whatsapp")))
         assertEquals("Failed to open com.whatsapp", TurnWatchdog.extractOutcomeFromMap(mapOf("success" to false, "package" to "com.whatsapp")))
     }
+
+    @Test
+    fun testUserTurnEscalator_firesAfterTimeout() = runBlocking {
+        var escalatedReason: String? = null
+        val escalator = UserTurnEscalator(
+            scope = this,
+            timeoutMs = 50L,
+            onEscalate = { reason ->
+                escalatedReason = reason
+            }
+        )
+
+        escalator.arm("test-escalation")
+        assertTrue("Escalator must be pending after arming", escalator.isPending)
+
+        delay(80L)
+
+        assertFalse("Escalator must no longer be pending after firing", escalator.isPending)
+        assertEquals("test-escalation", escalatedReason)
+    }
+
+    @Test
+    fun testUserTurnEscalator_cancelledByServerActivity() = runBlocking {
+        var escalatedReason: String? = null
+        val escalator = UserTurnEscalator(
+            scope = this,
+            timeoutMs = 80L,
+            onEscalate = { reason ->
+                escalatedReason = reason
+            }
+        )
+
+        escalator.arm("test-escalation")
+        assertTrue(escalator.isPending)
+
+        // Server activity arrives at 20ms
+        delay(20L)
+        escalator.cancel()
+        assertFalse(escalator.isPending)
+
+        // Wait beyond deadline
+        delay(100L)
+        assertNull("Escalator must NOT have fired when cancelled by server activity", escalatedReason)
+    }
+
+    @Test
+    fun testUserTurnEscalator_manualFire() {
+        var escalatedReason: String? = null
+        val escalator = UserTurnEscalator(
+            scope = null,
+            timeoutMs = 10_000L,
+            onEscalate = { reason ->
+                escalatedReason = reason
+            }
+        )
+
+        escalator.arm("manual-test")
+        assertTrue(escalator.isPending)
+
+        escalator.fire("custom-escalate-reason")
+        assertFalse(escalator.isPending)
+        assertEquals("custom-escalate-reason", escalatedReason)
+    }
 }

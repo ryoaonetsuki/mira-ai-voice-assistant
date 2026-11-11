@@ -483,6 +483,10 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
     override fun openApp(query: String): String? {
         val q = query.trim()
         if (q.isEmpty()) return null
+        if (TaskExecutor.isLauncherPackage(q)) {
+            pressHome()
+            return q
+        }
         return try {
             val ctx = context ?: run {
                 Log.e(TAG, "openApp failed: context is null")

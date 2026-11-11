@@ -90,6 +90,8 @@ interface AutomationPort {
     /** Opens the dialer (ACTION_DIAL) with the number prefilled; the user confirms the call. */
     fun dialNumber(number: String): Boolean = false
     fun getCurrentPackage(): String? = null
+    /** Symptom 2(b)(ii): Checks whether [pkg] matches [query] via alias table or app label lookup. */
+    fun isTargetPackage(query: String, pkg: String): Boolean = false
     suspend fun takeScreenshotJpeg(maxWidthPx: Int = 720): ByteArray? = null
     fun isInputFocused(): Boolean = false
     fun setTextOnFocused(text: String): Boolean = typeText(text)
@@ -200,6 +202,9 @@ class TaskExecutor(
 
     @Volatile
     private var lastActionError: String? = null
+
+    @Volatile
+    var lastVisionFailureReason: String? = null
 
     private fun enterPhase(phase: String, step: Int, detail: String = "") {
         _currentPhase = phase
@@ -484,7 +489,7 @@ class TaskExecutor(
         val failedStepIndex = first.failedStepIndex.coerceIn(0, skill.steps.size - 1)
         val failedStepNumber = failedStepIndex + 1
         skills.markReplayOutcome(skill.id, false)
-        val diag = _lastDiagnosis ?: "Skill replay failed during execution. Please re-record the macro."
+        val diag = _lastDiagnosis ?: lastActionError?.let { "Action error: $it" } ?: "Skill replay failed during execution. Please re-record the macro."
         return TaskResult(
             status = TaskStatus.FAILED,
             message = "Skill replay failed at step $failedStepNumber: $diag",
@@ -533,7 +538,7 @@ class TaskExecutor(
         var remainingMs = effectiveOpenAppPollTimeoutMs
         var current = automation.getCurrentPackage().orEmpty()
         while (true) {
-            if (openAppTargetReached(step, prePackage, current)) return current
+            if (openAppTargetReached(step, prePackage, current, automation)) return current
             if (_cancelRequested) return current
             if (!awaitIfPaused()) return current
             val pollStart = clockMs()
@@ -685,7 +690,7 @@ class TaskExecutor(
                 else "verifying effect (step $stepNumber)"
             )
             var (postNodes, postPackage, postSignature) = settleAndDump(step, prePackage)
-            var effectVerified = verifyEffect(step, prePackage, preSignature, postPackage, postSignature, goal = skill.goal)
+            var effectVerified = verifyEffect(step, prePackage, preSignature, postPackage, postSignature, goal = skill.goal, port = automation)
 
             if (!effectVerified) {
                 if (step.action == TaskStep.ACTION_SCROLL || step.action == TaskStep.ACTION_SWIPE) {
@@ -714,7 +719,7 @@ class TaskExecutor(
                         postNodes = retried.first
                         postPackage = retried.second
                         postSignature = retried.third
-                        effectVerified = verifyEffect(step, prePackage, preSignature, postPackage, postSignature, goal = skill.goal)
+                        effectVerified = verifyEffect(step, prePackage, preSignature, postPackage, postSignature, goal = skill.goal, port = automation)
                     }
                 }
             }
@@ -764,12 +769,24 @@ class TaskExecutor(
         Companion.shouldAttachScreenshot(nodes, lastStepHadNoEffect, lastStepWasOpenApp)
 
     internal suspend fun resolveVisionCoordinates(target: String, nodes: List<ScreenNode>): Pair<Int, Int>? {
-        visionLocator?.let { return it(target, nodes) }
+        lastVisionFailureReason = null
+        if (visionLocator != null) {
+            val coords = visionLocator?.invoke(target, nodes)
+            if (coords == null) {
+                lastVisionFailureReason = "custom vision locator returned null for '$target'"
+                android.util.Log.w("MiraVisionLocator", "TaskExecutor custom vision locator returned null for target='$target'")
+            }
+            return coords
+        }
         val jpeg = automation.takeScreenshotJpeg(720) ?: run {
+            lastVisionFailureReason = "screenshot capture returned null"
+            android.util.Log.w("MiraVisionLocator", "TaskExecutor vision locator failed: screenshot capture returned null")
             logWarn("TaskExecutor vision locator failed: screenshot capture returned null")
             return null
         }
         val key = apiKeyProvider?.invoke()?.takeIf { it.isNotBlank() } ?: run {
+            lastVisionFailureReason = "Gemini API key is missing or blank"
+            android.util.Log.w("MiraVisionLocator", "TaskExecutor vision locator failed: apiKeyProvider returned null or blank")
             logWarn("TaskExecutor vision locator failed: apiKeyProvider returned null or blank")
             return null
         }
@@ -785,8 +802,17 @@ class TaskExecutor(
                 screenWidth = dimensions.first,
                 screenHeight = dimensions.second
             )
-            res.getOrNull()
+            if (res.isFailure) {
+                val err = res.exceptionOrNull()?.message ?: "Vision API call failed"
+                lastVisionFailureReason = err
+                android.util.Log.w("MiraVisionLocator", "TaskExecutor vision locator failed for '$target': $err")
+                null
+            } else {
+                res.getOrNull()
+            }
         } catch (e: Exception) {
+            lastVisionFailureReason = e.message ?: "Vision locator threw exception"
+            android.util.Log.w("MiraVisionLocator", "TaskExecutor vision locator failed for '$target': ${e.message}", e)
             logWarn("TaskExecutor vision locator failed for '$target': ${e.message}")
             null
         }
@@ -813,6 +839,8 @@ class TaskExecutor(
                     if (!success) {
                         lastActionError = if (fallbackX != null && fallbackY != null) {
                             "clickText '$text' not found and fallback coordinate tap ($fallbackX, $fallbackY) rejected/timed out"
+                        } else if (!lastVisionFailureReason.isNullOrBlank()) {
+                            "clickText '$text' not found on screen and vision fallback failed: $lastVisionFailureReason"
                         } else {
                             "clickText '$text' not found on screen and no fallback coordinates"
                         }
@@ -930,6 +958,7 @@ class TaskExecutor(
                         visionLocator = { target, currentNodes ->
                             resolveVisionCoordinates(target, currentNodes)
                         },
+                        visionFailureReasonProvider = { lastVisionFailureReason },
                         pollTimeoutMs = if (stepDelayMs == 0L) 0L else 2000L,
                         pollIntervalMs = if (stepDelayMs == 0L) 0L else 100L
                     )
@@ -1140,10 +1169,23 @@ class TaskExecutor(
             if (goal.isNullOrBlank()) return false
             val lower = goal.lowercase()
             if (lower.contains("http://") || lower.contains("https://") || lower.contains("www.") || lower.contains(".com")) return true
-            if (lower.contains("google") || lower.contains("search") || lower.contains("browse") || lower.contains("website") || lower.contains("web")) return true
-            if (lower.contains("খুঁজো") || lower.contains("সার্চ") || lower.contains("ব্রাউজ")) return true
             val target = MiraAutomationBridge.extractTargetApp(goal)
-            return target != null && isBrowserPackage(target)
+            if (target != null) {
+                return isBrowserPackage(target)
+            }
+            // Symptom 2(d): In-app actions (e.g. "search বাটনে click করো") are not web goals
+            val hasButtonOrTap = lower.contains("button") || lower.contains("বাটন") ||
+                lower.contains("বোতাম") || lower.contains("click") || lower.contains("tap") ||
+                lower.contains("ট্যাপ") || lower.contains("ক্লিক")
+            if (hasButtonOrTap) return false
+
+            if (lower.contains("google search") || lower.contains("search google") ||
+                lower.contains("search the web") || lower.contains("search online") ||
+                lower.contains("browse") || lower.contains("website") || lower.contains("web") ||
+                lower.contains("ব্রাউজ") || lower.contains("সার্চ ইঞ্জিন") || lower.contains("ওয়েবসাইট")
+            ) return true
+
+            return false
         }
 
         fun isCriticalReplayStep(action: String): Boolean =
@@ -1163,12 +1205,12 @@ class TaskExecutor(
          * app opened — Chrome opening after a WhatsApp request was reported
          * as "Opened WhatsApp". A wrong package is a failure, never success.
          */
-        fun openAppTargetReached(step: TaskStep, prePackage: String, postPackage: String): Boolean {
+        fun openAppTargetReached(step: TaskStep, prePackage: String, postPackage: String, port: AutomationPort? = null): Boolean {
             val targetQuery = (step.stringParam("app") ?: step.stringParam("package") ?: "").trim()
             if (isLauncherPackage(targetQuery)) {
                 return isLauncherPackage(postPackage)
             }
-            return matchesTarget(targetQuery, postPackage)
+            return matchesTarget(targetQuery, postPackage) || (port != null && port.isTargetPackage(targetQuery, postPackage))
         }
 
         fun verifyEffect(
@@ -1178,12 +1220,13 @@ class TaskExecutor(
             postPackage: String,
             postSignature: Int,
             goal: String? = null,
-            targetApp: String? = null
+            targetApp: String? = null,
+            port: AutomationPort? = null
         ): Boolean {
             val target = targetApp ?: goal?.let { MiraAutomationBridge.extractTargetApp(it) }
             val isWeb = isWebGoal(goal) || (target != null && isBrowserPackage(target))
             return when (step.action) {
-                TaskStep.ACTION_OPEN_APP -> openAppTargetReached(step, prePackage, postPackage)
+                TaskStep.ACTION_OPEN_APP -> openAppTargetReached(step, prePackage, postPackage, port)
                 TaskStep.ACTION_DIAL -> isDialerPackage(postPackage)
                 TaskStep.ACTION_SCROLL,
                 TaskStep.ACTION_SWIPE -> {
@@ -1252,13 +1295,14 @@ class TaskExecutor(
             fallbackY: Int? = null,
             pressEnter: Boolean = true,
             visionLocator: (suspend (target: String, nodes: List<ScreenNode>) -> Pair<Int, Int>?)? = null,
+            visionFailureReasonProvider: (() -> String?)? = null,
             pollTimeoutMs: Long = 2000L,
             pollIntervalMs: Long = 100L
         ): TypeFlowResult {
             var currentNodes = automation.dumpScreen()
 
             fun findEditableCandidate(nodes: List<ScreenNode>): ScreenNode? {
-                if (targetQuery != null) {
+                if (!targetQuery.isNullOrBlank()) {
                     val match = nodes.firstOrNull {
                         (it.isEditable || it.isClickable) &&
                             (it.text.contains(targetQuery, ignoreCase = true) || it.contentDescription.contains(targetQuery, ignoreCase = true))
@@ -1314,7 +1358,13 @@ class TaskExecutor(
                 }
 
                 if (!tapped && !automation.isInputFocused() && !currentNodes.any { it.isEditable }) {
-                    return TypeFlowResult(false, "Could not find or tap editable text field on screen")
+                    val visionErr = visionFailureReasonProvider?.invoke()
+                    val msg = if (!visionErr.isNullOrBlank()) {
+                        "Could not find or tap editable text field on screen and vision fallback failed: $visionErr"
+                    } else {
+                        "Could not find or tap editable text field on screen"
+                    }
+                    return TypeFlowResult(false, msg)
                 }
             }
 
@@ -1336,7 +1386,7 @@ class TaskExecutor(
 
             // (d) READ BACK field text and verify it equals intended text (retry set once if not matched)
             var readBack = readCurrentText()
-            if (readBack != text) {
+            if (readBack.isNotBlank() && readBack != text && !readBack.contains(text)) {
                 // Retry set once when readback mismatches
                 setOk = automation.setTextOnFocused(text)
                 if (!setOk) {

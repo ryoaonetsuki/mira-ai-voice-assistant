@@ -788,13 +788,11 @@ class MiraGeminiClient private constructor(
                                     listenerRef.get()?.onUserTranscript(finalTurn, true)
                                 }
                                 listenerRef.get()?.onTurnComplete()
-                                if (event.turnComplete) {
-                                    echoRouter.onTurnComplete()
-                                    listenerRef.get()?.onBotTalking(false)
-                                    if (!isUserTalking) {
-                                        isUserTalking = true
-                                        listenerRef.get()?.onUserTalking(true)
-                                    }
+                                echoRouter.onTurnComplete()
+                                listenerRef.get()?.onBotTalking(false)
+                                if (!isUserTalking) {
+                                    isUserTalking = true
+                                    listenerRef.get()?.onUserTalking(true)
                                 }
                             }
                         }

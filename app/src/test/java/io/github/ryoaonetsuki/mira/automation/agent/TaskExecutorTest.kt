@@ -464,6 +464,37 @@ class TaskExecutorTest {
     }
 
     @Test
+    fun testTaskExecutor_ReplaySkill_LauncherStep1_ContinuesToStep2() = runBlocking {
+        val fakePort = FakeAutomationPort(
+            serviceEnabled = true,
+            actionSuccess = true,
+            currentPkg = "com.android.launcher3"
+        )
+        val skills = SkillMemoryService(InMemorySkillStore())
+
+        val skill = Skill(
+            goal = "yt",
+            steps = listOf(
+                TaskStep(action = "open_app", params = mapOf("app" to "com.google.android.apps.nexuslauncher")),
+                TaskStep(action = "click_text", params = mapOf("text" to "Search"))
+            )
+        )
+
+        val executor = TaskExecutor(
+            automation = fakePort,
+            skills = skills,
+            stepDelayMs = 0
+        )
+
+        val result = executor.replaySkillDirect(skill)
+        assertEquals(TaskStatus.SUCCESS, result.status)
+        assertEquals(2, result.stepsUsed)
+        assertTrue("pressHome should have been called instead of openApp for launcher", fakePort.actionsPerformed.contains("pressHome"))
+        assertFalse("openApp should NOT have been called for launcher", fakePort.actionsPerformed.any { it.startsWith("openApp:") && it.contains("launcher") })
+        assertTrue("Step 2 clickText should have executed", fakePort.actionsPerformed.contains("clickText:Search"))
+    }
+
+    @Test
     fun testTaskExecutor_ReplaySkillDirect_AccessibilityOff_ReturnsFailed() = runBlocking {
         val fakePort = FakeAutomationPort(serviceEnabled = false)
         val skills = SkillMemoryService(InMemorySkillStore())
@@ -529,6 +560,44 @@ class TaskExecutorTest {
         assertEquals("Lofi hip hop", steps[2].stringParam("text"))
 
         assertEquals(TaskStep.ACTION_PRESS_ENTER, steps[3].action)
+    }
+
+    @Test
+    fun testMiraAccessibilityService_convertEventsToSteps_emitsNoLauncherOpenAppStep() {
+        val rawEvents = listOf(
+            mapOf(
+                "type" to "window",
+                "package" to "com.google.android.apps.nexuslauncher"
+            ),
+            mapOf(
+                "type" to "click",
+                "label" to "YouTube",
+                "package" to "com.google.android.apps.nexuslauncher",
+                "x" to 300,
+                "y" to 400
+            ),
+            mapOf(
+                "type" to "window",
+                "package" to "com.google.android.youtube"
+            ),
+            mapOf(
+                "type" to "click",
+                "label" to "Search",
+                "package" to "com.google.android.youtube",
+                "x" to 540,
+                "y" to 960
+            )
+        )
+
+        val steps = io.github.ryoaonetsuki.mira.service.MiraAccessibilityService.convertEventsToSteps(rawEvents)
+
+        // Verify: No open_app step for nexuslauncher.
+        val openAppSteps = steps.filter { it.action == TaskStep.ACTION_OPEN_APP }
+        assertEquals(1, openAppSteps.size)
+        assertEquals("com.google.android.youtube", openAppSteps[0].stringParam("app"))
+
+        // The youtube step exists and follows properly
+        assertTrue(steps.none { it.action == TaskStep.ACTION_OPEN_APP && it.stringParam("app")?.contains("launcher") == true })
     }
 
     // =========================================================================
@@ -1411,5 +1480,71 @@ class TaskExecutorTest {
             goal = "search weather on google"
         )
         assertFalse("Non-browser package must NOT verify for web goal", webNonBrowserResult)
+    }
+
+    @Test
+    fun testDialStep_CallsDialNumberAndVerifies() = runBlocking {
+        assertEquals("dial", TaskStep.ACTION_DIAL)
+        assertEquals(TaskStep.ACTION_DIAL, TaskStep.actionDial)
+        assertTrue(TaskStep.supportedActions.contains(TaskStep.ACTION_DIAL))
+
+        val fakePort = FakeAutomationPort(
+            currentPkg = "io.github.ryoaonetsuki.mira"
+        )
+        val executor = TaskExecutor(
+            automation = fakePort,
+            skills = SkillMemoryService(InMemorySkillStore()),
+            stepDelayMs = 0L
+        )
+        val dialStep = TaskStep(action = TaskStep.ACTION_DIAL, params = mapOf("number" to "1234567890"))
+        val skill = Skill(
+            goal = "dial 1234567890",
+            steps = listOf(dialStep)
+        )
+
+        val result = executor.replaySkillDirect(skill)
+        assertEquals(TaskStatus.SUCCESS, result.status)
+        assertTrue("dialNumber must have been called", fakePort.actionsPerformed.contains("dialNumber:1234567890"))
+        assertEquals("com.google.android.dialer", fakePort.currentPkg)
+
+        val verified = TaskExecutor.verifyEffect(
+            step = dialStep,
+            prePackage = "io.github.ryoaonetsuki.mira",
+            preSignature = 100,
+            postPackage = "com.google.android.dialer",
+            postSignature = 200,
+            goal = "dial 1234567890"
+        )
+        assertTrue("Foreground dialer package must verify dial step", verified)
+
+        val notVerified = TaskExecutor.verifyEffect(
+            step = dialStep,
+            prePackage = "io.github.ryoaonetsuki.mira",
+            preSignature = 100,
+            postPackage = "com.android.chrome",
+            postSignature = 200,
+            goal = "dial 1234567890"
+        )
+        assertFalse("Non-dialer package must NOT verify dial step", notVerified)
+    }
+
+    @Test
+    fun testDialStep_MissingOrBlankNumberFails() = runBlocking {
+        val fakePort = FakeAutomationPort(
+            currentPkg = "io.github.ryoaonetsuki.mira"
+        )
+        val executor = TaskExecutor(
+            automation = fakePort,
+            skills = SkillMemoryService(InMemorySkillStore()),
+            stepDelayMs = 0L
+        )
+        val emptyStep = TaskStep(action = TaskStep.ACTION_DIAL, params = emptyMap())
+        val skill = Skill(
+            goal = "dial",
+            steps = listOf(emptyStep)
+        )
+        val result = executor.replaySkillDirect(skill)
+        assertEquals(TaskStatus.FAILED, result.status)
+        assertFalse("dialNumber must NOT have been called with empty number", fakePort.actionsPerformed.any { it.startsWith("dialNumber") })
     }
 }

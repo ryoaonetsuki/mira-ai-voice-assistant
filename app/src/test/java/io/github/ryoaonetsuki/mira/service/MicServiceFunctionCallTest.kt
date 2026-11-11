@@ -546,6 +546,7 @@ class MicServiceFunctionCallTest {
         val expected = listOf(
             "open_app",
             "click_text",
+            "click_at",
             "tap_number",
             "show_numbers",
             "hide_numbers",
@@ -562,7 +563,7 @@ class MicServiceFunctionCallTest {
             "recall_memory",
             "forget_memory"
         )
-        assertEquals("defaultPhoneTools must declare exactly the 17 tools", expected, toolNames)
+        assertEquals("defaultPhoneTools must declare exactly the 18 tools", expected, toolNames)
     }
 
     @Test

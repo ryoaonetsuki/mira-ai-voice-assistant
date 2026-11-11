@@ -58,12 +58,67 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
         if (context != null) TapNumberOverlay(context) { dumpScreen() } else null
     }
 
+    override fun getScreenDimensions(): Pair<Int, Int>? {
+        return try {
+            val service = MiraAccessibilityService.instance
+            val metrics = service?.resources?.displayMetrics ?: context?.resources?.displayMetrics
+            if (metrics != null && metrics.widthPixels > 0 && metrics.heightPixels > 0) {
+                Pair(metrics.widthPixels, metrics.heightPixels)
+            } else null
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    override fun isInsideImeArea(x: Int, y: Int): Boolean {
+        return try {
+            val service = MiraAccessibilityService.instance ?: return false
+            service.isInsideImeArea(x, y)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Log.e(TAG, "isInsideImeArea failed", e)
+            false
+        }
+    }
+
     override fun showTapNumbers(): List<Pair<Int, ScreenNode>> {
-        val overlay = tapOverlay ?: return emptyList()
+        return when (val detailed = showTapNumbersDetailed()) {
+            is TapNumbersResult.Success -> detailed.numbered
+            else -> emptyList()
+        }
+    }
+
+    override fun showTapNumbersDetailed(): TapNumbersResult {
+        val ctx = context
+        if (ctx != null && !android.provider.Settings.canDrawOverlays(ctx)) {
+            Log.w(TAG, "showTapNumbers failed: 'Display over other apps' (SYSTEM_ALERT_WINDOW) permission not granted")
+            return TapNumbersResult.PermissionMissing
+        }
+        val overlay = tapOverlay ?: run {
+            Log.w(TAG, "showTapNumbers failed: tapOverlay is null")
+            return TapNumbersResult.Error("Overlay service unavailable")
+        }
         val nodes = dumpScreen()
         val numbered = UiNodeMatcher.tappableNumbered(nodes)
-        if (!overlay.show(numbered)) return emptyList()
-        return numbered
+        if (numbered.isEmpty()) {
+            Log.i(TAG, "showTapNumbers: no tappable elements found on screen")
+            return TapNumbersResult.NoTappableElements
+        }
+        return when (val res = overlay.showDetailed(numbered)) {
+            ShowOverlayResult.Success -> {
+                Log.i(TAG, "showTapNumbers: displayed ${numbered.size} badges")
+                TapNumbersResult.Success(numbered)
+            }
+            ShowOverlayResult.PermissionMissing -> {
+                Log.w(TAG, "showTapNumbers failed: permission missing")
+                TapNumbersResult.PermissionMissing
+            }
+            is ShowOverlayResult.WindowManagerFailed -> {
+                Log.w(TAG, "showTapNumbers failed: windowManager addView failed", res.error)
+                TapNumbersResult.Error(res.error?.message ?: "WindowManager addView failed")
+            }
+        }
     }
 
     override fun hideTapNumbers() {

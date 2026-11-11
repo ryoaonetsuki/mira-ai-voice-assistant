@@ -64,6 +64,10 @@ class MicServiceFunctionCallTest {
             hideTapNumbersCalled = true
         }
 
+        var isTargetPackageResolver: ((query: String, pkg: String) -> Boolean)? = null
+        override fun isTargetPackage(query: String, pkg: String): Boolean =
+            isTargetPackageResolver?.invoke(query, pkg) ?: super.isTargetPackage(query, pkg)
+
         override fun isServiceEnabled(): Boolean = true
 
         override fun dumpScreen(): List<ScreenNode> = testNodes
@@ -986,5 +990,125 @@ class MicServiceFunctionCallTest {
         val resultStr = (resultMap["result"] as? Value.Str)?.value.orEmpty()
         assertEquals("Tap numbers hidden", resultStr)
         assertTrue("hideTapNumbers must have been called", fakePort.hideTapNumbersCalled)
+    }
+
+    @Test
+    fun testIsOffTargetForAction_playStoreAllowedWhenOnTarget() = runBlocking {
+        val fakePort = TestAutomationPort(
+            currentPkg = "com.android.vending",
+            testNodes = listOf(
+                ScreenNode(
+                    index = 0,
+                    text = "Search for apps & games",
+                    contentDescription = "Search",
+                    className = "android.widget.TextView",
+                    viewId = "search_bar",
+                    isClickable = true,
+                    isEditable = false,
+                    isScrollable = false,
+                    isCheckable = false,
+                    isEnabled = true,
+                    left = 10,
+                    top = 10,
+                    right = 500,
+                    bottom = 100,
+                    centerX = 255,
+                    centerY = 55
+                )
+            )
+        )
+
+        val response = executeFunctionCall(
+            automationPort = fakePort,
+            context = null,
+            name = "click_text",
+            rawArgs = mapOf("text" to "Search for apps & games"),
+            typedArgs = mapOf("text" to "Search for apps & games"),
+            targetApp = "Play Store",
+            settleDelayMs = 0L
+        )
+
+        val resultMap = response.value
+        val outcome = (resultMap["result"] as? Value.Str)?.value.orEmpty()
+        assertFalse("Must NOT be refused with off-target error, outcome was: $outcome", outcome.contains("You must call open_app first"))
+        assertTrue("Expected action to succeed on Play Store screen", (resultMap["success"] as? Value.Bool)?.value == true)
+    }
+
+    @Test
+    fun testIsOffTargetForAction_customPackageAllowedViaIsTargetPackage() = runBlocking {
+        val customPkg = "com.custom.crm.suite"
+        val customTarget = "Custom CRM Suite"
+        val fakePort = TestAutomationPort(
+            currentPkg = customPkg,
+            testNodes = listOf(
+                ScreenNode(
+                    index = 0,
+                    text = "Dashboard",
+                    contentDescription = "",
+                    className = "android.widget.Button",
+                    viewId = "btn_dash",
+                    isClickable = true,
+                    isEditable = false,
+                    isScrollable = false,
+                    isCheckable = false,
+                    isEnabled = true,
+                    left = 10,
+                    top = 10,
+                    right = 100,
+                    bottom = 100,
+                    centerX = 55,
+                    centerY = 55
+                )
+            )
+        )
+
+        // Without isTargetPackage, customPkg does not match customTarget in KNOWN_APP_ALIASES
+        val offTargetWithoutResolver = isOffTargetForAction(
+            action = "click_text",
+            currentPackage = customPkg,
+            target = customTarget,
+            goalText = "open $customTarget",
+            automationPort = fakePort
+        )
+        assertTrue("Should be off-target without resolver fallback", offTargetWithoutResolver)
+
+        // Now configure port to recognize the package via PackageManager app label lookup fallback
+        fakePort.isTargetPackageResolver = { query, pkg ->
+            query == customTarget && pkg == customPkg
+        }
+
+        val offTargetWithResolver = isOffTargetForAction(
+            action = "click_text",
+            currentPackage = customPkg,
+            target = customTarget,
+            goalText = "open $customTarget",
+            automationPort = fakePort
+        )
+        assertFalse("Must NOT be off-target when automationPort.isTargetPackage verifies the package", offTargetWithResolver)
+    }
+
+    @Test
+    fun testOpenApp_playStoreRecognizedAsTargetReached() = runBlocking {
+        val fakePort = TestAutomationPort(
+            currentPkg = "io.github.ryoaonetsuki.mira",
+            targetPkgOnOpen = "com.android.vending",
+            openAppReturnValue = "com.android.vending"
+        )
+
+        val response = executeFunctionCall(
+            automationPort = fakePort,
+            context = null,
+            name = "open_app",
+            rawArgs = mapOf("app" to "Play Store"),
+            typedArgs = mapOf("app" to "Play Store"),
+            pollTimeoutMs = 1000L,
+            settleDelayMs = 0L
+        )
+
+        val resultMap = response.value
+        val success = (resultMap["success"] as? Value.Bool)?.value
+        val outcome = (resultMap["result"] as? Value.Str)?.value.orEmpty()
+        assertEquals("open_app Play Store must succeed", true, success)
+        assertTrue("Outcome must indicate successfully opened", outcome.contains("Successfully opened"))
     }
 }

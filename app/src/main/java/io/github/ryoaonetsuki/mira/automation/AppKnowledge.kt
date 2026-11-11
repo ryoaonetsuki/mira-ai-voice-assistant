@@ -16,7 +16,45 @@ package io.github.ryoaonetsuki.mira.automation
  * The reader is injected (`readAsset`) so the loader stays pure-JVM
  * testable: production passes the assets reader, tests pass a map.
  */
-class AppKnowledge(private val readAsset: (String) -> String?) {
+class AppKnowledge(private val readAsset: ((String) -> String?)? = null) {
+
+    private fun load(path: String): String? {
+        val asset = try {
+            readAsset?.invoke(path)
+        } catch (_: Throwable) {
+            null
+        }
+        if (asset != null) return asset
+
+        // Classpath fallback (for plain-JVM unit tests when assets/resources are on classpath)
+        val stream = AppKnowledge::class.java.classLoader?.getResourceAsStream(path)
+            ?: Thread.currentThread().contextClassLoader?.getResourceAsStream(path)
+            ?: AppKnowledge::class.java.getResourceAsStream("/$path")
+        if (stream != null) {
+            try {
+                return stream.bufferedReader().use { it.readText() }
+            } catch (_: Throwable) {}
+        }
+
+        // Filesystem candidate paths fallback (for unit tests running with cwd in repo root or app/)
+        val candidates = listOf(
+            java.io.File(path),
+            java.io.File("src/main/assets", path),
+            java.io.File("app/src/main/assets", path),
+            java.io.File("../app/src/main/assets", path),
+            java.io.File("src/test/resources", path),
+            java.io.File("app/src/test/resources", path),
+            java.io.File("../app/src/test/resources", path)
+        )
+        for (candidate in candidates) {
+            if (candidate.isFile && candidate.exists()) {
+                try {
+                    return candidate.readText()
+                } catch (_: Throwable) {}
+            }
+        }
+        return null
+    }
 
     /**
      * The usage note for the app a goal targets, or null when no note
@@ -26,7 +64,7 @@ class AppKnowledge(private val readAsset: (String) -> String?) {
     fun noteForTarget(target: String?): String? {
         if (target.isNullOrBlank()) return null
         val slug = slugFor(target) ?: return null
-        return readAsset("automation/knowledge/$slug.md")
+        return load("automation/knowledge/$slug.md")
             ?.trim()?.takeIf { it.isNotEmpty() }
     }
 
@@ -34,7 +72,7 @@ class AppKnowledge(private val readAsset: (String) -> String?) {
      * Shared search flow note for cross-app and in-app search actions.
      */
     fun searchFlowNote(): String? {
-        return readAsset("automation/knowledge/search.md")
+        return load("automation/knowledge/search.md")
             ?.trim()?.takeIf { it.isNotEmpty() }
     }
 

@@ -2,6 +2,7 @@ package io.github.ryoaonetsuki.mira.automation.agent
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Rect
 import android.net.Uri
 import android.os.Bundle
@@ -158,7 +159,8 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
             node.text.isNotBlank() ||
                 node.contentDescription.isNotBlank() ||
                 node.isEditable ||
-                node.isScrollable
+                node.isScrollable ||
+                (node.isClickable && node.viewId.isNotBlank())
         }
         return eligible.take(120).joinToString("\n") { formatSingleNode(it) }
     }
@@ -168,7 +170,8 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
             node.text.isNotBlank() ||
                 node.contentDescription.isNotBlank() ||
                 node.isEditable ||
-                node.isScrollable
+                node.isScrollable ||
+                (node.isClickable && node.viewId.isNotBlank())
         }
 
         // \p{M} kept: Indic vowel signs / hasant are combining marks, not
@@ -708,6 +711,54 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
         }
     }
 
+    override fun isTargetPackage(query: String, pkg: String): Boolean {
+        val q = query.trim().lowercase()
+        val p = pkg.trim().lowercase()
+        if (q.isEmpty() || p.isEmpty()) return false
+        // Fast path: direct match or known alias match
+        if (p == q || p.contains(q)) return true
+        val resolved = resolveKnownAppPackages(q)
+        if (resolved.any { p == it.lowercase() || p.contains(it.lowercase()) }) return true
+
+        // General fallback: query PackageManager for pkg's application label (Symptom 2(b)(ii))
+        return try {
+            val ctx = context ?: return false
+            val pm = ctx.packageManager ?: return false
+            val appInfo = pm.getApplicationInfo(pkg, 0)
+            val rawLabel = pm.getApplicationLabel(appInfo)?.toString() ?: return false
+            val label = rawLabel.lowercase().trim()
+            val labelNoSpace = label.replace("\\s+".toRegex(), "")
+            val qNoSpace = q.replace("\\s+".toRegex(), "")
+
+            val matchesDirect = label == q ||
+                labelNoSpace == qNoSpace ||
+                label.contains(q) ||
+                q.contains(label) ||
+                labelNoSpace.contains(qNoSpace) ||
+                qNoSpace.contains(labelNoSpace)
+
+            if (matchesDirect) return true
+
+            val engFallback = resolveEnglishLabelFallback(q)?.lowercase()?.trim()
+            if (engFallback != null) {
+                val engNoSpace = engFallback.replace("\\s+".toRegex(), "")
+                label == engFallback ||
+                    labelNoSpace == engNoSpace ||
+                    label.contains(engFallback) ||
+                    engFallback.contains(label) ||
+                    labelNoSpace.contains(engNoSpace) ||
+                    engNoSpace.contains(labelNoSpace)
+            } else {
+                false
+            }
+        } catch (_: PackageManager.NameNotFoundException) {
+            false
+        } catch (e: Throwable) {
+            Log.w(TAG, "isTargetPackage failed for query='$query', pkg='$pkg': ${e.message}")
+            false
+        }
+    }
+
     companion object {
         private const val TAG = "ScreenAutomation"
 
@@ -1034,7 +1085,65 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
             "ഫോൺ" to listOf("com.google.android.dialer", "com.samsung.android.dialer", "com.android.dialer"),
             "ಫೋನ್" to listOf("com.google.android.dialer", "com.samsung.android.dialer", "com.android.dialer"),
             "τηλέφωνο" to listOf("com.google.android.dialer", "com.samsung.android.dialer", "com.android.dialer"),
-            "电话" to listOf("com.google.android.dialer", "com.samsung.android.dialer", "com.android.dialer")
+            "电话" to listOf("com.google.android.dialer", "com.samsung.android.dialer", "com.android.dialer"),
+            // Play Store
+            "play store" to listOf("com.android.vending"),
+            "google play store" to listOf("com.android.vending"),
+            "playstore" to listOf("com.android.vending"),
+            "প্লে স্টোর" to listOf("com.android.vending"),
+            "গুগল প্লে স্টোর" to listOf("com.android.vending"),
+            "প্লেস্টোর" to listOf("com.android.vending"),
+            // Photos
+            "photos" to listOf("com.google.android.apps.photos", "com.sec.android.gallery3d", "com.android.gallery3d"),
+            "google photos" to listOf("com.google.android.apps.photos"),
+            "gallery" to listOf("com.google.android.apps.photos", "com.sec.android.gallery3d", "com.android.gallery3d"),
+            "ফটোস" to listOf("com.google.android.apps.photos", "com.sec.android.gallery3d", "com.android.gallery3d"),
+            "ছবি" to listOf("com.google.android.apps.photos", "com.sec.android.gallery3d", "com.android.gallery3d"),
+            "গ্যালারি" to listOf("com.google.android.apps.photos", "com.sec.android.gallery3d", "com.android.gallery3d"),
+            "গুগল ফটোস" to listOf("com.google.android.apps.photos"),
+            // Drive
+            "drive" to listOf("com.google.android.apps.docs"),
+            "google drive" to listOf("com.google.android.apps.docs"),
+            "ড্রাইভ" to listOf("com.google.android.apps.docs"),
+            "গুগল ড্রাইভ" to listOf("com.google.android.apps.docs"),
+            // Files
+            "files" to listOf("com.google.android.apps.nbu.files", "com.sec.android.app.myfiles", "com.android.documentsui"),
+            "files by google" to listOf("com.google.android.apps.nbu.files"),
+            "my files" to listOf("com.sec.android.app.myfiles", "com.google.android.apps.nbu.files"),
+            "file manager" to listOf("com.google.android.apps.nbu.files", "com.sec.android.app.myfiles"),
+            "ফাইলস" to listOf("com.google.android.apps.nbu.files", "com.sec.android.app.myfiles", "com.android.documentsui"),
+            "ফাইল ম্যানেজার" to listOf("com.google.android.apps.nbu.files", "com.sec.android.app.myfiles"),
+            // Clock
+            "clock" to listOf("com.google.android.deskclock", "com.sec.android.app.clockpackage", "com.android.deskclock"),
+            "alarm" to listOf("com.google.android.deskclock", "com.sec.android.app.clockpackage", "com.android.deskclock"),
+            "ক্লক" to listOf("com.google.android.deskclock", "com.sec.android.app.clockpackage", "com.android.deskclock"),
+            "ঘড়ি" to listOf("com.google.android.deskclock", "com.sec.android.app.clockpackage", "com.android.deskclock"),
+            "অ্যালার্ম" to listOf("com.google.android.deskclock", "com.sec.android.app.clockpackage", "com.android.deskclock"),
+            // Calculator
+            "calculator" to listOf("com.google.android.calculator", "com.sec.android.app.popupcalculator", "com.android.calculator2"),
+            "ক্যালকুলেটর" to listOf("com.google.android.calculator", "com.sec.android.app.popupcalculator", "com.android.calculator2"),
+            // Calendar
+            "calendar" to listOf("com.google.android.calendar", "com.android.calendar"),
+            "google calendar" to listOf("com.google.android.calendar"),
+            "ক্যালেন্ডার" to listOf("com.google.android.calendar", "com.android.calendar"),
+            // Contacts
+            "contacts" to listOf("com.google.android.contacts", "com.samsung.android.app.contacts", "com.android.contacts"),
+            "কনট্যাক্টস" to listOf("com.google.android.contacts", "com.samsung.android.app.contacts", "com.android.contacts"),
+            "কন্টাক্টস" to listOf("com.google.android.contacts", "com.samsung.android.app.contacts", "com.android.contacts"),
+            "যোগাযোগ" to listOf("com.google.android.contacts", "com.samsung.android.app.contacts", "com.android.contacts"),
+            // Keep
+            "keep" to listOf("com.google.android.keep"),
+            "google keep" to listOf("com.google.android.keep"),
+            "keep notes" to listOf("com.google.android.keep"),
+            "notes" to listOf("com.google.android.keep"),
+            "কিপ" to listOf("com.google.android.keep"),
+            "গুগল কিপ" to listOf("com.google.android.keep"),
+            "নোটস" to listOf("com.google.android.keep"),
+            // Play Games
+            "play games" to listOf("com.google.android.play.games"),
+            "google play games" to listOf("com.google.android.play.games"),
+            "প্লে গেমস" to listOf("com.google.android.play.games"),
+            "গুগল প্লে গেমস" to listOf("com.google.android.play.games")
         )
 
         private val BANGLA_TO_ENGLISH_LABEL: Map<String, String> = mapOf(
@@ -1051,7 +1160,31 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
             "ক্যামেরা" to "Camera",
             "মেসেজ" to "Messages",
             "ফোন" to "Phone",
-            "কল" to "Phone"
+            "কল" to "Phone",
+            "প্লে স্টোর" to "Play Store",
+            "গুগল প্লে স্টোর" to "Play Store",
+            "প্লেস্টোর" to "Play Store",
+            "ফটোস" to "Photos",
+            "ছবি" to "Photos",
+            "গ্যালারি" to "Gallery",
+            "গুগল ফটোস" to "Photos",
+            "ড্রাইভ" to "Drive",
+            "গুগল ড্রাইভ" to "Drive",
+            "ফাইলস" to "Files",
+            "ফাইল ম্যানেজার" to "Files",
+            "ক্লক" to "Clock",
+            "ঘড়ি" to "Clock",
+            "অ্যালার্ম" to "Clock",
+            "ক্যালকুলেটর" to "Calculator",
+            "ক্যালেন্ডার" to "Calendar",
+            "কনট্যাক্টস" to "Contacts",
+            "কন্টাক্টস" to "Contacts",
+            "যোগাযোগ" to "Contacts",
+            "কিপ" to "Keep",
+            "গুগল কিপ" to "Keep",
+            "নোটস" to "Keep",
+            "প্লে গেমস" to "Play Games",
+            "গুগল প্লে গেমস" to "Play Games"
         )
 
         fun resolveKnownAppPackages(query: String): List<String> {

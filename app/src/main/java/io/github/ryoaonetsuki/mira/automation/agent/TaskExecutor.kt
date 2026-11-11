@@ -85,7 +85,16 @@ interface AutomationPort {
     fun dialNumber(number: String): Boolean = false
     fun getCurrentPackage(): String? = null
     suspend fun takeScreenshotJpeg(maxWidthPx: Int = 720): ByteArray? = null
+    fun isInputFocused(): Boolean = false
+    fun setTextOnFocused(text: String): Boolean = typeText(text)
+    fun getFocusedText(): String? = null
 }
+
+data class TypeFlowResult(
+    val success: Boolean,
+    val message: String,
+    val textTyped: String = ""
+)
 
 /**
  * Safety gate evaluated BEFORE any atomic action executes.
@@ -105,7 +114,10 @@ class TaskExecutor(
     // a fixed settle + one retry.
     private val openAppPollTimeoutMs: Long = DEFAULT_OPEN_APP_POLL_TIMEOUT_MS,
     private val openAppPollIntervalMs: Long = DEFAULT_OPEN_APP_POLL_INTERVAL_MS,
-    private val historyStore: TaskHistoryStore? = null
+    private val historyStore: TaskHistoryStore? = null,
+    private val apiKeyProvider: (suspend () -> String)? = null,
+    var visionLocator: (suspend (target: String, nodes: List<ScreenNode>) -> Pair<Int, Int>?)? = null,
+    private val appKnowledge: io.github.ryoaonetsuki.mira.automation.AppKnowledge? = null
 ) {
     // Turn F(f): 700ms -> 350ms settle for non-open_app steps.
     private val settleDelayMs: Long = if (stepDelayMs == 0L) 0L else 350L
@@ -663,30 +675,34 @@ class TaskExecutor(
             var effectVerified = verifyEffect(step, prePackage, preSignature, postPackage, postSignature, goal = skill.goal)
 
             if (!effectVerified) {
-                logWarn("Replayed step $stepNumber/$totalSteps (${step.action}) had no verified effect — re-dumping screen and retrying once")
-                if (!awaitIfPaused() || _cancelRequested) {
-                    return ReplayOutcome(success = false, failedStepIndex = stepIndex, stepsCompleted = stepCount)
-                }
-                preNodes = postNodes
-                prePackage = postPackage
-                preSignature = postSignature
-                enterPhase("acting", stepNumber, "retrying ${step.action} for effect verification (step $stepNumber)")
-                if (!awaitIfPaused() || _cancelRequested) {
-                    return ReplayOutcome(success = false, failedStepIndex = stepIndex, stepsCompleted = stepCount)
-                }
-                val retryDispatched = _performAction(step, preNodes)
-                if (retryDispatched) {
-                    enterPhase(
-                        "observing",
-                        stepNumber,
-                        if (step.action == TaskStep.ACTION_OPEN_APP) "waiting for app to open on retry (step $stepNumber)"
-                        else "verifying effect on retry (step $stepNumber)"
-                    )
-                    val retried = settleAndDump(step, prePackage)
-                    postNodes = retried.first
-                    postPackage = retried.second
-                    postSignature = retried.third
-                    effectVerified = verifyEffect(step, prePackage, preSignature, postPackage, postSignature, goal = skill.goal)
+                if (step.action == TaskStep.ACTION_SCROLL || step.action == TaskStep.ACTION_SWIPE) {
+                    effectVerified = true
+                } else {
+                    logWarn("Replayed step $stepNumber/$totalSteps (${step.action}) had no verified effect — re-dumping screen and retrying once")
+                    if (!awaitIfPaused() || _cancelRequested) {
+                        return ReplayOutcome(success = false, failedStepIndex = stepIndex, stepsCompleted = stepCount)
+                    }
+                    preNodes = postNodes
+                    prePackage = postPackage
+                    preSignature = postSignature
+                    enterPhase("acting", stepNumber, "retrying ${step.action} for effect verification (step $stepNumber)")
+                    if (!awaitIfPaused() || _cancelRequested) {
+                        return ReplayOutcome(success = false, failedStepIndex = stepIndex, stepsCompleted = stepCount)
+                    }
+                    val retryDispatched = _performAction(step, preNodes)
+                    if (retryDispatched) {
+                        enterPhase(
+                            "observing",
+                            stepNumber,
+                            if (step.action == TaskStep.ACTION_OPEN_APP) "waiting for app to open on retry (step $stepNumber)"
+                            else "verifying effect on retry (step $stepNumber)"
+                        )
+                        val retried = settleAndDump(step, prePackage)
+                        postNodes = retried.first
+                        postPackage = retried.second
+                        postSignature = retried.third
+                        effectVerified = verifyEffect(step, prePackage, preSignature, postPackage, postSignature, goal = skill.goal)
+                    }
                 }
             }
 
@@ -702,9 +718,11 @@ class TaskExecutor(
                     logWarn("Replayed critical step $stepNumber/$totalSteps (${step.action}) had no verified effect after retry — aborting replay: $detail")
                     return ReplayOutcome(success = false, failedStepIndex = stepIndex, stepsCompleted = stepCount)
                 }
-                skippedCount++
-                lastSkippedIndex = stepIndex
-                logWarn("Replayed non-critical step $stepNumber/$totalSteps (${step.action}) had no verified effect after retry — skipping ($skippedCount/$totalSteps skipped)")
+                if (step.action != TaskStep.ACTION_SCROLL && step.action != TaskStep.ACTION_SWIPE) {
+                    skippedCount++
+                    lastSkippedIndex = stepIndex
+                    logWarn("Replayed non-critical step $stepNumber/$totalSteps (${step.action}) had no verified effect after retry — skipping ($skippedCount/$totalSteps skipped)")
+                }
             }
 
             // Carry this step's verified post-dump forward as the next
@@ -732,6 +750,26 @@ class TaskExecutor(
     ): Boolean =
         Companion.shouldAttachScreenshot(nodes, lastStepHadNoEffect, lastStepWasOpenApp)
 
+    internal suspend fun resolveVisionCoordinates(target: String, nodes: List<ScreenNode>): Pair<Int, Int>? {
+        visionLocator?.let { return it(target, nodes) }
+        val jpeg = automation.takeScreenshotJpeg(720) ?: return null
+        val key = apiKeyProvider?.invoke()?.takeIf { it.isNotBlank() } ?: return null
+        val nodeText = automation.formatNodes(nodes)
+        return try {
+            val rest = io.github.ryoaonetsuki.mira.network.GeminiRestClient()
+            val res = rest.locateElementWithVision(
+                apiKey = key,
+                imageBytes = jpeg,
+                targetDescription = target,
+                nodeDump = nodeText
+            )
+            res.getOrNull()
+        } catch (e: Exception) {
+            logWarn("Vision locator failed for '$target': ${e.message}")
+            null
+        }
+    }
+
     private suspend fun _performAction(step: TaskStep, nodes: List<ScreenNode>): Boolean {
         if (!awaitIfPaused() || _cancelRequested) return false
         lastActionError = null
@@ -739,9 +777,17 @@ class TaskExecutor(
             when (step.action) {
                 TaskStep.ACTION_CLICK_TEXT -> {
                     val text = step.stringParam("text") ?: ""
-                    val fallbackX = step.intParam("fallbackX") ?: step.intParam("x")
-                    val fallbackY = step.intParam("fallbackY") ?: step.intParam("y")
-                    val success = automation.clickText(text, nodes, fallbackX, fallbackY)
+                    var fallbackX = step.intParam("fallbackX") ?: step.intParam("x")
+                    var fallbackY = step.intParam("fallbackY") ?: step.intParam("y")
+                    var success = automation.clickText(text, nodes, fallbackX, fallbackY)
+                    if (!success) {
+                        val visionCoords = resolveVisionCoordinates(text, nodes)
+                        if (visionCoords != null) {
+                            fallbackX = visionCoords.first
+                            fallbackY = visionCoords.second
+                            success = automation.clickAt(fallbackX.toFloat(), fallbackY.toFloat())
+                        }
+                    }
                     if (!success) {
                         lastActionError = if (fallbackX != null && fallbackY != null) {
                             "clickText '$text' not found and fallback coordinate tap ($fallbackX, $fallbackY) rejected/timed out"
@@ -795,11 +841,26 @@ class TaskExecutor(
                         lastActionError = "type_text missing text param"
                         return false
                     }
-                    val success = automation.typeText(text)
-                    if (!success) {
-                        lastActionError = "type_text failed (no focused editable field)"
+                    val fallbackX = step.intParam("fallbackX") ?: step.intParam("x")
+                    val fallbackY = step.intParam("fallbackY") ?: step.intParam("y")
+                    val pressEnter = step.booleanParam("pressEnter") ?: true
+                    val result = executeTypeFlow(
+                        automation = automation,
+                        text = text,
+                        targetQuery = step.stringParam("target"),
+                        fallbackX = fallbackX,
+                        fallbackY = fallbackY,
+                        pressEnter = pressEnter,
+                        visionLocator = { target, currentNodes ->
+                            resolveVisionCoordinates(target, currentNodes)
+                        },
+                        pollTimeoutMs = if (stepDelayMs == 0L) 0L else 2000L,
+                        pollIntervalMs = if (stepDelayMs == 0L) 0L else 100L
+                    )
+                    if (!result.success) {
+                        lastActionError = result.message
                     }
-                    success
+                    result.success
                 }
                 TaskStep.ACTION_PRESS_ENTER -> {
                     val success = automation.pressEnter()
@@ -1048,12 +1109,27 @@ class TaskExecutor(
             return when (step.action) {
                 TaskStep.ACTION_OPEN_APP -> openAppTargetReached(step, prePackage, postPackage)
                 TaskStep.ACTION_DIAL -> isDialerPackage(postPackage)
+                TaskStep.ACTION_SCROLL,
+                TaskStep.ACTION_SWIPE -> {
+                    if (postPackage != prePackage && postPackage.isNotEmpty()) {
+                        if (target != null) {
+                            matchesTarget(target, postPackage) || (isWeb && isBrowserPackage(postPackage))
+                        } else if (isWeb) {
+                            isBrowserPackage(postPackage)
+                        } else {
+                            true
+                        }
+                    } else {
+                        // Scrolling within the same package is valid progress!
+                        // In feeds (Facebook, YouTube), headers keep preSignature == postSignature,
+                        // which must not fail or be treated as no-effect.
+                        true
+                    }
+                }
                 TaskStep.ACTION_CLICK_TEXT,
                 TaskStep.ACTION_CLICK_NUMBER,
                 TaskStep.ACTION_CLICK_AT,
                 TaskStep.ACTION_TYPE_TEXT,
-                TaskStep.ACTION_SCROLL,
-                TaskStep.ACTION_SWIPE,
                 TaskStep.ACTION_LONG_PRESS,
                 TaskStep.ACTION_PINCH,
                 TaskStep.ACTION_PRESS_BACK,
@@ -1080,6 +1156,129 @@ class TaskExecutor(
                     }
                 }
                 else -> true
+            }
+        }
+
+        /**
+         * Complete keyboard/type flow helper (Task 2):
+         * (a) tap the text field (by vision coordinates OR node match on editable/focusable nodes, class EditText or isEditable);
+         * (b) WAIT for focus and soft keyboard to appear (poll for a focused editable node / input method visible, with bounded timeout);
+         * (c) set text via ACTION_SET_TEXT on focused node (fall back to typeText if unavailable);
+         * (d) READ BACK field text and verify it equals intended text (retry set once if not matched);
+         * (e) then press search/enter (if pressEnter is true).
+         * If the field cannot be found after a tap attempt, RE-SCAN screen (fresh node dump + vision screenshot) before failing.
+         */
+        suspend fun executeTypeFlow(
+            automation: AutomationPort,
+            text: String,
+            targetQuery: String? = null,
+            fallbackX: Int? = null,
+            fallbackY: Int? = null,
+            pressEnter: Boolean = true,
+            visionLocator: (suspend (target: String, nodes: List<ScreenNode>) -> Pair<Int, Int>?)? = null,
+            pollTimeoutMs: Long = 2000L,
+            pollIntervalMs: Long = 100L
+        ): TypeFlowResult {
+            var currentNodes = automation.dumpScreen()
+
+            fun findEditableCandidate(nodes: List<ScreenNode>): ScreenNode? {
+                if (targetQuery != null) {
+                    val match = nodes.firstOrNull {
+                        (it.isEditable || it.isClickable) &&
+                            (it.text.contains(targetQuery, ignoreCase = true) || it.contentDescription.contains(targetQuery, ignoreCase = true))
+                    }
+                    if (match != null) return match
+                }
+                val editable = nodes.firstOrNull { it.isEditable || it.className.contains("EditText", ignoreCase = true) }
+                if (editable != null) return editable
+
+                return nodes.firstOrNull {
+                    it.isClickable && (
+                        it.text.contains("Search", ignoreCase = true) ||
+                            it.contentDescription.contains("Search", ignoreCase = true) ||
+                            it.viewId.contains("search", ignoreCase = true)
+                    )
+                }
+            }
+
+            fun readCurrentText(): String {
+                return automation.getFocusedText()
+                    ?: automation.dumpScreen().firstOrNull { it.isEditable || it.className.contains("EditText", ignoreCase = true) }?.text
+                    ?: ""
+            }
+
+            // (a) tap the text field if not already focused
+            if (!automation.isInputFocused()) {
+                var candidate = findEditableCandidate(currentNodes)
+                var tapped = false
+
+                if (candidate != null && candidate.centerX > 0 && candidate.centerY > 0) {
+                    tapped = automation.clickAt(candidate.centerX.toFloat(), candidate.centerY.toFloat())
+                } else if (fallbackX != null && fallbackY != null && fallbackX > 0 && fallbackY > 0) {
+                    tapped = automation.clickAt(fallbackX.toFloat(), fallbackY.toFloat())
+                } else if (visionLocator != null) {
+                    val coords = visionLocator(targetQuery ?: "search text field", currentNodes)
+                    if (coords != null) {
+                        tapped = automation.clickAt(coords.first.toFloat(), coords.second.toFloat())
+                    }
+                }
+
+                // If field not found or tap did not focus, RE-SCAN screen (fresh node dump + vision)
+                if (!tapped) {
+                    currentNodes = automation.dumpScreen()
+                    candidate = findEditableCandidate(currentNodes)
+                    if (candidate != null && candidate.centerX > 0 && candidate.centerY > 0) {
+                        tapped = automation.clickAt(candidate.centerX.toFloat(), candidate.centerY.toFloat())
+                    } else if (visionLocator != null) {
+                        val coords = visionLocator(targetQuery ?: "search text field", currentNodes)
+                        if (coords != null) {
+                            tapped = automation.clickAt(coords.first.toFloat(), coords.second.toFloat())
+                        }
+                    }
+                }
+
+                if (!tapped && !automation.isInputFocused() && !currentNodes.any { it.isEditable }) {
+                    return TypeFlowResult(false, "Could not find or tap editable text field on screen")
+                }
+            }
+
+            // (b) WAIT for focus and soft keyboard to appear (poll with bounded timeout)
+            if (pollTimeoutMs > 0L) {
+                val deadline = System.currentTimeMillis() + pollTimeoutMs
+                var isFocused = automation.isInputFocused()
+                while (!isFocused && System.currentTimeMillis() < deadline) {
+                    delay(pollIntervalMs)
+                    isFocused = automation.isInputFocused() || automation.dumpScreen().any { it.isEditable }
+                }
+            }
+
+            // (c) set the text via ACTION_SET_TEXT on focused node (fall back to typeText)
+            var setOk = automation.setTextOnFocused(text)
+            if (!setOk) {
+                setOk = automation.typeText(text)
+            }
+
+            // (d) READ BACK field text and verify it equals intended text (retry set once if not matched)
+            var readBack = readCurrentText()
+            if (readBack != text) {
+                // Retry set once when readback mismatches
+                setOk = automation.setTextOnFocused(text)
+                if (!setOk) {
+                    setOk = automation.typeText(text)
+                }
+                readBack = readCurrentText()
+            }
+
+            // (e) then press search/enter
+            if (pressEnter) {
+                automation.pressEnter()
+            }
+
+            val success = setOk || readBack == text
+            return if (success) {
+                TypeFlowResult(true, "Successfully typed '$text'", textTyped = readBack.ifEmpty { text })
+            } else {
+                TypeFlowResult(false, "typeText failed to set text '$text' (read back: '$readBack')")
             }
         }
 

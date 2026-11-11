@@ -79,6 +79,11 @@ class MiraAccessibilityService : AccessibilityService() {
         }
         if (!isRecordingMacro) return
         if (pkg == packageName || pkg == OWN_PACKAGE) return // Ignore self-interactions inside Mira
+        if (isImePackage(pkg)) {
+            // Drop clicks/actions directly inside soft keyboard apps (Gboard, Samsung Keyboard, etc.)
+            // Typing is recorded via TYPE_VIEW_TEXT_CHANGED, and Enter via ACTION_PRESS_ENTER.
+            return
+        }
 
         when (event.eventType) {
             AccessibilityEvent.TYPE_VIEW_CLICKED -> {
@@ -621,8 +626,35 @@ class MiraAccessibilityService : AccessibilityService() {
 
     private class ScreenshotCaptureOutcome(val bytes: ByteArray?)
 
+    fun isInsideImeArea(x: Int, y: Int): Boolean {
+        try {
+            val wins = windows?.toList() ?: emptyList()
+            for (win in wins) {
+                if (win.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD) {
+                    val r = Rect()
+                    win.getBoundsInScreen(r)
+                    if (r.contains(x, y)) return true
+                }
+            }
+        } catch (_: Throwable) {}
+
+        val isFocused = try {
+            val root = rootInActiveWindow
+            root?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) != null
+        } catch (_: Throwable) { false }
+        if (isFocused) {
+            val metrics = resources?.displayMetrics
+            val h = metrics?.heightPixels ?: 2400
+            if (y >= (h * 0.55f).toInt()) return true
+        }
+        return false
+    }
+
     suspend fun takeScreenshotJpeg(maxWidthPx: Int = 720, quality: Int = 70): ByteArray? {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            Log.w(TAG, "takeScreenshotJpeg failed: Android API ${Build.VERSION.SDK_INT} < 30 (API 30+ required)")
+            return null
+        }
 
         // Turn G: no artificial restrictions (owner order) — the banking-app
         // screenshot skip that lived here via AutomationSafety is removed;
@@ -636,11 +668,20 @@ class MiraAccessibilityService : AccessibilityService() {
         }
 
         val firstAttempt = captureScreenshotOnce(maxWidthPx, quality)
-        if (firstAttempt != null) return firstAttempt.bytes
-        if (lastScreenshotErrorCode == ERROR_TAKE_SCREENSHOT_INTERVAL_RESTRICTED) {
-            delay(SCREENSHOT_DEBOUNCE_MS)
-            return captureScreenshotOnce(maxWidthPx, quality)?.bytes
+        if (firstAttempt?.bytes != null) {
+            Log.d(TAG, "takeScreenshotJpeg succeeded on attempt 1: ${firstAttempt.bytes.size} bytes")
+            return firstAttempt.bytes
         }
+        if (lastScreenshotErrorCode == ERROR_TAKE_SCREENSHOT_INTERVAL_RESTRICTED) {
+            Log.i(TAG, "takeScreenshotJpeg throttled, retrying after ${SCREENSHOT_DEBOUNCE_MS}ms")
+            delay(SCREENSHOT_DEBOUNCE_MS)
+            val secondAttempt = captureScreenshotOnce(maxWidthPx, quality)
+            if (secondAttempt?.bytes != null) {
+                Log.d(TAG, "takeScreenshotJpeg succeeded on attempt 2: ${secondAttempt.bytes.size} bytes")
+                return secondAttempt.bytes
+            }
+        }
+        Log.w(TAG, "takeScreenshotJpeg returned null (lastErrorCode=$lastScreenshotErrorCode)")
         return null
     }
 
@@ -648,7 +689,7 @@ class MiraAccessibilityService : AccessibilityService() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
         lastScreenshotTimestampMs = SystemClock.elapsedRealtime()
         lastScreenshotErrorCode = 0
-        return withTimeoutOrNull(3000L) {
+        val res = withTimeoutOrNull(3000L) {
             suspendCancellableCoroutine { cont ->
                 try {
                     takeScreenshot(
@@ -709,6 +750,10 @@ class MiraAccessibilityService : AccessibilityService() {
                 }
             }
         }
+        if (res == null && lastScreenshotErrorCode == 0) {
+            Log.w(TAG, "takeScreenshot timed out after 3000ms")
+        }
+        return res
     }
 
     // ------------------------------------------------------------------
@@ -882,6 +927,16 @@ class MiraAccessibilityService : AccessibilityService() {
             return s.stopMacroRecordingSteps()
         }
 
+        fun isImePackage(pkg: String?): Boolean {
+            if (pkg.isNullOrBlank()) return false
+            val lower = pkg.lowercase()
+            return lower.contains("inputmethod") ||
+                lower.contains("honeyboard") ||
+                lower.contains("swiftkey") ||
+                lower.endsWith(".latin") ||
+                lower.contains(".latin.")
+        }
+
         fun convertEventsToSteps(events: List<Map<String, Any>>): List<TaskStep> {
             val steps = mutableListOf<TaskStep>()
             var lastPkg: String? = null
@@ -891,7 +946,7 @@ class MiraAccessibilityService : AccessibilityService() {
                 val type = event["type"] as? String
 
                 // Jarvis import (macro_recorder_service.dart): Launch target application before interaction if package is external
-                if (pkg.isNotEmpty() && pkg != lastPkg && pkg != OWN_PACKAGE && pkg != "com.android.systemui" && !TaskExecutor.isLauncherPackage(pkg)) {
+                if (pkg.isNotEmpty() && pkg != lastPkg && pkg != OWN_PACKAGE && pkg != "com.android.systemui" && !TaskExecutor.isLauncherPackage(pkg) && !isImePackage(pkg)) {
                     steps.add(
                         TaskStep(
                             action = TaskStep.ACTION_OPEN_APP,
@@ -904,15 +959,23 @@ class MiraAccessibilityService : AccessibilityService() {
 
                 when (type) {
                     "click" -> {
+                        if (isImePackage(pkg)) {
+                            // Drop keyboard/IME clicks so replay does not hit keyboard settings
+                            continue
+                        }
                         val label = (event["label"] as? String)?.trim() ?: ""
                         val x = (event["x"] as? Number)?.toInt() ?: 0
                         val y = (event["y"] as? Number)?.toInt() ?: 0
+                        val viewId = (event["viewId"] as? String)?.trim().orEmpty()
 
                         if (label.isNotEmpty()) {
-                            val params = if (x > 0 && y > 0) {
-                                mapOf("text" to label, "fallbackX" to x, "fallbackY" to y)
-                            } else {
-                                mapOf("text" to label)
+                            val params = mutableMapOf<String, Any>("text" to label)
+                            if (x > 0 && y > 0) {
+                                params["fallbackX"] = x
+                                params["fallbackY"] = y
+                            }
+                            if (viewId.isNotEmpty()) {
+                                params["viewId"] = viewId
                             }
                             steps.add(
                                 TaskStep(
@@ -922,10 +985,14 @@ class MiraAccessibilityService : AccessibilityService() {
                                 )
                             )
                         } else if (x > 0 && y > 0) {
+                            val params = mutableMapOf<String, Any>("x" to x, "y" to y)
+                            if (viewId.isNotEmpty()) {
+                                params["viewId"] = viewId
+                            }
                             steps.add(
                                 TaskStep(
                                     action = TaskStep.ACTION_CLICK_AT,
-                                    params = mapOf("x" to x, "y" to y),
+                                    params = params,
                                     reasoning = "Macro click at coordinates ($x, $y)"
                                 )
                             )

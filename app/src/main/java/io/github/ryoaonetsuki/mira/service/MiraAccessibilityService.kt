@@ -20,6 +20,7 @@ import android.util.Log
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import io.github.ryoaonetsuki.mira.automation.agent.TaskExecutor
 import io.github.ryoaonetsuki.mira.automation.agent.TaskStep
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.CountDownLatch
@@ -890,16 +891,14 @@ class MiraAccessibilityService : AccessibilityService() {
                 val type = event["type"] as? String
 
                 // Jarvis import (macro_recorder_service.dart): Launch target application before interaction if package is external
-                if (pkg.isNotEmpty() && pkg != lastPkg && pkg != OWN_PACKAGE && pkg != "com.android.systemui") {
-                    if (steps.isEmpty() || lastPkg != null) {
-                        steps.add(
-                            TaskStep(
-                                action = TaskStep.ACTION_OPEN_APP,
-                                params = mapOf("app" to pkg),
-                                reasoning = "Macro launch target application \"$pkg\""
-                            )
+                if (pkg.isNotEmpty() && pkg != lastPkg && pkg != OWN_PACKAGE && pkg != "com.android.systemui" && !TaskExecutor.isLauncherPackage(pkg)) {
+                    steps.add(
+                        TaskStep(
+                            action = TaskStep.ACTION_OPEN_APP,
+                            params = mapOf("app" to pkg),
+                            reasoning = "Macro launch target application \"$pkg\""
                         )
-                    }
+                    )
                     lastPkg = pkg
                 }
 

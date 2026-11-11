@@ -73,6 +73,15 @@ data class TaskStep(
     return if (s.isEmpty()) null else s
   }
 
+  fun booleanParam(key: String): Boolean? {
+    val v = params[key] ?: return null
+    return when (v) {
+      is Boolean -> v
+      is String -> v.toBooleanStrictOrNull()
+      else -> null
+    }
+  }
+
   fun toJson(): JSONObject {
     val json = JSONObject()
     json.put("action", action)

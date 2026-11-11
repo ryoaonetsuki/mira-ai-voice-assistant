@@ -27,6 +27,9 @@ import io.github.ryoaonetsuki.mira.automation.agent.TaskExecutor
 import io.github.ryoaonetsuki.mira.automation.agent.TaskStatus
 import io.github.ryoaonetsuki.mira.automation.agent.TaskStep
 import io.github.ryoaonetsuki.mira.automation.agent.TapNumbersResult
+import io.github.ryoaonetsuki.mira.automation.agent.TargetSource
+import io.github.ryoaonetsuki.mira.automation.agent.PreTapResult
+import io.github.ryoaonetsuki.mira.automation.agent.VisionFirstPerception
 import io.github.ryoaonetsuki.mira.automation.agent.formatNumberedList
 import io.github.ryoaonetsuki.mira.data.local.MiraDatabase
 import io.github.ryoaonetsuki.mira.data.local.entities.ChatMessageEntity
@@ -1602,7 +1605,10 @@ private suspend fun buildActionResult(
     postNodes: List<ScreenNode>,
     isStepOpenApp: Boolean,
     descriptionContext: String,
-    appKnowledge: io.github.ryoaonetsuki.mira.automation.AppKnowledge? = null
+    appKnowledge: io.github.ryoaonetsuki.mira.automation.AppKnowledge? = null,
+    preSignature: Int? = null,
+    postSignature: Int? = null,
+    target: String? = null
 ): Value.Object {
     var screenText = if (postNodes.isNotEmpty()) {
         automationPort.getCompressedScreenDescription(postNodes, descriptionContext)
@@ -1618,10 +1624,22 @@ private suspend fun buildActionResult(
         screenText = "$screenText\n[App UI Knowledge: $appNote]"
     }
 
+    val screenSignatureChanged = (preSignature != null && postSignature != null && preSignature != postSignature)
+    val targetFoundInNodes = if (!target.isNullOrBlank()) {
+        val normTarget = VisionFirstPerception.normalizeTarget(target)
+        postNodes.any {
+            it.text.contains(normTarget, ignoreCase = true) ||
+                it.contentDescription.contains(normTarget, ignoreCase = true) ||
+                (it.viewId.isNotBlank() && (it.viewId.equals(normTarget, ignoreCase = true) || it.viewId.endsWith(":id/$normTarget", ignoreCase = true)))
+        }
+    } else false
+
     val attachScreenshot = TaskExecutor.shouldAttachScreenshot(
         nodes = postNodes,
         lastStepHadNoEffect = !success,
-        lastStepWasOpenApp = isStepOpenApp
+        lastStepWasOpenApp = isStepOpenApp,
+        screenSignatureChanged = screenSignatureChanged,
+        targetFoundInNodes = targetFoundInNodes
     )
 
     var screenshotBase64: String? = null
@@ -1870,6 +1888,8 @@ private suspend fun executeFunctionCallInternal(
             }
 
             val prePackage = automationPort.getCurrentPackage().orEmpty()
+            val preNodes = automationPort.dumpScreen()
+            val preSignature = TaskExecutor.computeNodeSignature(preNodes)
             automationPort.openApp(resolvedApp)
 
             // Poll for target app foreground (fix #3 form: wait for foreground package before returning screen)
@@ -1889,6 +1909,7 @@ private suspend fun executeFunctionCallInternal(
             val postPackage = automationPort.getCurrentPackage().orEmpty()
             val targetReached = TaskExecutor.openAppTargetReached(step, prePackage, postPackage, automationPort)
             val postNodes = automationPort.dumpScreen()
+            val postSignature = TaskExecutor.computeNodeSignature(postNodes)
 
             val outcome = if (targetReached) {
                 "Successfully opened $resolvedApp (package: $postPackage)"
@@ -1904,7 +1925,10 @@ private suspend fun executeFunctionCallInternal(
                 postNodes = postNodes,
                 isStepOpenApp = true,
                 descriptionContext = "Opened $resolvedApp",
-                appKnowledge = appKnowledge
+                appKnowledge = appKnowledge,
+                preSignature = preSignature,
+                postSignature = postSignature,
+                target = resolvedApp
             )
         }
 
@@ -1933,64 +1957,123 @@ private suspend fun executeFunctionCallInternal(
                 )
             }
 
-            var fallbackX = when (val x = typedArgs["x"]) {
+            val perceptionHelper = VisionFirstPerception(
+                automationPort = automationPort,
+                apiKeyProvider = { (context as? MicService)?.activeGeminiApiKey ?: getEffectiveGeminiApiKey(context).orEmpty() },
+                visionDescribe = { key, bytes, dump, w, h, g ->
+                    GeminiRestClient().describeScreenWithVision(key, bytes, dump, w, h, g)
+                },
+                visionLocator = { target, currentNodes ->
+                    resolveVisionCoordinates(context, target, currentNodes, automationPort).coordinates
+                }
+            )
+
+            // Step 1: Perceive fresh
+            var perception = perceptionHelper.perceive(goal = resolvedGoal.orEmpty(), target = text)
+            val preSignature = perception.screenSignature
+            var resolution = perceptionHelper.findTarget(perception, text, resolvedGoal.orEmpty())
+
+            var tapX: Int? = when (val x = typedArgs["x"]) {
                 is Number -> x.toInt()
                 is String -> x.toIntOrNull()
                 else -> rawArgs["x"]?.toIntOrNull()
             }
-            var fallbackY = when (val y = typedArgs["y"]) {
+            var tapY: Int? = when (val y = typedArgs["y"]) {
                 is Number -> y.toInt()
                 is String -> y.toIntOrNull()
                 else -> rawArgs["y"]?.toIntOrNull()
             }
 
-            val preNodes = automationPort.dumpScreen()
-            val preSignature = TaskExecutor.computeNodeSignature(preNodes)
-
-            // Planner coordinates (fix 5, new form): resolve fallback coordinates from preNodes if not passed
-            if (fallbackX == null || fallbackY == null) {
-                val match = preNodes.firstOrNull {
-                    it.text.contains(text, ignoreCase = true) || it.contentDescription.contains(text, ignoreCase = true)
-                }
-                if (match != null && match.centerX > 0 && match.centerY > 0) {
-                    if (fallbackX == null) fallbackX = match.centerX
-                    if (fallbackY == null) fallbackY = match.centerY
+            if (tapX == null || tapY == null) {
+                if (resolution.x > 0 && resolution.y > 0) {
+                    tapX = resolution.x
+                    tapY = resolution.y
                 }
             }
 
-            var actionSuccess = automationPort.clickText(text, preNodes, fallbackX, fallbackY)
+            var visionUsed = (resolution.source == TargetSource.VISION)
+            var visionFailureReason = resolution.failureReason
 
-            // Task 1: Vision fallback when node search fails (e.g. icon-only Facebook magnifier)
-            var visionUsed = false
-            var visionFailureReason: String? = null
-            if (!actionSuccess) {
-                val visionRes = resolveVisionCoordinates(context, text, preNodes, automationPort)
-                val visionCoords = visionRes.coordinates
-                if (visionCoords != null) {
-                    fallbackX = visionCoords.first
-                    fallbackY = visionCoords.second
-                    actionSuccess = automationPort.clickAt(fallbackX.toFloat(), fallbackY.toFloat())
-                    visionUsed = true
-                } else {
-                    visionFailureReason = visionRes.failureReason
+            // Pre-tap verify if vision was used
+            if (resolution.source == TargetSource.VISION && tapX != null && tapY != null) {
+                var preTap = perceptionHelper.verifyPreTap(Pair(tapX, tapY), resolution.matchedVisionElement, perception.nodes)
+                if (preTap is PreTapResult.Mismatch) {
+                    Log.w(GeminiRestClient.TAG_VISION, "Pre-tap mismatch for '$text' at ($tapX, $tapY): vision='${preTap.visionText}', node='${preTap.nodeText}'. Re-perceiving once.")
+                    perceptionHelper.recordFailedAttempt(perception.screenSignature, text)
+                    perception = perceptionHelper.perceive(goal = resolvedGoal.orEmpty(), target = text, forceVision = true)
+                    resolution = perceptionHelper.findTarget(perception, text, resolvedGoal.orEmpty())
+                    if (resolution.x > 0 && resolution.y > 0) {
+                        tapX = resolution.x
+                        tapY = resolution.y
+                        preTap = perceptionHelper.verifyPreTap(Pair(tapX, tapY), resolution.matchedVisionElement, perception.nodes)
+                        if (preTap is PreTapResult.Mismatch) {
+                            val mismatchReason = "vision/node mismatch at ($tapX,$tapY): vision said '${preTap.visionText}', screen says '${preTap.nodeText}'"
+                            Log.w(GeminiRestClient.TAG_VISION, mismatchReason)
+                            val postNodes = automationPort.dumpScreen()
+                            return buildActionResult(
+                                automationPort = automationPort,
+                                outcome = mismatchReason,
+                                success = false,
+                                postPackage = prePackage,
+                                postNodes = postNodes,
+                                isStepOpenApp = false,
+                                descriptionContext = resolvedGoal.orEmpty(),
+                                appKnowledge = appKnowledge,
+                                preSignature = preSignature,
+                                postSignature = TaskExecutor.computeNodeSignature(postNodes),
+                                target = text
+                            )
+                        }
+                    }
                 }
+            }
+
+            // Dispatch tap
+            var actionSuccess = if (resolution.source == TargetSource.NODES_EXACT) {
+                automationPort.clickText(text, perception.nodes, tapX, tapY)
+            } else if (tapX != null && tapY != null && tapX > 0 && tapY > 0) {
+                automationPort.clickAt(tapX.toFloat(), tapY.toFloat())
+            } else {
+                automationPort.clickText(text, perception.nodes, tapX, tapY)
             }
 
             if (settleDelayMs > 0L) {
                 delay(settleDelayMs)
             }
 
-            val postPackage = automationPort.getCurrentPackage().orEmpty()
-            val postNodes = automationPort.dumpScreen()
-            val postSignature = TaskExecutor.computeNodeSignature(postNodes)
+            var postPackage = automationPort.getCurrentPackage().orEmpty()
+            var postNodes = automationPort.dumpScreen()
+            var postSignature = TaskExecutor.computeNodeSignature(postNodes)
+
+            // Post-action verify: if tap dispatched but had NO verified effect, re-perceive once and retry once
+            val noEffectInitially = actionSuccess && (postSignature == preSignature && postPackage == prePackage && !automationPort.isInputFocused())
+            if (noEffectInitially) {
+                Log.i(GeminiRestClient.TAG_VISION, "click_text '$text' had no verified effect. Re-perceiving once and retrying once.")
+                perceptionHelper.recordFailedAttempt(preSignature, text)
+                perception = perceptionHelper.perceive(goal = resolvedGoal.orEmpty(), target = text, forceVision = true)
+                resolution = perceptionHelper.findTarget(perception, text, resolvedGoal.orEmpty())
+                if (resolution.x > 0 && resolution.y > 0) {
+                    tapX = resolution.x
+                    tapY = resolution.y
+                    visionUsed = (resolution.source == TargetSource.VISION)
+                    visionFailureReason = resolution.failureReason
+                    actionSuccess = automationPort.clickAt(tapX.toFloat(), tapY.toFloat())
+                    if (settleDelayMs > 0L) {
+                        delay(settleDelayMs)
+                    }
+                    postPackage = automationPort.getCurrentPackage().orEmpty()
+                    postNodes = automationPort.dumpScreen()
+                    postSignature = TaskExecutor.computeNodeSignature(postNodes)
+                }
+            }
 
             val stepParams = mutableMapOf<String, Any?>("text" to text).apply {
-                if (fallbackX != null) {
-                    put("fallbackX", fallbackX)
-                    put("x", fallbackX)
+                if (tapX != null) {
+                    put("fallbackX", tapX)
+                    put("x", tapX)
                 }
-                if (fallbackY != null) {
-                    put("fallbackY", fallbackY)
+                if (tapY != null) {
+                    put("fallbackY", tapY)
                 }
             }
             val step = TaskStep(action = TaskStep.ACTION_CLICK_TEXT, params = stepParams)
@@ -2012,10 +2095,10 @@ private suspend fun executeFunctionCallInternal(
             val outcome = if (wrongPackage) {
                 "Action click_text '$text' changed package from '$prePackage' to '$postPackage' which does not match target '$effectiveTarget' (wrong-package change failure)"
             } else if (effectVerified) {
-                if (visionUsed) "Successfully located and clicked '$text' via vision ($fallbackX, $fallbackY)" else "Successfully clicked '$text'"
+                if (visionUsed) "Successfully located and clicked '$text' via vision ($tapX, $tapY)" else "Successfully clicked '$text'"
             } else if (!actionSuccess) {
-                if (fallbackX != null && fallbackY != null) {
-                    "click_text '$text' not found and coordinate tap ($fallbackX, $fallbackY) failed"
+                if (tapX != null && tapY != null) {
+                    "click_text '$text' not found and coordinate tap ($tapX, $tapY) failed"
                 } else if (!visionFailureReason.isNullOrBlank()) {
                     "click_text '$text' not found on screen and vision fallback failed: $visionFailureReason"
                 } else {
@@ -2033,7 +2116,10 @@ private suspend fun executeFunctionCallInternal(
                 postNodes = postNodes,
                 isStepOpenApp = false,
                 descriptionContext = "Clicked $text",
-                appKnowledge = appKnowledge
+                appKnowledge = appKnowledge,
+                preSignature = preSignature,
+                postSignature = postSignature,
+                target = text
             )
         }
 
@@ -2099,7 +2185,9 @@ private suspend fun executeFunctionCallInternal(
                 postNodes = postNodes,
                 isStepOpenApp = false,
                 descriptionContext = "Clicked at ($x, $y)",
-                appKnowledge = appKnowledge
+                appKnowledge = appKnowledge,
+                preSignature = preSignature,
+                postSignature = postSignature
             )
         }
 
@@ -2176,7 +2264,10 @@ private suspend fun executeFunctionCallInternal(
                 postNodes = postNodes,
                 isStepOpenApp = false,
                 descriptionContext = "Tapped number $number",
-                appKnowledge = appKnowledge
+                appKnowledge = appKnowledge,
+                preSignature = preSignature,
+                postSignature = postSignature,
+                target = number.toString()
             )
         }
 
@@ -2309,6 +2400,17 @@ private suspend fun executeFunctionCallInternal(
             val preNodes = automationPort.dumpScreen()
             val preSignature = TaskExecutor.computeNodeSignature(preNodes)
 
+            val perceptionHelper = VisionFirstPerception(
+                automationPort = automationPort,
+                apiKeyProvider = { (context as? MicService)?.activeGeminiApiKey ?: getEffectiveGeminiApiKey(context).orEmpty() },
+                visionDescribe = { key, bytes, dump, w, h, g ->
+                    GeminiRestClient().describeScreenWithVision(key, bytes, dump, w, h, g)
+                },
+                visionLocator = { query, nodes ->
+                    resolveVisionCoordinates(context, query, nodes, automationPort).coordinates
+                }
+            )
+
             // Coordinator fix (round 3 review): capture the vision failure reason so
             // the Live model hears WHY the field could not be found, not just that it failed.
             var lastTypeVisionReason: String? = null
@@ -2326,7 +2428,8 @@ private suspend fun executeFunctionCallInternal(
                 },
                 visionFailureReasonProvider = { lastTypeVisionReason },
                 pollTimeoutMs = if (pollTimeoutMs == 0L) 0L else 2000L,
-                pollIntervalMs = pollIntervalMs
+                pollIntervalMs = pollIntervalMs,
+                visionPerception = perceptionHelper
             )
 
             if (settleDelayMs > 0L) {
@@ -2370,7 +2473,10 @@ private suspend fun executeFunctionCallInternal(
                 postNodes = postNodes,
                 isStepOpenApp = false,
                 descriptionContext = "Typed $text",
-                appKnowledge = appKnowledge
+                appKnowledge = appKnowledge,
+                preSignature = preSignature,
+                postSignature = postSignature,
+                target = text
             )
         }
 
@@ -2424,7 +2530,10 @@ private suspend fun executeFunctionCallInternal(
                 postNodes = postNodes,
                 isStepOpenApp = false,
                 descriptionContext = "Scrolled $direction",
-                appKnowledge = appKnowledge
+                appKnowledge = appKnowledge,
+                preSignature = preSignature,
+                postSignature = postSignature,
+                target = direction
             )
         }
 
@@ -2475,7 +2584,9 @@ private suspend fun executeFunctionCallInternal(
                 postNodes = postNodes,
                 isStepOpenApp = false,
                 descriptionContext = "Pressed Back",
-                appKnowledge = appKnowledge
+                appKnowledge = appKnowledge,
+                preSignature = preSignature,
+                postSignature = postSignature
             )
         }
 
@@ -2524,7 +2635,9 @@ private suspend fun executeFunctionCallInternal(
                 postNodes = postNodes,
                 isStepOpenApp = false,
                 descriptionContext = "Pressed Home",
-                appKnowledge = appKnowledge
+                appKnowledge = appKnowledge,
+                preSignature = preSignature,
+                postSignature = postSignature
             )
         }
 

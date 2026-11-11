@@ -425,6 +425,14 @@ object MiraChatSearchHeuristic {
     }
 }
 
+data class VisionElement(
+    val text: String,
+    val role: String,
+    val xPx: Int,
+    val yPx: Int,
+    val action: String = ""
+)
+
 class GeminiRestClient(
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
@@ -1508,15 +1516,23 @@ class GeminiRestClient(
         """.trimIndent()
 
         val mockMsg = ChatMessageEntity(conversationId = "vision_locator", role = "user", content = prompt)
-        val visionResult = generateVision(
-            apiKey = apiKey,
-            history = listOf(mockMsg),
-            imageBytes = imageBytes,
-            mimeType = "image/jpeg",
-            model = model,
-            useServerProxy = useServerProxy,
-            enableThinking = false
-        )
+        val visionResult = withTimeoutOrNull(8_000L) {
+            generateVision(
+                apiKey = apiKey,
+                history = listOf(mockMsg),
+                imageBytes = imageBytes,
+                mimeType = "image/jpeg",
+                model = model,
+                useServerProxy = useServerProxy,
+                enableThinking = false
+            )
+        }
+
+        if (visionResult == null) {
+            val err = "vision timed out after 8s"
+            Log.w(TAG_VISION, "Vision locator failed: $err")
+            return@withContext Result.failure(IllegalStateException(err))
+        }
 
         if (visionResult.isFailure) {
             val err = visionResult.exceptionOrNull()
@@ -1527,6 +1543,74 @@ class GeminiRestClient(
         visionResult.mapCatching { groundedResult ->
             parseVisionCoordinates(groundedResult.text, screenWidth, screenHeight)
                 ?: throw IllegalStateException("Failed to parse valid in-bounds coordinates from vision output: ${groundedResult.text}")
+        }
+    }
+
+    /**
+     * Reads a full screenshot with vision, extracting every interactive element with 0-1000 coordinates.
+     */
+    suspend fun describeScreenWithVision(
+        apiKey: String,
+        imageBytes: ByteArray,
+        nodeDump: String = "",
+        screenWidth: Int = 1080,
+        screenHeight: Int = 2400,
+        goal: String = "",
+        useServerProxy: Boolean = false,
+        model: String = "gemini-3.8-flash"
+    ): Result<List<VisionElement>> = withContext(Dispatchers.IO) {
+        if (apiKey.isBlank()) {
+            Log.w(TAG_VISION, "Vision describe failed: Gemini API key is missing or blank")
+            return@withContext Result.failure(IllegalStateException("Gemini API key is missing or blank"))
+        }
+        if (imageBytes.isEmpty()) {
+            Log.w(TAG_VISION, "Vision describe failed: screenshot JPEG is empty")
+            return@withContext Result.failure(IllegalStateException("Screenshot JPEG is empty"))
+        }
+
+        val prompt = """
+            You are a mobile screen visual element reader.
+            Goal: "$goal".
+            Visible accessibility node text (may be incomplete or missing icon-only buttons):
+            ${nodeDump.take(1500)}
+
+            Read the attached screenshot.
+            List every interactive element visible on screen (buttons, tabs, text fields, icons). For icon-only buttons, describe the icon (e.g. "magnifier search icon", "back arrow", "profile avatar").
+            Respond ONLY with a JSON object in this format:
+            {"elements": [{"text": "...", "role": "button|tab|text_field|icon|...", "x": 0-1000, "y": 0-1000, "action": "what tapping this does, in a few words"}]}
+            where (0,0) is top-left and (1000,1000) is bottom-right.
+            Cap at 40 elements. Do not output markdown fences or any other text.
+        """.trimIndent()
+
+        val mockMsg = ChatMessageEntity(conversationId = "vision_describe", role = "user", content = prompt)
+
+        val visionResult = withTimeoutOrNull(8_000L) {
+            generateVision(
+                apiKey = apiKey,
+                history = listOf(mockMsg),
+                imageBytes = imageBytes,
+                mimeType = "image/jpeg",
+                model = model,
+                useServerProxy = useServerProxy,
+                enableThinking = false
+            )
+        }
+
+        if (visionResult == null) {
+            val err = "vision timed out after 8s"
+            Log.w(TAG_VISION, "Vision describe failed: $err")
+            return@withContext Result.failure(IllegalStateException(err))
+        }
+
+        if (visionResult.isFailure) {
+            val err = visionResult.exceptionOrNull()
+            Log.w(TAG_VISION, "Vision describe failed: API call error: ${err?.message}", err)
+            return@withContext Result.failure(err ?: IllegalStateException("Vision API call failed"))
+        }
+
+        visionResult.mapCatching { groundedResult ->
+            parseVisionElements(groundedResult.text, screenWidth, screenHeight)
+                ?: throw IllegalStateException("Failed to parse valid vision elements from output: ${groundedResult.text.take(200)}")
         }
     }
 
@@ -1644,6 +1728,125 @@ class GeminiRestClient(
                 return null
             }
             return parsed
+        }
+
+        fun parseVisionElements(
+            response: String,
+            screenWidth: Int = 1080,
+            screenHeight: Int = 2400
+        ): List<VisionElement>? {
+            val clean = response.replace("```json", "").replace("```", "").trim()
+            if (clean.isBlank()) return null
+
+            fun parseElementObject(obj: JSONObject): VisionElement? {
+                val text = obj.optString("text").ifBlank {
+                    obj.optString("label").ifBlank {
+                        obj.optString("name").ifBlank {
+                            obj.optString("title")
+                        }
+                    }
+                }
+                val role = obj.optString("role").ifBlank {
+                    obj.optString("type", "button")
+                }
+                val action = obj.optString("action").ifBlank {
+                    obj.optString("description", "")
+                }
+
+                var parsedX: Int? = null
+                var parsedY: Int? = null
+
+                if (obj.has("x") && obj.has("y")) {
+                    val rx = obj.optDouble("x", -1.0)
+                    val ry = obj.optDouble("y", -1.0)
+                    if (rx >= 0.0 && ry >= 0.0) {
+                        parsedX = if (rx <= 1000.0 && screenWidth > 0) ((rx / 1000.0) * screenWidth).toInt() else rx.toInt()
+                        parsedY = if (ry <= 1000.0 && screenHeight > 0) ((ry / 1000.0) * screenHeight).toInt() else ry.toInt()
+                    }
+                }
+                if ((parsedX == null || parsedY == null) && obj.has("point")) {
+                    val arr = obj.optJSONArray("point")
+                    if (arr != null && arr.length() >= 2) {
+                        val ry = arr.optDouble(0, -1.0)
+                        val rx = arr.optDouble(1, -1.0)
+                        if (rx >= 0.0 && ry >= 0.0) {
+                            parsedX = if (rx <= 1000.0 && screenWidth > 0) ((rx / 1000.0) * screenWidth).toInt() else rx.toInt()
+                            parsedY = if (ry <= 1000.0 && screenHeight > 0) ((ry / 1000.0) * screenHeight).toInt() else ry.toInt()
+                        }
+                    }
+                }
+                if ((parsedX == null || parsedY == null) && obj.has("box_2d")) {
+                    val arr = obj.optJSONArray("box_2d")
+                    if (arr != null && arr.length() >= 4) {
+                        val ymin = arr.optDouble(0, -1.0)
+                        val xmin = arr.optDouble(1, -1.0)
+                        val ymax = arr.optDouble(2, -1.0)
+                        val xmax = arr.optDouble(3, -1.0)
+                        if (ymin >= 0.0 && xmin >= 0.0 && ymax >= ymin && xmax >= xmin) {
+                            val rx = (xmin + xmax) / 2.0
+                            val ry = (ymin + ymax) / 2.0
+                            parsedX = if (rx <= 1000.0 && screenWidth > 0) ((rx / 1000.0) * screenWidth).toInt() else rx.toInt()
+                            parsedY = if (ry <= 1000.0 && screenHeight > 0) ((ry / 1000.0) * screenHeight).toInt() else ry.toInt()
+                        }
+                    }
+                }
+
+                if (parsedX == null || parsedY == null) return null
+                if (parsedX < 0 || parsedX > screenWidth || parsedY < 0 || parsedY > screenHeight) {
+                    return null
+                }
+                return VisionElement(
+                    text = text,
+                    role = role,
+                    xPx = parsedX,
+                    yPx = parsedY,
+                    action = action
+                )
+            }
+
+            val elements = mutableListOf<VisionElement>()
+            try {
+                if (clean.startsWith("{")) {
+                    val root = JSONObject(clean)
+                    val arr = root.optJSONArray("elements") ?: root.optJSONArray("items")
+                    if (arr != null) {
+                        for (i in 0 until arr.length()) {
+                            val item = arr.optJSONObject(i) ?: continue
+                            val elem = parseElementObject(item)
+                            if (elem != null) elements.add(elem)
+                            if (elements.size >= 40) break
+                        }
+                    }
+                } else if (clean.startsWith("[")) {
+                    val arr = JSONArray(clean)
+                    for (i in 0 until arr.length()) {
+                        val item = arr.optJSONObject(i) ?: continue
+                        val elem = parseElementObject(item)
+                        if (elem != null) elements.add(elem)
+                        if (elements.size >= 40) break
+                    }
+                }
+            } catch (_: Throwable) {}
+
+            if (elements.isEmpty()) {
+                val objectRegex = Regex("""\{[^{}]*"(?:text|label|name)"[^{}]*\}""")
+                val matches = objectRegex.findAll(clean)
+                for (m in matches) {
+                    try {
+                        val obj = JSONObject(m.value)
+                        val elem = parseElementObject(obj)
+                        if (elem != null) elements.add(elem)
+                        if (elements.size >= 40) break
+                    } catch (_: Throwable) {}
+                }
+            }
+
+            if (elements.isEmpty()) {
+                Log.w(TAG_VISION, "Vision describe failed: unparseable output or no elements: $clean")
+                return null
+            }
+
+            return elements
         }
     }
 }

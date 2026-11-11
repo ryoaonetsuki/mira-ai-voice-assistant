@@ -258,6 +258,11 @@ class VisionFirstPerception(
                     source = TargetSource.VISION
                 )
             }
+            // The locator returned null — its specific failure reason (set by
+            // resolveVisionCoordinates on the executor) is merged into the
+            // caller's error by TaskExecutor._performAction, which reads the
+            // executor's lastVisionFailureReason alongside the resolution's
+            // failureReason.
         }
 
         // 3. NODES_FALLBACK

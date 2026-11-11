@@ -484,6 +484,7 @@ class TaskExecutor(
         TaskStep.ACTION_PRESS_HOME -> "press Home"
         TaskStep.ACTION_WAIT -> "wait a moment"
         TaskStep.ACTION_DONE -> "finish"
+        TaskStep.ACTION_DIAL -> "dial ${step.stringParam("number") ?: ""}"
         else -> step.action
     }
 
@@ -867,6 +868,17 @@ class TaskExecutor(
                         lastActionError = "open_app target not specified"
                         return false
                     }
+                    if (isLauncherPackage(query)) {
+                        try {
+                            automation.pressHome()
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Throwable) {
+                            logWarn("pressHome threw for launcher package '$query': ${e.message}")
+                        }
+                        logWarn("Target query '$query' is a launcher package — going home instead of launching app")
+                        return true
+                    }
                     val launched = automation.openApp(query)
                     if (launched == null) {
                         lastActionError = "could not resolve or launch app '$query'"
@@ -879,6 +891,22 @@ class TaskExecutor(
                     val ms = (step.intParam("ms") ?: 1500).coerceIn(100, 10000).toLong()
                     delay(ms)
                     true
+                }
+                TaskStep.ACTION_DIAL -> {
+                    val number = (step.stringParam("number") ?: step.stringParam("phone") ?: "").trim()
+                    if (number.isEmpty()) {
+                        lastActionError = "dial missing number param"
+                        return false
+                    }
+                    val success = try {
+                        automation.dialNumber(number)
+                    } catch (e: CancellationException) {
+                        throw e
+                    }
+                    if (!success) {
+                        lastActionError = "dial '$number' failed"
+                    }
+                    success
                 }
                 TaskStep.ACTION_DONE -> true
                 else -> {
@@ -1000,6 +1028,9 @@ class TaskExecutor(
          */
         fun openAppTargetReached(step: TaskStep, prePackage: String, postPackage: String): Boolean {
             val targetQuery = (step.stringParam("app") ?: step.stringParam("package") ?: "").trim()
+            if (isLauncherPackage(targetQuery)) {
+                return isLauncherPackage(postPackage)
+            }
             return matchesTarget(targetQuery, postPackage)
         }
 
@@ -1016,6 +1047,7 @@ class TaskExecutor(
             val isWeb = isWebGoal(goal) || (target != null && isBrowserPackage(target))
             return when (step.action) {
                 TaskStep.ACTION_OPEN_APP -> openAppTargetReached(step, prePackage, postPackage)
+                TaskStep.ACTION_DIAL -> isDialerPackage(postPackage)
                 TaskStep.ACTION_CLICK_TEXT,
                 TaskStep.ACTION_CLICK_NUMBER,
                 TaskStep.ACTION_CLICK_AT,

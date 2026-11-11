@@ -118,12 +118,21 @@ class MiraAutomationBridge(
         val automation: AutomationPort = ScreenAutomationService(ctx)
         val skills = SkillMemoryService.getInstance(ctx)
         val historyStore = TaskHistoryStore.getInstance(ctx)
+        val knowledge = AppKnowledge { path ->
+            try {
+                ctx.assets.open(path).bufferedReader().use { it.readText() }
+            } catch (_: Exception) {
+                null
+            }
+        }
         return TaskExecutor(
             automation = automation,
             skills = skills,
             taskTimeoutMs = taskTimeoutMs,
             onProgress = onProgress,
-            historyStore = historyStore
+            historyStore = historyStore,
+            apiKeyProvider = apiKey,
+            appKnowledge = knowledge
         )
     }
 

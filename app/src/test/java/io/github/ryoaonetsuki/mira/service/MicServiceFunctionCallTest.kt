@@ -55,8 +55,11 @@ class MicServiceFunctionCallTest {
         var pkgChangeOnAction: String? = null
         var tapNumbersToShow: List<Pair<Int, ScreenNode>> = emptyList()
         var hideTapNumbersCalled: Boolean = false
+        var tapNumbersDetailedResult: io.github.ryoaonetsuki.mira.automation.agent.TapNumbersResult? = null
 
         override fun showTapNumbers(): List<Pair<Int, ScreenNode>> = tapNumbersToShow
+        override fun showTapNumbersDetailed(): io.github.ryoaonetsuki.mira.automation.agent.TapNumbersResult =
+            tapNumbersDetailedResult ?: super.showTapNumbersDetailed()
         override fun hideTapNumbers() {
             hideTapNumbersCalled = true
         }
@@ -910,7 +913,56 @@ class MicServiceFunctionCallTest {
 
         val resultMap = response.value
         val err = (resultMap["error"] as? Value.Str)?.value
-        assertEquals("Could not show tap numbers: no tappable elements found, or the \"Display over other apps\" permission is not granted - enable it in setup.", err)
+        assertEquals("Could not show tap numbers: no tappable elements found on current screen.", err)
+        assertEquals(false, (resultMap["success"] as? Value.Bool)?.value)
+    }
+
+    @Test
+    fun testShowNumbers_PermissionMissing_ReturnsPermissionGuidance() = runBlocking {
+        val fakePort = TestAutomationPort(
+            currentPkg = "com.google.android.youtube"
+        )
+        fakePort.tapNumbersDetailedResult = io.github.ryoaonetsuki.mira.automation.agent.TapNumbersResult.PermissionMissing
+
+        val response = executeFunctionCall(
+            automationPort = fakePort,
+            context = null,
+            name = "show_numbers",
+            rawArgs = emptyMap(),
+            typedArgs = emptyMap()
+        )
+
+        val resultMap = response.value
+        val res = (resultMap["result"] as? Value.Str)?.value
+        assertEquals("Please enable 'Display over other apps' in Mira setup or Android Settings to show number badges.", res)
+        assertEquals(false, (resultMap["success"] as? Value.Bool)?.value)
+    }
+
+    @Test
+    fun testClickText_VisionFailure_ReturnsDiagnosticFailureReason() = runBlocking {
+        val fakePort = TestAutomationPort(
+            currentPkg = "com.facebook.katana"
+        )
+        // No match for "magnifier" in testNodes
+        fakePort.screenshotBytes = null // screenshot will fail
+
+        val response = executeFunctionCall(
+            automationPort = fakePort,
+            context = null,
+            name = "click_text",
+            rawArgs = mapOf("text" to "magnifier"),
+            typedArgs = emptyMap(),
+            targetApp = "com.facebook.katana",
+            settleDelayMs = 0L
+        )
+
+        val resultMap = response.value
+        val outcome = (resultMap["result"] as? Value.Str)?.value.orEmpty()
+        assertEquals(false, (resultMap["success"] as? Value.Bool)?.value)
+        assertTrue(
+            "Outcome must state vision fallback failure reason, got: $outcome",
+            outcome.contains("vision fallback failed:")
+        )
     }
 
     @Test

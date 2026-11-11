@@ -15,7 +15,7 @@ import org.junit.Test
 class TaskExecutorTest {
 
     // --- Fake AutomationPort for pure JVM unit testing ---
-    private class FakeAutomationPort(
+    private open class FakeAutomationPort(
         var serviceEnabled: Boolean = true,
         var currentPkg: String? = "io.github.ryoaonetsuki.mira",
         var actionSuccess: Boolean = true,
@@ -2035,7 +2035,7 @@ class TaskExecutorTest {
                 return screenNodes
             }
         }
-        val memory = SkillMemoryService()
+        val memory = SkillMemoryService(InMemorySkillStore())
         val executor = TaskExecutor(
             automation = fakePort,
             skills = memory,

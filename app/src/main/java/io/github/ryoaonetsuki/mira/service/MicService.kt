@@ -201,6 +201,17 @@ class MicService : Service() {
         ScreenAutomationService(applicationContext)
     }
     internal val automationPort: AutomationPort get() = automationPortProvider()
+    internal var activeGeminiApiKey: String? = null
+
+    internal val appKnowledge by lazy {
+        io.github.ryoaonetsuki.mira.automation.AppKnowledge { path ->
+            try {
+                applicationContext.assets.open(path).bufferedReader().use { it.readText() }
+            } catch (_: Throwable) {
+                null
+            }
+        }
+    }
 
     private val userTurnWatchdog by lazy {
         TurnWatchdog(
@@ -720,7 +731,13 @@ class MicService : Service() {
             io.github.ryoaonetsuki.mira.data.model.PersonaType.MIRA
         }
 
+        activeGeminiApiKey = geminiKey
+
         val dateLine = currentDateTimeLine(language)
+
+        val appKnowledgeSummary = runCatching {
+            appKnowledge.summaryForPrompt()
+        }.getOrNull().orEmpty()
 
         val fullSystemPrompt = LivePromptBuilder.buildLiveSystemPrompt(
             language = language,
@@ -731,7 +748,8 @@ class MicService : Service() {
             dateLine = dateLine,
             customInstructions = customInstructions,
             activeRules = activeRules,
-            memorySection = memorySection
+            memorySection = memorySection,
+            appKnowledgeSection = appKnowledgeSummary
         )
 
         val bcp47Language = LanguageUtils.mapLanguageToBcp47(language)
@@ -1090,7 +1108,8 @@ class MicService : Service() {
                     rawArgs = rawArgs,
                     typedArgs = typedArgs,
                     targetApp = currentAutomationTarget,
-                    goal = lastAutomationGoal
+                    goal = lastAutomationGoal,
+                    appKnowledge = appKnowledge
                 )
                 sessionManager?.sendFunctionResponse(id, name, responseObj)
                 val outcome = extractOutcomeString(responseObj)
@@ -1120,7 +1139,8 @@ class MicService : Service() {
         settleDelayMs: Long = 100L,
         targetApp: String? = null,
         goal: String? = null,
-        skillsService: SkillMemoryService? = null
+        skillsService: SkillMemoryService? = null,
+        appKnowledge: io.github.ryoaonetsuki.mira.automation.AppKnowledge? = null
     ): Value.Object = io.github.ryoaonetsuki.mira.service.executeFunctionCall(
         automationPort = automationPort,
         context = context,
@@ -1132,7 +1152,8 @@ class MicService : Service() {
         settleDelayMs = settleDelayMs,
         targetApp = targetApp ?: currentAutomationTarget,
         goal = goal ?: lastAutomationGoal,
-        skillsService = skillsService
+        skillsService = skillsService,
+        appKnowledge = appKnowledge ?: this@MicService.appKnowledge
     ).also { response ->
         val success = (response.value["success"] as? Value.Bool)?.value == true
         if (success && name.equals("open_app", ignoreCase = true)) {
@@ -1391,6 +1412,50 @@ class MicService : Service() {
     }
 }
 
+internal fun getEffectiveGeminiApiKey(context: Context?): String? {
+    if (context == null) return null
+    return try {
+        val resolver = io.github.ryoaonetsuki.mira.backend.ApiKeyResolver(context)
+        when (val keySource = resolver.resolveKey()) {
+            is io.github.ryoaonetsuki.mira.backend.KeySource.UserKey -> keySource.key
+            else -> SecurePreferences(context).getGeminiApiKey()
+        }
+    } catch (_: Throwable) {
+        try {
+            SecurePreferences(context).getGeminiApiKey()
+        } catch (_: Throwable) {
+            null
+        }
+    }
+}
+
+internal suspend fun resolveVisionCoordinates(
+    context: Context?,
+    target: String,
+    nodes: List<ScreenNode>,
+    automationPort: AutomationPort
+): Pair<Int, Int>? {
+    val apiKey = (context as? MicService)?.activeGeminiApiKey
+        ?: getEffectiveGeminiApiKey(context)
+        ?: return null
+
+    val jpeg = automationPort.takeScreenshotJpeg(720) ?: return null
+    val client = io.github.ryoaonetsuki.mira.network.GeminiRestClient()
+    val nodeText = automationPort.formatNodes(nodes)
+    return try {
+        val result = client.locateElementWithVision(
+            apiKey = apiKey,
+            imageBytes = jpeg,
+            targetDescription = target,
+            nodeDump = nodeText
+        )
+        result.getOrNull()
+    } catch (e: Exception) {
+        Log.w("MicService", "Vision locator failed for '$target': ${e.message}")
+        null
+    }
+}
+
 private suspend fun buildActionResult(
     automationPort: AutomationPort,
     outcome: String,
@@ -1398,12 +1463,21 @@ private suspend fun buildActionResult(
     postPackage: String,
     postNodes: List<ScreenNode>,
     isStepOpenApp: Boolean,
-    descriptionContext: String
+    descriptionContext: String,
+    appKnowledge: io.github.ryoaonetsuki.mira.automation.AppKnowledge? = null
 ): Value.Object {
-    val screenText = if (postNodes.isNotEmpty()) {
+    var screenText = if (postNodes.isNotEmpty()) {
         automationPort.getCompressedScreenDescription(postNodes, descriptionContext)
     } else {
         "Screen has no accessible UI elements (empty node tree)"
+    }
+
+    var appNote: String? = null
+    if (appKnowledge != null && postPackage.isNotBlank()) {
+        appNote = appKnowledge.noteForTarget(postPackage) ?: appKnowledge.searchFlowNote()
+    }
+    if (appNote != null) {
+        screenText = "$screenText\n[App UI Knowledge: $appNote]"
     }
 
     val attachScreenshot = TaskExecutor.shouldAttachScreenshot(
@@ -1433,6 +1507,9 @@ private suspend fun buildActionResult(
     )
     if (screenshotBase64 != null) {
         resultMap["screenshot"] = Value.Str(screenshotBase64)
+    }
+    if (appNote != null) {
+        resultMap["app_knowledge"] = Value.Str(appNote)
     }
     return Value.Object(resultMap)
 }
@@ -1492,7 +1569,8 @@ internal suspend fun executeFunctionCall(
     settleDelayMs: Long = 100L,
     targetApp: String? = null,
     goal: String? = null,
-    skillsService: SkillMemoryService? = null
+    skillsService: SkillMemoryService? = null,
+    appKnowledge: io.github.ryoaonetsuki.mira.automation.AppKnowledge? = null
 ): Value.Object {
     val startTimeMs = System.currentTimeMillis()
     val argsSummary = (typedArgs.ifEmpty { rawArgs }).toString()
@@ -1519,7 +1597,8 @@ internal suspend fun executeFunctionCall(
             postPackage = postPackage,
             postNodes = postNodes,
             isStepOpenApp = false,
-            descriptionContext = resolvedGoal.orEmpty()
+            descriptionContext = resolvedGoal.orEmpty(),
+            appKnowledge = appKnowledge
         )
         val latencyMs = System.currentTimeMillis() - startTimeMs
         LiveVoiceDiagnostics.recordToolResult(name, latencyMs, false)
@@ -1537,7 +1616,8 @@ internal suspend fun executeFunctionCall(
             postPackage = postPackage,
             postNodes = postNodes,
             isStepOpenApp = false,
-            descriptionContext = resolvedGoal.orEmpty()
+            descriptionContext = resolvedGoal.orEmpty(),
+            appKnowledge = appKnowledge
         )
         val latencyMs = System.currentTimeMillis() - startTimeMs
         LiveVoiceDiagnostics.recordToolResult(name, latencyMs, false)
@@ -1556,7 +1636,8 @@ internal suspend fun executeFunctionCall(
             settleDelayMs = settleDelayMs,
             resolvedTarget = resolvedTarget,
             resolvedGoal = resolvedGoal,
-            skillsService = skillsService
+            skillsService = skillsService,
+            appKnowledge = appKnowledge
         )
         val latencyMs = System.currentTimeMillis() - startTimeMs
         val success = (response.value["success"] as? Value.Bool)?.value
@@ -1582,7 +1663,8 @@ private suspend fun executeFunctionCallInternal(
     settleDelayMs: Long = 100L,
     resolvedTarget: String? = null,
     resolvedGoal: String? = null,
-    skillsService: SkillMemoryService? = null
+    skillsService: SkillMemoryService? = null,
+    appKnowledge: io.github.ryoaonetsuki.mira.automation.AppKnowledge? = null
 ): Value.Object {
     val normName = name.lowercase(Locale.ROOT)
 
@@ -1594,10 +1676,10 @@ private suspend fun executeFunctionCallInternal(
         }
     }
 
-    // Phone-action tool findMatch check: when a phone-action tool (open_app, click_text, type_text, scroll, tap_number, show_numbers, hide_numbers)
+    // Phone-action tool findMatch check: when a phone-action tool (open_app, click_text, click_at, type_text, scroll, tap_number, show_numbers, hide_numbers)
     // is invoked and SkillMemoryService.findMatch matches the current goal, replay the skill directly
     // instead of executing the single step, and return the replay result as the tool result.
-    val isPhoneAction = normName in setOf("open_app", "click_text", "type_text", "scroll", "tap_number", "show_numbers", "hide_numbers")
+    val isPhoneAction = normName in setOf("open_app", "click_text", "click_at", "type_text", "scroll", "tap_number", "show_numbers", "hide_numbers")
     if (isPhoneAction && !resolvedGoal.isNullOrBlank() && skills != null) {
         val matchedSkill = skills.findMatch(resolvedGoal)
         if (matchedSkill != null) {
@@ -1616,7 +1698,8 @@ private suspend fun executeFunctionCallInternal(
                 postPackage = postPackage,
                 postNodes = postNodes,
                 isStepOpenApp = matchedSkill.steps.any { it.action == TaskStep.ACTION_OPEN_APP },
-                descriptionContext = matchedSkill.goal
+                descriptionContext = matchedSkill.goal,
+                appKnowledge = appKnowledge
             )
         }
     }
@@ -1671,7 +1754,8 @@ private suspend fun executeFunctionCallInternal(
                 postPackage = postPackage,
                 postNodes = postNodes,
                 isStepOpenApp = true,
-                descriptionContext = "Opened $resolvedApp"
+                descriptionContext = "Opened $resolvedApp",
+                appKnowledge = appKnowledge
             )
         }
 
@@ -1695,7 +1779,8 @@ private suspend fun executeFunctionCallInternal(
                     postPackage = prePackage,
                     postNodes = postNodes,
                     isStepOpenApp = false,
-                    descriptionContext = resolvedGoal.orEmpty()
+                    descriptionContext = resolvedGoal.orEmpty(),
+                    appKnowledge = appKnowledge
                 )
             }
 
@@ -1724,7 +1809,20 @@ private suspend fun executeFunctionCallInternal(
                 }
             }
 
-            val actionSuccess = automationPort.clickText(text, preNodes, fallbackX, fallbackY)
+            var actionSuccess = automationPort.clickText(text, preNodes, fallbackX, fallbackY)
+
+            // Task 1: Vision fallback when node search fails (e.g. icon-only Facebook magnifier)
+            var visionUsed = false
+            if (!actionSuccess) {
+                val visionCoords = resolveVisionCoordinates(context, text, preNodes, automationPort)
+                if (visionCoords != null) {
+                    fallbackX = visionCoords.first
+                    fallbackY = visionCoords.second
+                    actionSuccess = automationPort.clickAt(fallbackX.toFloat(), fallbackY.toFloat())
+                    visionUsed = true
+                }
+            }
+
             if (settleDelayMs > 0L) {
                 delay(settleDelayMs)
             }
@@ -1762,12 +1860,12 @@ private suspend fun executeFunctionCallInternal(
             val outcome = if (wrongPackage) {
                 "Action click_text '$text' changed package from '$prePackage' to '$postPackage' which does not match target '$effectiveTarget' (wrong-package change failure)"
             } else if (effectVerified) {
-                "Successfully clicked '$text'"
+                if (visionUsed) "Successfully located and clicked '$text' via vision ($fallbackX, $fallbackY)" else "Successfully clicked '$text'"
             } else if (!actionSuccess) {
                 if (fallbackX != null && fallbackY != null) {
-                    "click_text '$text' not found and fallback coordinate tap ($fallbackX, $fallbackY) failed"
+                    "click_text '$text' not found and coordinate tap ($fallbackX, $fallbackY) failed"
                 } else {
-                    "click_text '$text' not found on screen and no fallback coordinates"
+                    "click_text '$text' not found on screen and vision fallback could not locate coordinates"
                 }
             } else {
                 "click_text '$text' dispatched but had no verified effect on screen"
@@ -1780,7 +1878,74 @@ private suspend fun executeFunctionCallInternal(
                 postPackage = postPackage,
                 postNodes = postNodes,
                 isStepOpenApp = false,
-                descriptionContext = "Clicked $text"
+                descriptionContext = "Clicked $text",
+                appKnowledge = appKnowledge
+            )
+        }
+
+        "click_at" -> {
+            val x = when (val rawX = typedArgs["x"]) {
+                is Number -> rawX.toInt()
+                is String -> rawX.toIntOrNull()
+                else -> rawArgs["x"]?.toIntOrNull()
+            }
+            val y = when (val rawY = typedArgs["y"]) {
+                is Number -> rawY.toInt()
+                is String -> rawY.toIntOrNull()
+                else -> rawArgs["y"]?.toIntOrNull()
+            }
+            if (x == null || y == null) {
+                return Value.Object("error" to Value.Str("Missing x or y argument for click_at"))
+            }
+
+            val prePackage = automationPort.getCurrentPackage().orEmpty()
+            val preNodes = automationPort.dumpScreen()
+            val preSignature = TaskExecutor.computeNodeSignature(preNodes)
+
+            val actionSuccess = automationPort.clickAt(x.toFloat(), y.toFloat())
+            if (settleDelayMs > 0L) {
+                delay(settleDelayMs)
+            }
+
+            val postPackage = automationPort.getCurrentPackage().orEmpty()
+            val postNodes = automationPort.dumpScreen()
+            val postSignature = TaskExecutor.computeNodeSignature(postNodes)
+
+            val step = TaskStep(action = TaskStep.ACTION_CLICK_AT, params = mapOf("x" to x, "y" to y))
+            MicService.lastExecutedStep = step
+
+            val effectiveTarget = resolvedTarget ?: if (prePackage.isNotEmpty() && !TaskExecutor.isLauncherPackage(prePackage) && prePackage != "io.github.ryoaonetsuki.mira") prePackage else null
+            val wrongPackage = isWrongPackageChange(step.action, prePackage, postPackage, effectiveTarget, resolvedGoal)
+
+            val effectVerified = !wrongPackage && actionSuccess && TaskExecutor.verifyEffect(
+                step = step,
+                prePackage = prePackage,
+                preSignature = preSignature,
+                postPackage = postPackage,
+                postSignature = postSignature,
+                goal = resolvedGoal,
+                targetApp = effectiveTarget
+            )
+
+            val outcome = if (wrongPackage) {
+                "Action click_at ($x, $y) changed package from '$prePackage' to '$postPackage' which does not match target '$effectiveTarget' (wrong-package change failure)"
+            } else if (effectVerified) {
+                "Successfully clicked at ($x, $y)"
+            } else if (!actionSuccess) {
+                "click_at ($x, $y) failed"
+            } else {
+                "click_at ($x, $y) dispatched but had no verified effect on screen"
+            }
+
+            return buildActionResult(
+                automationPort = automationPort,
+                outcome = outcome,
+                success = effectVerified,
+                postPackage = postPackage,
+                postNodes = postNodes,
+                isStepOpenApp = false,
+                descriptionContext = "Clicked at ($x, $y)",
+                appKnowledge = appKnowledge
             )
         }
 
@@ -1806,7 +1971,8 @@ private suspend fun executeFunctionCallInternal(
                     postPackage = prePackage,
                     postNodes = postNodes,
                     isStepOpenApp = false,
-                    descriptionContext = resolvedGoal.orEmpty()
+                    descriptionContext = resolvedGoal.orEmpty(),
+                    appKnowledge = appKnowledge
                 )
             }
 
@@ -1855,7 +2021,8 @@ private suspend fun executeFunctionCallInternal(
                 postPackage = postPackage,
                 postNodes = postNodes,
                 isStepOpenApp = false,
-                descriptionContext = "Tapped number $number"
+                descriptionContext = "Tapped number $number",
+                appKnowledge = appKnowledge
             )
         }
 
@@ -1875,7 +2042,8 @@ private suspend fun executeFunctionCallInternal(
                 postPackage = postPackage,
                 postNodes = postNodes,
                 isStepOpenApp = false,
-                descriptionContext = "Tap numbers"
+                descriptionContext = "Tap numbers",
+                appKnowledge = appKnowledge
             )
         }
 
@@ -1891,7 +2059,8 @@ private suspend fun executeFunctionCallInternal(
                 postPackage = postPackage,
                 postNodes = postNodes,
                 isStepOpenApp = false,
-                descriptionContext = "Tap numbers hidden"
+                descriptionContext = "Tap numbers hidden",
+                appKnowledge = appKnowledge
             )
         }
 
@@ -1915,14 +2084,44 @@ private suspend fun executeFunctionCallInternal(
                     postPackage = prePackage,
                     postNodes = postNodes,
                     isStepOpenApp = false,
-                    descriptionContext = resolvedGoal.orEmpty()
+                    descriptionContext = resolvedGoal.orEmpty(),
+                    appKnowledge = appKnowledge
                 )
+            }
+
+            val fallbackX = when (val x = typedArgs["x"]) {
+                is Number -> x.toInt()
+                is String -> x.toIntOrNull()
+                else -> rawArgs["x"]?.toIntOrNull()
+            }
+            val fallbackY = when (val y = typedArgs["y"]) {
+                is Number -> y.toInt()
+                is String -> y.toIntOrNull()
+                else -> rawArgs["y"]?.toIntOrNull()
+            }
+            val pressEnter = when (val pe = typedArgs["pressEnter"] ?: rawArgs["pressEnter"]) {
+                is Boolean -> pe
+                is String -> pe.toBoolean()
+                else -> true
             }
 
             val preNodes = automationPort.dumpScreen()
             val preSignature = TaskExecutor.computeNodeSignature(preNodes)
 
-            val actionSuccess = automationPort.typeText(text)
+            val typeResult = TaskExecutor.executeTypeFlow(
+                automation = automationPort,
+                text = text,
+                targetQuery = rawArgs["target"] ?: typedArgs["target"]?.toString(),
+                fallbackX = fallbackX,
+                fallbackY = fallbackY,
+                pressEnter = pressEnter,
+                visionLocator = { query, nodes ->
+                    resolveVisionCoordinates(context, query, nodes, automationPort)
+                },
+                pollTimeoutMs = if (pollTimeoutMs == 0L) 0L else 2000L,
+                pollIntervalMs = pollIntervalMs
+            )
+
             if (settleDelayMs > 0L) {
                 delay(settleDelayMs)
             }
@@ -1936,24 +2135,24 @@ private suspend fun executeFunctionCallInternal(
             val effectiveTarget = resolvedTarget ?: if (prePackage.isNotEmpty() && !TaskExecutor.isLauncherPackage(prePackage) && prePackage != "io.github.ryoaonetsuki.mira") prePackage else null
             val wrongPackage = isWrongPackageChange(step.action, prePackage, postPackage, effectiveTarget, resolvedGoal)
 
-            val effectVerified = !wrongPackage && actionSuccess && TaskExecutor.verifyEffect(
-                step = step,
-                prePackage = prePackage,
-                preSignature = preSignature,
-                postPackage = postPackage,
-                postSignature = postSignature,
-                goal = resolvedGoal,
-                targetApp = effectiveTarget
+            val effectVerified = !wrongPackage && typeResult.success && (
+                postSignature != preSignature || typeResult.textTyped.isNotEmpty() || TaskExecutor.verifyEffect(
+                    step = step,
+                    prePackage = prePackage,
+                    preSignature = preSignature,
+                    postPackage = postPackage,
+                    postSignature = postSignature,
+                    goal = resolvedGoal,
+                    targetApp = effectiveTarget
+                )
             )
 
             val outcome = if (wrongPackage) {
                 "Action type_text changed package from '$prePackage' to '$postPackage' which does not match target '$effectiveTarget' (wrong-package change failure)"
             } else if (effectVerified) {
-                "Successfully typed '$text'"
-            } else if (!actionSuccess) {
-                "type_text '$text' failed (no focused editable field)"
+                typeResult.message
             } else {
-                "type_text '$text' dispatched but had no verified effect on screen"
+                typeResult.message
             }
 
             return buildActionResult(
@@ -1963,7 +2162,8 @@ private suspend fun executeFunctionCallInternal(
                 postPackage = postPackage,
                 postNodes = postNodes,
                 isStepOpenApp = false,
-                descriptionContext = "Typed $text"
+                descriptionContext = "Typed $text",
+                appKnowledge = appKnowledge
             )
         }
 
@@ -1998,9 +2198,10 @@ private suspend fun executeFunctionCallInternal(
                 targetApp = effectiveTarget
             )
 
+            val overallSuccess = !wrongPackage && actionSuccess && (effectVerified || postPackage == prePackage)
             val outcome = if (wrongPackage) {
                 "Action scroll $direction changed package from '$prePackage' to '$postPackage' which does not match target '$effectiveTarget' (wrong-package change failure)"
-            } else if (effectVerified) {
+            } else if (overallSuccess) {
                 "Successfully scrolled $direction"
             } else if (!actionSuccess) {
                 "scroll $direction failed (gesture rejected)"
@@ -2011,11 +2212,12 @@ private suspend fun executeFunctionCallInternal(
             return buildActionResult(
                 automationPort = automationPort,
                 outcome = outcome,
-                success = effectVerified,
+                success = overallSuccess,
                 postPackage = postPackage,
                 postNodes = postNodes,
                 isStepOpenApp = false,
-                descriptionContext = "Scrolled $direction"
+                descriptionContext = "Scrolled $direction",
+                appKnowledge = appKnowledge
             )
         }
 
@@ -2065,7 +2267,8 @@ private suspend fun executeFunctionCallInternal(
                 postPackage = postPackage,
                 postNodes = postNodes,
                 isStepOpenApp = false,
-                descriptionContext = "Pressed Back"
+                descriptionContext = "Pressed Back",
+                appKnowledge = appKnowledge
             )
         }
 
@@ -2113,7 +2316,8 @@ private suspend fun executeFunctionCallInternal(
                 postPackage = postPackage,
                 postNodes = postNodes,
                 isStepOpenApp = false,
-                descriptionContext = "Pressed Home"
+                descriptionContext = "Pressed Home",
+                appKnowledge = appKnowledge
             )
         }
 
@@ -2137,7 +2341,8 @@ private suspend fun executeFunctionCallInternal(
                 postPackage = postPackage,
                 postNodes = postNodes,
                 isStepOpenApp = false,
-                descriptionContext = "Waited ${ms}ms"
+                descriptionContext = "Waited ${ms}ms",
+                appKnowledge = appKnowledge
             )
         }
 
@@ -2152,7 +2357,8 @@ private suspend fun executeFunctionCallInternal(
                 postPackage = postPackage,
                 postNodes = postNodes,
                 isStepOpenApp = false,
-                descriptionContext = "Current screen"
+                descriptionContext = "Current screen",
+                appKnowledge = appKnowledge
             )
         }
 
@@ -2189,7 +2395,8 @@ private suspend fun executeFunctionCallInternal(
                     postPackage = postPackage,
                     postNodes = postNodes,
                     isStepOpenApp = false,
-                    descriptionContext = if (skillArg.isNotEmpty()) skillArg else goalArg
+                    descriptionContext = if (skillArg.isNotEmpty()) skillArg else goalArg,
+                    appKnowledge = appKnowledge
                 )
             }
 
@@ -2208,7 +2415,8 @@ private suspend fun executeFunctionCallInternal(
                 postPackage = postPackage,
                 postNodes = postNodes,
                 isStepOpenApp = matchedSkill.steps.any { it.action == TaskStep.ACTION_OPEN_APP },
-                descriptionContext = matchedSkill.goal
+                descriptionContext = matchedSkill.goal,
+                appKnowledge = appKnowledge
             )
         }
 

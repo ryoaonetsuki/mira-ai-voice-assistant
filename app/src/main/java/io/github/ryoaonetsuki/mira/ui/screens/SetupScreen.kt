@@ -642,13 +642,15 @@ fun SetupScreen(
                     )
                 }
 
-                // Optional: Overlay
+                // Required 5: Overlay
                 item {
+                    val isOverlayGranted = Settings.canDrawOverlays(context)
                     PermissionRow(
-                        title = "Display Over Other Apps",
+                        title = "Display Over Other Apps (Required for Tap Numbers)",
                         subtitle = "Allows floating orb over apps and home screen, and tap-number badges",
                         iconRes = R.drawable.ic_fluent_options_24_regular,
-                        isGranted = Settings.canDrawOverlays(context),
+                        isGranted = isOverlayGranted,
+                        isRequired = true,
                         onClick = {
                             val intent = Intent(
                                 Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
@@ -697,7 +699,8 @@ fun SetupScreen(
                 areStandardIntegrationsGranted = checkStandardIntegrations()
             }
 
-            val allPermissionsGranted = hasMicPermission && isBatteryIgnoringOptimizations && hasFileAccess && isAccessibilityEnabled
+            val isOverlayGranted = Settings.canDrawOverlays(context)
+            val allPermissionsGranted = hasMicPermission && isBatteryIgnoringOptimizations && hasFileAccess && isAccessibilityEnabled && isOverlayGranted
             val isReady = allPermissionsGranted
             MiraButton(
                 text = "Finish & Start Talking",
@@ -713,6 +716,7 @@ fun SetupScreen(
                 if (!isBatteryIgnoringOptimizations) add("Battery")
                 if (!hasFileAccess) add("File Management")
                 if (!isAccessibilityEnabled) add("Accessibility Service")
+                if (!isOverlayGranted) add("Display Over Other Apps")
             }
             if (missingList.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(6.dp))

@@ -637,29 +637,14 @@ class TaskExecutor(
             var prePackage: String
             var preSignature: Int
             val carried = carriedNodes
-            val nextTarget = when (step.action) {
-                TaskStep.ACTION_CLICK_TEXT -> step.stringParam("text")
-                TaskStep.ACTION_TYPE_TEXT -> step.stringParam("target") ?: step.stringParam("text")
-                TaskStep.ACTION_OPEN_APP -> step.stringParam("app") ?: step.stringParam("package")
-                else -> null
-            }
-
             var useCarried = false
             if (carried != null && carriedPackage != null && carriedSignature != null) {
-                if (nextTarget.isNullOrBlank()) {
-                    useCarried = true
-                } else {
-                    val norm = VisionFirstPerception.normalizeTarget(nextTarget)
-                    val matches = carried.filter {
-                        it.text.contains(norm, ignoreCase = true) ||
-                            it.contentDescription.contains(norm, ignoreCase = true) ||
-                            (it.viewId.isNotBlank() && (it.viewId.equals(norm, ignoreCase = true) || it.viewId.endsWith(":id/$norm", ignoreCase = true)))
-                    }
-                    val labeledMatches = matches.filter { it.text.isNotBlank() || it.contentDescription.isNotBlank() }
-                    if (labeledMatches.size == 1) {
-                        useCarried = true
-                    }
-                }
+                // Turn F(e): always reuse the carried post-verification dump as
+                // the next step's pre-dump. Target resolution (including vision
+                // fallback when the target is absent from nodes) happens inside
+                // _performAction's findTarget call, so the carry is never stale
+                // in a way that prevents correct dispatch.
+                useCarried = true
             }
 
             if (useCarried && carried != null && carriedPackage != null && carriedSignature != null) {
@@ -674,10 +659,9 @@ class TaskExecutor(
                 carriedPackage = null
                 carriedSignature = null
                 enterPhase("observing", stepNumber, "reading screen (step $stepNumber)")
-                val perception = getOrCreateVisionPerception().perceive(goal = skill.goal, target = nextTarget)
-                preNodes = perception.nodes
-                prePackage = perception.packageName
-                preSignature = perception.screenSignature
+                preNodes = dumpScreenSafe()
+                prePackage = automation.getCurrentPackage().orEmpty()
+                preSignature = computeNodeSignature(preNodes)
             }
 
             // Turn G: no artificial action restrictions (owner order).
@@ -882,17 +866,56 @@ class TaskExecutor(
                     var fallbackX = step.intParam("fallbackX") ?: step.intParam("x")
                     var fallbackY = step.intParam("fallbackY") ?: step.intParam("y")
 
+                    // Build a ScreenPerception from the already-available nodes
+                    // (passed by the replay loop) instead of calling perceive()
+                    // which would do a redundant uncounted dumpScreen().
                     val perceptionHelper = getOrCreateVisionPerception()
-                    val perception = perceptionHelper.perceive(goal = "click $text", target = text)
-                    val resolution = perceptionHelper.findTarget(perception, text, "click $text")
+                    val pkg = automation.getCurrentPackage().orEmpty()
+                    val sig = VisionFirstPerception.computeScreenSignature(pkg, nodes)
+                    var perception = ScreenPerception(
+                        nodes = nodes,
+                        visionElements = null,
+                        visionFailureReason = null,
+                        screenSignature = sig,
+                        packageName = pkg,
+                        perceptionLatencyMs = 0L,
+                        mode = "nodes-only",
+                        screenshotBytes = null
+                    )
+                    var resolution = perceptionHelper.findTarget(perception, text, "click $text")
+
+                    // When the initial findTarget fell to NODES_FALLBACK with no
+                    // matching node (target absent from the carried/pre-dump nodes),
+                    // re-perceive with a fresh screen read so vision and node search
+                    // work on current state.
+                    val norm = VisionFirstPerception.normalizeTarget(text)
+                    if (resolution.source == TargetSource.NODES_FALLBACK) {
+                        val matchedInitial = resolution.matchedNode
+                        val nodeMatchesTargetInitial = matchedInitial != null && (
+                            matchedInitial.text.contains(norm, ignoreCase = true) ||
+                            matchedInitial.contentDescription.contains(norm, ignoreCase = true) ||
+                            (matchedInitial.viewId.isNotBlank() && (
+                                matchedInitial.viewId.equals(norm, ignoreCase = true) ||
+                                matchedInitial.viewId.endsWith(":id/$norm", ignoreCase = true)))
+                        )
+                        if (!nodeMatchesTargetInitial) {
+                            perception = perceptionHelper.perceive(goal = "click $text", target = text)
+                            resolution = perceptionHelper.findTarget(perception, text, "click $text")
+                        }
+                    }
+
+                    // Dispatch against the freshest nodes we have: after a
+                    // re-perceive, perception.nodes is fresher than the replay
+                    // loop's pre-dump; otherwise they are identical.
+                    val dispatchNodes = perception.nodes
 
                     var success = false
                     if (resolution.source == TargetSource.NODES_EXACT) {
-                        success = automation.clickText(text, perception.nodes, resolution.x, resolution.y)
+                        success = automation.clickText(text, dispatchNodes, resolution.x, resolution.y)
                         fallbackX = resolution.x
                         fallbackY = resolution.y
                     } else if (resolution.source == TargetSource.VISION) {
-                        var preTap = perceptionHelper.verifyPreTap(Pair(resolution.x, resolution.y), resolution.matchedVisionElement, perception.nodes)
+                        var preTap = perceptionHelper.verifyPreTap(Pair(resolution.x, resolution.y), resolution.matchedVisionElement, dispatchNodes)
                         var targetX = resolution.x
                         var targetY = resolution.y
 
@@ -915,22 +938,42 @@ class TaskExecutor(
                             fallbackY = targetY
                         }
                     } else { // NODES_FALLBACK
-                        if (resolution.x > 0 && resolution.y > 0) {
+                        // Only tap a NODES_FALLBACK node if it actually matches the
+                        // requested text (or content-description / viewId). Tapping an
+                        // unrelated best-guess node is a real bug — "tell it one thing,
+                        // it does another". Recorded fallbackX/Y coordinates are still
+                        // honoured (testC3_ClickTextFallbackToRecordedCoordinatesWhenTextGone).
+                        val matchedNode = resolution.matchedNode
+                        val nodeMatchesTarget = matchedNode != null && (
+                            matchedNode.text.contains(norm, ignoreCase = true) ||
+                            matchedNode.contentDescription.contains(norm, ignoreCase = true) ||
+                            (matchedNode.viewId.isNotBlank() && (
+                                matchedNode.viewId.equals(norm, ignoreCase = true) ||
+                                matchedNode.viewId.endsWith(":id/$norm", ignoreCase = true)))
+                        )
+                        if (nodeMatchesTarget && resolution.x > 0 && resolution.y > 0) {
                             success = automation.clickAt(resolution.x.toFloat(), resolution.y.toFloat())
                             fallbackX = resolution.x
                             fallbackY = resolution.y
                         } else {
-                            success = automation.clickText(text, nodes, fallbackX, fallbackY)
+                            // Fall back to clickText with recorded fallback coordinates
+                            success = automation.clickText(text, dispatchNodes, fallbackX, fallbackY)
                         }
                     }
 
                     if (!success) {
-                        lastActionError = if (fallbackX != null && fallbackY != null) {
+                        // Merge both failure reasons when present: resolution.failureReason
+                        // (from vision describe) and lastVisionFailureReason (from custom
+                        // locator), so the Live model hears exactly WHY vision failed.
+                        val mergedVisionReason = listOfNotNull(
+                            resolution.failureReason?.takeIf { it.isNotBlank() },
+                            lastVisionFailureReason?.takeIf { it.isNotBlank() && it != resolution.failureReason }
+                        ).joinToString("; ").takeIf { it.isNotBlank() }
+
+                        lastActionError = if (fallbackX != null && fallbackY != null && mergedVisionReason.isNullOrBlank()) {
                             "clickText '$text' not found and fallback coordinate tap ($fallbackX, $fallbackY) rejected/timed out"
-                        } else if (!resolution.failureReason.isNullOrBlank()) {
-                            "clickText '$text' not found on screen and vision fallback failed: ${resolution.failureReason}"
-                        } else if (!lastVisionFailureReason.isNullOrBlank()) {
-                            "clickText '$text' not found on screen and vision fallback failed: $lastVisionFailureReason"
+                        } else if (!mergedVisionReason.isNullOrBlank()) {
+                            "clickText '$text' not found on screen and vision fallback failed: $mergedVisionReason"
                         } else {
                             "clickText '$text' not found on screen and no fallback coordinates"
                         }

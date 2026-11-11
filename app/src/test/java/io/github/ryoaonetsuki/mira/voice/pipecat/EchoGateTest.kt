@@ -297,4 +297,24 @@ class EchoGateTest {
         // After the drain window expires, the gate opens again
         assertFalse(router.isBotTalking(3000L))
     }
+
+    @Test
+    fun testEchoFrameRouter_GateOpensAfterGenerationCompleteTurnEnd() {
+        val router = EchoFrameRouter(echoGuardEnabled = true)
+        // Bot starts talking during generation
+        router.onBotTalking(true)
+        router.onBotAudioLevel(0.30f, 1000L, chunkDurationMs = 100L)
+        assertTrue(router.isBotTalking(1100L))
+        assertFalse("While bot is talking, quiet user mic frame should be gated", router.shouldForward(micRms = 0.04f, nowMs = 1100L))
+
+        // When generationComplete occurs, onTurnComplete() is called
+        router.onTurnComplete()
+
+        // Inside drain window (1000 + 100 + 250 = 1350L), drain protection still active
+        assertTrue(router.isBotTalking(1200L))
+
+        // After drain window expires (e.g. at 2000L), gate opens and forward is allowed
+        assertFalse("After drain window expires, isBotTalking must be false", router.isBotTalking(2000L))
+        assertTrue("After generationComplete turn end and drain, user mic frame must be forwarded", router.shouldForward(micRms = 0.04f, nowMs = 2000L))
+    }
 }

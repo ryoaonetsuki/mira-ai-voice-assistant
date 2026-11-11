@@ -1914,10 +1914,15 @@ class TaskExecutorTest {
         )
         val result = executor.replaySkillDirect(skill)
         assertEquals(TaskStatus.FAILED, result.status)
-        assertNotNull(executor.lastActionError)
+        // The vision failure reason must reach the caller through the public result
+        // message (this is what the Live model speaks back to the user).
         assertTrue(
-            "lastActionError must contain vision failure reason",
-            executor.lastActionError!!.contains("search button")
+            "result message must contain vision failure reason",
+            result.message.contains("search button")
+        )
+        assertTrue(
+            "result message must name the failed vision locator",
+            result.message.contains("custom vision locator returned null")
         )
     }
 }

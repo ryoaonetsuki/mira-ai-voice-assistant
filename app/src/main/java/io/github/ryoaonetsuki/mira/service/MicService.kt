@@ -197,8 +197,12 @@ class MicService : Service() {
         io.github.ryoaonetsuki.mira.automation.MiraAutomationBridge.getInstance(applicationContext)
     }
 
-    internal var automationPortProvider: () -> AutomationPort = {
+    private val defaultAutomationPort by lazy {
         ScreenAutomationService(applicationContext)
+    }
+
+    internal var automationPortProvider: () -> AutomationPort = {
+        defaultAutomationPort
     }
     internal val automationPort: AutomationPort get() = automationPortProvider()
     internal var activeGeminiApiKey: String? = null
@@ -1429,17 +1433,37 @@ internal suspend fun getEffectiveGeminiApiKey(context: Context?): String? {
     }
 }
 
+internal data class VisionResolution(
+    val coordinates: Pair<Int, Int>?,
+    val failureReason: String? = null
+)
+
 internal suspend fun resolveVisionCoordinates(
     context: Context?,
     target: String,
     nodes: List<ScreenNode>,
     automationPort: AutomationPort
-): Pair<Int, Int>? {
+): VisionResolution {
+    val TAG = "MiraVisionLocator"
     val apiKey = (context as? MicService)?.activeGeminiApiKey
         ?: getEffectiveGeminiApiKey(context)
-        ?: return null
+    if (apiKey.isNullOrBlank()) {
+        Log.w(TAG, "Vision locator failed: Gemini API key is missing or blank")
+        return VisionResolution(null, "Gemini API key is missing in Settings")
+    }
 
-    val jpeg = automationPort.takeScreenshotJpeg(720) ?: return null
+    val jpeg = automationPort.takeScreenshotJpeg(720)
+    if (jpeg == null || jpeg.isEmpty()) {
+        Log.w(TAG, "Vision locator failed: screenshot capture returned null (API < 30, timeout, debounce, or secure window)")
+        return VisionResolution(null, "Screenshot capture failed (screen may be protected or service timed out)")
+    }
+
+    val dimensions = automationPort.getScreenDimensions()
+        ?: context?.resources?.displayMetrics?.let { Pair(it.widthPixels, it.heightPixels) }
+        ?: Pair(1080, 2400)
+    val screenWidth = dimensions.first
+    val screenHeight = dimensions.second
+
     val client = io.github.ryoaonetsuki.mira.network.GeminiRestClient()
     val nodeText = automationPort.formatNodes(nodes)
     return try {
@@ -1447,12 +1471,26 @@ internal suspend fun resolveVisionCoordinates(
             apiKey = apiKey,
             imageBytes = jpeg,
             targetDescription = target,
-            nodeDump = nodeText
+            nodeDump = nodeText,
+            screenWidth = screenWidth,
+            screenHeight = screenHeight
         )
-        result.getOrNull()
+        if (result.isSuccess) {
+            val coords = result.getOrNull()
+            if (coords != null) {
+                Log.i(TAG, "Vision locator found '$target' at ($screenWidth x $screenHeight): $coords")
+                VisionResolution(coords, null)
+            } else {
+                VisionResolution(null, "Vision could not find coordinates for '$target'")
+            }
+        } else {
+            val err = result.exceptionOrNull()?.message ?: "Vision call failed"
+            Log.w(TAG, "Vision locator failed for '$target': $err")
+            VisionResolution(null, err)
+        }
     } catch (e: Exception) {
-        Log.w("MicService", "Vision locator failed for '$target': ${e.message}")
-        null
+        Log.w(TAG, "Vision locator call threw for '$target': ${e.message}", e)
+        VisionResolution(null, e.message ?: "Vision call threw exception")
     }
 }
 
@@ -1686,7 +1724,10 @@ private suspend fun executeFunctionCallInternal(
             val executor = TaskExecutor(
                 automation = automationPort,
                 skills = skills,
-                stepDelayMs = if (pollTimeoutMs == 0L) 0L else 600L
+                stepDelayMs = if (pollTimeoutMs == 0L) 0L else 600L,
+                apiKeyProvider = { (context as? MicService)?.activeGeminiApiKey ?: getEffectiveGeminiApiKey(context).orEmpty() },
+                visionLocator = { target, currentNodes -> resolveVisionCoordinates(context, target, currentNodes, automationPort).coordinates },
+                appKnowledge = appKnowledge
             )
             val replayResult = executor.replaySkillDirect(matchedSkill)
             val postPackage = automationPort.getCurrentPackage().orEmpty()
@@ -1813,13 +1854,17 @@ private suspend fun executeFunctionCallInternal(
 
             // Task 1: Vision fallback when node search fails (e.g. icon-only Facebook magnifier)
             var visionUsed = false
+            var visionFailureReason: String? = null
             if (!actionSuccess) {
-                val visionCoords = resolveVisionCoordinates(context, text, preNodes, automationPort)
+                val visionRes = resolveVisionCoordinates(context, text, preNodes, automationPort)
+                val visionCoords = visionRes.coordinates
                 if (visionCoords != null) {
                     fallbackX = visionCoords.first
                     fallbackY = visionCoords.second
                     actionSuccess = automationPort.clickAt(fallbackX.toFloat(), fallbackY.toFloat())
                     visionUsed = true
+                } else {
+                    visionFailureReason = visionRes.failureReason
                 }
             }
 
@@ -1838,7 +1883,6 @@ private suspend fun executeFunctionCallInternal(
                 }
                 if (fallbackY != null) {
                     put("fallbackY", fallbackY)
-                    put("y", fallbackY)
                 }
             }
             val step = TaskStep(action = TaskStep.ACTION_CLICK_TEXT, params = stepParams)
@@ -1864,6 +1908,8 @@ private suspend fun executeFunctionCallInternal(
             } else if (!actionSuccess) {
                 if (fallbackX != null && fallbackY != null) {
                     "click_text '$text' not found and coordinate tap ($fallbackX, $fallbackY) failed"
+                } else if (!visionFailureReason.isNullOrBlank()) {
+                    "click_text '$text' not found on screen and vision fallback failed: $visionFailureReason"
                 } else {
                     "click_text '$text' not found on screen and vision fallback could not locate coordinates"
                 }
@@ -2027,24 +2073,71 @@ private suspend fun executeFunctionCallInternal(
         }
 
         "show_numbers" -> {
-            val numbered = automationPort.showTapNumbers()
-            if (numbered.isEmpty()) {
-                return Value.Object("error" to Value.Str("Could not show tap numbers: no tappable elements found, or the \"Display over other apps\" permission is not granted - enable it in setup."))
+            val detailed = automationPort.showTapNumbersDetailed()
+            when (detailed) {
+                is TapNumbersResult.PermissionMissing -> {
+                    val msg = "Please enable 'Display over other apps' in Mira setup or Android Settings to show number badges."
+                    val postPackage = automationPort.getCurrentPackage().orEmpty()
+                    val postNodes = automationPort.dumpScreen()
+                    val resObj = buildActionResult(
+                        automationPort = automationPort,
+                        outcome = msg,
+                        success = false,
+                        postPackage = postPackage,
+                        postNodes = postNodes,
+                        isStepOpenApp = false,
+                        descriptionContext = "Tap numbers permission missing",
+                        appKnowledge = appKnowledge
+                    )
+                    return Value.Object(resObj.value + ("error" to Value.Str(msg)))
+                }
+                is TapNumbersResult.NoTappableElements -> {
+                    val msg = "Could not show tap numbers: no tappable elements found on current screen."
+                    val postPackage = automationPort.getCurrentPackage().orEmpty()
+                    val postNodes = automationPort.dumpScreen()
+                    val resObj = buildActionResult(
+                        automationPort = automationPort,
+                        outcome = msg,
+                        success = false,
+                        postPackage = postPackage,
+                        postNodes = postNodes,
+                        isStepOpenApp = false,
+                        descriptionContext = "No tappable elements",
+                        appKnowledge = appKnowledge
+                    )
+                    return Value.Object(resObj.value + ("error" to Value.Str(msg)))
+                }
+                is TapNumbersResult.Error -> {
+                    val msg = "Could not show tap numbers: ${detailed.message}"
+                    val postPackage = automationPort.getCurrentPackage().orEmpty()
+                    val postNodes = automationPort.dumpScreen()
+                    val resObj = buildActionResult(
+                        automationPort = automationPort,
+                        outcome = msg,
+                        success = false,
+                        postPackage = postPackage,
+                        postNodes = postNodes,
+                        isStepOpenApp = false,
+                        descriptionContext = "Tap numbers error",
+                        appKnowledge = appKnowledge
+                    )
+                    return Value.Object(resObj.value + ("error" to Value.Str(msg)))
+                }
+                is TapNumbersResult.Success -> {
+                    val postPackage = automationPort.getCurrentPackage().orEmpty()
+                    val postNodes = automationPort.dumpScreen()
+                    return buildActionResult(
+                        automationPort = automationPort,
+                        outcome = formatNumberedList(detailed.numbered),
+                        success = true,
+                        postPackage = postPackage,
+                        postNodes = postNodes,
+                        isStepOpenApp = false,
+                        descriptionContext = "Tap numbers",
+                        appKnowledge = appKnowledge
+                    )
+                }
             }
-
-            val postPackage = automationPort.getCurrentPackage().orEmpty()
-            val postNodes = automationPort.dumpScreen()
-
-            return buildActionResult(
-                automationPort = automationPort,
-                outcome = formatNumberedList(numbered),
-                success = true,
-                postPackage = postPackage,
-                postNodes = postNodes,
-                isStepOpenApp = false,
-                descriptionContext = "Tap numbers",
-                appKnowledge = appKnowledge
-            )
         }
 
         "hide_numbers" -> {
@@ -2116,7 +2209,7 @@ private suspend fun executeFunctionCallInternal(
                 fallbackY = fallbackY,
                 pressEnter = pressEnter,
                 visionLocator = { query, nodes ->
-                    resolveVisionCoordinates(context, query, nodes, automationPort)
+                    resolveVisionCoordinates(context, query, nodes, automationPort).coordinates
                 },
                 pollTimeoutMs = if (pollTimeoutMs == 0L) 0L else 2000L,
                 pollIntervalMs = pollIntervalMs
@@ -2403,7 +2496,10 @@ private suspend fun executeFunctionCallInternal(
             val executor = TaskExecutor(
                 automation = automationPort,
                 skills = skills,
-                stepDelayMs = if (pollTimeoutMs == 0L) 0L else 600L
+                stepDelayMs = if (pollTimeoutMs == 0L) 0L else 600L,
+                apiKeyProvider = { (context as? MicService)?.activeGeminiApiKey ?: getEffectiveGeminiApiKey(context).orEmpty() },
+                visionLocator = { target, currentNodes -> resolveVisionCoordinates(context, target, currentNodes, automationPort).coordinates },
+                appKnowledge = appKnowledge
             )
             val replayResult = executor.replaySkillDirect(matchedSkill)
             val postPackage = automationPort.getCurrentPackage().orEmpty()

@@ -1873,6 +1873,9 @@ class TaskExecutorTest {
         assertTrue(TaskExecutor.isWebGoal("https://google.com"))
         assertTrue(TaskExecutor.isWebGoal("search google for weather"))
         assertTrue(TaskExecutor.isWebGoal("search the web for kotlin documentation"))
+        // Plain "search ... on google" with no app target is a web goal too
+        // (regression: the button-word guard must not swallow plain searches).
+        assertTrue(TaskExecutor.isWebGoal("search weather on google"))
 
         // In-app actions containing search words or button words must NOT be web goals
         assertFalse(TaskExecutor.isWebGoal("click search button"))

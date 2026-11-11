@@ -31,6 +31,7 @@ class TapNumberOverlay(
     private val windowManager: WindowManager =
         context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private val container: FrameLayout = FrameLayout(context)
+    @Volatile
     private var isShowing: Boolean = false
     private val handler: Handler = Handler(Looper.getMainLooper())
 
@@ -96,10 +97,10 @@ class TapNumberOverlay(
 
         if (Looper.myLooper() != Looper.getMainLooper()) {
             val latch = CountDownLatch(1)
-            var result: ShowOverlayResult = ShowOverlayResult.WindowManagerFailed(null)
+            val resultHolder = java.util.concurrent.atomic.AtomicReference<ShowOverlayResult>(ShowOverlayResult.WindowManagerFailed(null))
             handler.post {
                 try {
-                    result = showInternal(numbered)
+                    resultHolder.set(showInternal(numbered))
                 } finally {
                     latch.countDown()
                 }
@@ -109,7 +110,7 @@ class TapNumberOverlay(
             } catch (_: InterruptedException) {
                 Log.w(TAG, "showDetailed interrupted while awaiting main thread dispatch")
             }
-            return result
+            return resultHolder.get()
         } else {
             return showInternal(numbered)
         }

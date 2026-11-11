@@ -271,6 +271,10 @@ class TaskExecutorTest {
         }
 
         override suspend fun takeScreenshotJpeg(maxWidthPx: Int): ByteArray? = screenshotBytes
+
+        var targetPackageResolver: ((query: String, pkg: String) -> Boolean)? = null
+        override fun isTargetPackage(query: String, pkg: String): Boolean =
+            targetPackageResolver?.invoke(query, pkg) ?: super.isTargetPackage(query, pkg)
     }
 
     // --- Fake in-memory SkillStore for pure JVM testing ---
@@ -1804,5 +1808,116 @@ class TaskExecutorTest {
         assertTrue("Summary must include search flow", summary.contains("Cross-App Search Flow", ignoreCase = true))
         assertTrue("Summary must include Facebook notes", summary.contains("Facebook Notes", ignoreCase = true))
         assertTrue("Summary must include YouTube notes", summary.contains("YouTube Notes", ignoreCase = true))
+    }
+
+    // =========================================================================
+    // 5. Round 3 Tests: matchesTarget, isTargetPackage, isWebGoal, Vision Reason
+    // =========================================================================
+
+    @Test
+    fun testMatchesTarget_PlayStoreAndEverydayApps() {
+        assertTrue(TaskExecutor.matchesTarget("Play Store", "com.android.vending"))
+        assertTrue(TaskExecutor.matchesTarget("play store", "com.android.vending"))
+        assertTrue(TaskExecutor.matchesTarget("প্লে স্টোর", "com.android.vending"))
+        assertTrue(TaskExecutor.matchesTarget("google play store", "com.android.vending"))
+
+        assertTrue(TaskExecutor.matchesTarget("Photos", "com.google.android.apps.photos"))
+        assertTrue(TaskExecutor.matchesTarget("Drive", "com.google.android.apps.docs"))
+        assertTrue(TaskExecutor.matchesTarget("Files", "com.google.android.apps.nbu.files"))
+        assertTrue(TaskExecutor.matchesTarget("Clock", "com.google.android.deskclock"))
+        assertTrue(TaskExecutor.matchesTarget("Calculator", "com.google.android.calculator"))
+        assertTrue(TaskExecutor.matchesTarget("Calendar", "com.google.android.calendar"))
+        assertTrue(TaskExecutor.matchesTarget("Contacts", "com.google.android.contacts"))
+        assertTrue(TaskExecutor.matchesTarget("Keep", "com.google.android.keep"))
+        assertTrue(TaskExecutor.matchesTarget("Play Games", "com.google.android.play.games"))
+    }
+
+    @Test
+    fun testOpenAppTargetReached_and_VerifyEffect_withIsTargetPackageFallback() {
+        val query = "Custom Enterprise App"
+        val pkg = "com.unlisted.enterprise.suite"
+
+        // Without port lookup or known aliases, matchesTarget returns false
+        assertFalse(TaskExecutor.matchesTarget(query, pkg))
+
+        val step = TaskStep(action = TaskStep.ACTION_OPEN_APP, params = mapOf("app" to query))
+
+        // Without port, target is not reached
+        val reachedWithoutPort = TaskExecutor.openAppTargetReached(step, "io.github.ryoaonetsuki.mira", pkg, port = null)
+        assertFalse(reachedWithoutPort)
+
+        // With port resolving the real package via PackageManager label fallback:
+        val port = FakeAutomationPort(currentPkg = pkg)
+        port.targetPackageResolver = { targetQuery, targetPkg ->
+            targetQuery == query && targetPkg == pkg
+        }
+
+        val reachedWithPort = TaskExecutor.openAppTargetReached(step, "io.github.ryoaonetsuki.mira", pkg, port = port)
+        assertTrue("Must recognize app opened via port.isTargetPackage label fallback", reachedWithPort)
+
+        val verified = TaskExecutor.verifyEffect(
+            step = step,
+            prePackage = "io.github.ryoaonetsuki.mira",
+            preSignature = 100,
+            postPackage = pkg,
+            postSignature = 200,
+            goal = "open $query",
+            targetApp = query,
+            port = port
+        )
+        assertTrue("verifyEffect must succeed when port.isTargetPackage verifies the package", verified)
+    }
+
+    @Test
+    fun testIsWebGoal_differentiatesWebSearchFromInAppSearchAndButtons() {
+        assertTrue(TaskExecutor.isWebGoal("https://google.com"))
+        assertTrue(TaskExecutor.isWebGoal("search google for weather"))
+        assertTrue(TaskExecutor.isWebGoal("search the web for kotlin documentation"))
+
+        // In-app actions containing search words or button words must NOT be web goals
+        assertFalse(TaskExecutor.isWebGoal("click search button"))
+        assertFalse(TaskExecutor.isWebGoal("search বাটনে click করো"))
+        assertFalse(TaskExecutor.isWebGoal("tap the search button please"))
+        assertFalse(TaskExecutor.isWebGoal("search for apps in play store"))
+    }
+
+    @Test
+    fun testVisionFailureReason_propagation() = runBlocking {
+        val fakePort = FakeAutomationPort(
+            currentPkg = "com.android.vending",
+            actionSuccess = false,
+            simulateEffect = false
+        )
+        val executor = TaskExecutor(
+            automation = fakePort,
+            skills = SkillMemoryService(InMemorySkillStore()),
+            stepDelayMs = 0L,
+            visionLocator = { query, _ ->
+                // Simulate locator failing to find coordinates
+                null
+            }
+        )
+
+        val coords = executor.resolveVisionCoordinates("search button", fakePort.screenNodes)
+        assertNull(coords)
+        assertNotNull(executor.lastVisionFailureReason)
+        assertTrue(
+            "lastVisionFailureReason must mention query",
+            executor.lastVisionFailureReason!!.contains("search button")
+        )
+
+        // Verify click_text failure propagates the vision failure reason into lastActionError.
+        // (_performAction is private, so exercise it through the public replay path.)
+        val skill = Skill(
+            goal = "tap search button",
+            steps = listOf(TaskStep(action = TaskStep.ACTION_CLICK_TEXT, params = mapOf("text" to "search button")))
+        )
+        val result = executor.replaySkillDirect(skill)
+        assertEquals(TaskStatus.FAILED, result.status)
+        assertNotNull(executor.lastActionError)
+        assertTrue(
+            "lastActionError must contain vision failure reason",
+            executor.lastActionError!!.contains("search button")
+        )
     }
 }

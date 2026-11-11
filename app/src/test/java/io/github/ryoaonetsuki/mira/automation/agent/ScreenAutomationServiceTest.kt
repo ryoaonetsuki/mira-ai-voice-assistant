@@ -2,6 +2,7 @@ package io.github.ryoaonetsuki.mira.automation.agent
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -528,5 +529,21 @@ class ScreenAutomationServiceTest {
         assertTrue("Must stop traversal well before all 501 nodes are visited", collected.size < 500)
         assertTrue("Collected nodes must be > 0", collected.size > 0)
         assertTrue("Simulated time must have reached/exceeded 50ms budget", simulatedTime >= 50L)
+    }
+
+    // =========================================================================
+    // 6. Issue 1: Launcher Package openApp Tests
+    // =========================================================================
+
+    @Test
+    fun openApp_launcherPackages_returnsNonNullWithoutStartActivity() {
+        val service = ScreenAutomationService(context = null)
+        val nexusResult = service.openApp("com.google.android.apps.nexuslauncher")
+        assertNotNull("openApp with nexuslauncher must return non-null", nexusResult)
+        assertEquals("com.google.android.apps.nexuslauncher", nexusResult)
+
+        val launcher3Result = service.openApp("com.android.launcher3")
+        assertNotNull("openApp with launcher3 must return non-null", launcher3Result)
+        assertEquals("com.android.launcher3", launcher3Result)
     }
 }

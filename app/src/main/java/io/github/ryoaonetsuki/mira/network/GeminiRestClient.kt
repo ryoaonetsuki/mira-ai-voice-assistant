@@ -1470,6 +1470,51 @@ class GeminiRestClient(
         generateChatResponse(normalizeApiKey(apiKey), listOf(mockMsg), sysPrompt, useServerProxy = useServerProxy, enableGrounding = false).map { it.text }
     }
 
+    /**
+     * Locates a UI element on screen using Gemini Vision.
+     * Takes screenshot JPEG bytes and target description, returning screen coordinates (x, y).
+     */
+    suspend fun locateElementWithVision(
+        apiKey: String,
+        imageBytes: ByteArray,
+        targetDescription: String,
+        nodeDump: String = "",
+        screenWidth: Int = 1080,
+        screenHeight: Int = 2400,
+        useServerProxy: Boolean = false,
+        model: String = "gemini-3.8-flash"
+    ): Result<Pair<Int, Int>> = withContext(Dispatchers.IO) {
+        val prompt = """
+            You are a mobile screen visual element locator.
+            Find the center (x, y) coordinates of the UI element matching: "$targetDescription".
+            If the target is an icon (e.g. search magnifier icon, menu hamburger, close button), locate that icon.
+            Visible accessibility node text (may be incomplete or missing icon-only buttons):
+            ${nodeDump.take(1500)}
+
+            Look at the attached screenshot.
+            Respond ONLY with a JSON object in this format:
+            {"x": <integer 0-1000>, "y": <integer 0-1000>}
+            where (0,0) is the top-left and (1000,1000) is the bottom-right of the screen.
+            Do not output markdown fences or any other text.
+        """.trimIndent()
+
+        val mockMsg = ChatMessageEntity(conversationId = "vision_locator", role = "user", content = prompt)
+        val visionResult = generateVision(
+            apiKey = apiKey,
+            history = listOf(mockMsg),
+            imageBytes = imageBytes,
+            mimeType = "image/jpeg",
+            model = model,
+            useServerProxy = useServerProxy,
+            enableThinking = false
+        )
+
+        visionResult.mapCatching { groundedResult ->
+            parseVisionCoordinates(groundedResult.text, screenWidth, screenHeight)
+                ?: throw IllegalStateException("Failed to parse coordinates from vision output: ${groundedResult.text}")
+        }
+    }
+
     companion object {
         private const val TAG = "MiraGeminiRestClient"
         private const val TAG_CHAT = "MiraChat"
@@ -1484,5 +1529,48 @@ class GeminiRestClient(
          * interrupt a blocking body read.
          */
         const val THINK_CALL_TIMEOUT_MS: Long = 40_000L
+
+        fun parseVisionCoordinates(
+            response: String,
+            screenWidth: Int = 1080,
+            screenHeight: Int = 2400
+        ): Pair<Int, Int>? {
+            val clean = response.replace("```json", "").replace("```", "").trim()
+            try {
+                val json = JSONObject(clean)
+                if (json.has("x") && json.has("y")) {
+                    val rawX = json.optDouble("x", -1.0)
+                    val rawY = json.optDouble("y", -1.0)
+                    if (rawX >= 0.0 && rawY >= 0.0) {
+                        val finalX = if (rawX <= 1000.0 && screenWidth > 0) ((rawX / 1000.0) * screenWidth).toInt() else rawX.toInt()
+                        val finalY = if (rawY <= 1000.0 && screenHeight > 0) ((rawY / 1000.0) * screenHeight).toInt() else rawY.toInt()
+                        return Pair(finalX, finalY)
+                    }
+                }
+                if (json.has("point")) {
+                    val arr = json.optJSONArray("point")
+                    if (arr != null && arr.length() >= 2) {
+                        val rawY = arr.optDouble(0, -1.0)
+                        val rawX = arr.optDouble(1, -1.0)
+                        if (rawX >= 0.0 && rawY >= 0.0) {
+                            val finalX = if (rawX <= 1000.0 && screenWidth > 0) ((rawX / 1000.0) * screenWidth).toInt() else rawX.toInt()
+                            val finalY = if (rawY <= 1000.0 && screenHeight > 0) ((rawY / 1000.0) * screenHeight).toInt() else rawY.toInt()
+                            return Pair(finalX, finalY)
+                        }
+                    }
+                }
+            } catch (_: Throwable) {}
+
+            val xMatch = Regex(""""x"\s*:\s*(\d+)""").find(clean)
+            val yMatch = Regex(""""y"\s*:\s*(\d+)""").find(clean)
+            if (xMatch != null && yMatch != null) {
+                val rx = xMatch.groupValues[1].toDoubleOrNull() ?: return null
+                val ry = yMatch.groupValues[1].toDoubleOrNull() ?: return null
+                val finalX = if (rx <= 1000.0 && screenWidth > 0) ((rx / 1000.0) * screenWidth).toInt() else rx.toInt()
+                val finalY = if (ry <= 1000.0 && screenHeight > 0) ((ry / 1000.0) * screenHeight).toInt() else ry.toInt()
+                return Pair(finalX, finalY)
+            }
+            return null
+        }
     }
 }

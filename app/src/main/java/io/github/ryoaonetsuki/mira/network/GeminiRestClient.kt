@@ -1554,22 +1554,63 @@ class GeminiRestClient(
             val clean = response.replace("```json", "").replace("```", "").trim()
             var parsed: Pair<Int, Int>? = null
             try {
-                val json = JSONObject(clean)
-                if (json.has("x") && json.has("y")) {
-                    val rawX = json.optDouble("x", -1.0)
-                    val rawY = json.optDouble("y", -1.0)
-                    if (rawX >= 0.0 && rawY >= 0.0) {
-                        val finalX = if (rawX <= 1000.0 && screenWidth > 0) ((rawX / 1000.0) * screenWidth).toInt() else rawX.toInt()
-                        val finalY = if (rawY <= 1000.0 && screenHeight > 0) ((rawY / 1000.0) * screenHeight).toInt() else rawY.toInt()
-                        parsed = Pair(finalX, finalY)
+                if (clean.startsWith("{")) {
+                    val json = JSONObject(clean)
+                    if (json.has("x") && json.has("y")) {
+                        val rawX = json.optDouble("x", -1.0)
+                        val rawY = json.optDouble("y", -1.0)
+                        if (rawX >= 0.0 && rawY >= 0.0) {
+                            val finalX = if (rawX <= 1000.0 && screenWidth > 0) ((rawX / 1000.0) * screenWidth).toInt() else rawX.toInt()
+                            val finalY = if (rawY <= 1000.0 && screenHeight > 0) ((rawY / 1000.0) * screenHeight).toInt() else rawY.toInt()
+                            parsed = Pair(finalX, finalY)
+                        }
                     }
-                }
-                if (parsed == null && json.has("point")) {
-                    val arr = json.optJSONArray("point")
-                    if (arr != null && arr.length() >= 2) {
+                    if (parsed == null && json.has("point")) {
+                        val arr = json.optJSONArray("point")
+                        if (arr != null && arr.length() >= 2) {
+                            val rawY = arr.optDouble(0, -1.0)
+                            val rawX = arr.optDouble(1, -1.0)
+                            if (rawX >= 0.0 && rawY >= 0.0) {
+                                val finalX = if (rawX <= 1000.0 && screenWidth > 0) ((rawX / 1000.0) * screenWidth).toInt() else rawX.toInt()
+                                val finalY = if (rawY <= 1000.0 && screenHeight > 0) ((rawY / 1000.0) * screenHeight).toInt() else rawY.toInt()
+                                parsed = Pair(finalX, finalY)
+                            }
+                        }
+                    }
+                    if (parsed == null && json.has("box_2d")) {
+                        val arr = json.optJSONArray("box_2d")
+                        if (arr != null && arr.length() >= 4) {
+                            val ymin = arr.optDouble(0, -1.0)
+                            val xmin = arr.optDouble(1, -1.0)
+                            val ymax = arr.optDouble(2, -1.0)
+                            val xmax = arr.optDouble(3, -1.0)
+                            if (ymin >= 0.0 && xmin >= 0.0 && ymax >= ymin && xmax >= xmin) {
+                                val rawX = (xmin + xmax) / 2.0
+                                val rawY = (ymin + ymax) / 2.0
+                                val finalX = if (rawX <= 1000.0 && screenWidth > 0) ((rawX / 1000.0) * screenWidth).toInt() else rawX.toInt()
+                                val finalY = if (rawY <= 1000.0 && screenHeight > 0) ((rawY / 1000.0) * screenHeight).toInt() else rawY.toInt()
+                                parsed = Pair(finalX, finalY)
+                            }
+                        }
+                    }
+                } else if (clean.startsWith("[")) {
+                    val arr = JSONArray(clean)
+                    if (arr.length() == 2) {
                         val rawY = arr.optDouble(0, -1.0)
                         val rawX = arr.optDouble(1, -1.0)
                         if (rawX >= 0.0 && rawY >= 0.0) {
+                            val finalX = if (rawX <= 1000.0 && screenWidth > 0) ((rawX / 1000.0) * screenWidth).toInt() else rawX.toInt()
+                            val finalY = if (rawY <= 1000.0 && screenHeight > 0) ((rawY / 1000.0) * screenHeight).toInt() else rawY.toInt()
+                            parsed = Pair(finalX, finalY)
+                        }
+                    } else if (arr.length() >= 4) {
+                        val ymin = arr.optDouble(0, -1.0)
+                        val xmin = arr.optDouble(1, -1.0)
+                        val ymax = arr.optDouble(2, -1.0)
+                        val xmax = arr.optDouble(3, -1.0)
+                        if (ymin >= 0.0 && xmin >= 0.0 && ymax >= ymin && xmax >= xmin) {
+                            val rawX = (xmin + xmax) / 2.0
+                            val rawY = (ymin + ymax) / 2.0
                             val finalX = if (rawX <= 1000.0 && screenWidth > 0) ((rawX / 1000.0) * screenWidth).toInt() else rawX.toInt()
                             val finalY = if (rawY <= 1000.0 && screenHeight > 0) ((rawY / 1000.0) * screenHeight).toInt() else rawY.toInt()
                             parsed = Pair(finalX, finalY)
@@ -1579,8 +1620,8 @@ class GeminiRestClient(
             } catch (_: Throwable) {}
 
             if (parsed == null) {
-                val xMatch = Regex(""""x"\s*:\s*(\d+)""").find(clean)
-                val yMatch = Regex(""""y"\s*:\s*(\d+)""").find(clean)
+                val xMatch = Regex(""""x"\s*:\s*([\d.]+)""").find(clean)
+                val yMatch = Regex(""""y"\s*:\s*([\d.]+)""").find(clean)
                 if (xMatch != null && yMatch != null) {
                     val rx = xMatch.groupValues[1].toDoubleOrNull()
                     val ry = yMatch.groupValues[1].toDoubleOrNull()

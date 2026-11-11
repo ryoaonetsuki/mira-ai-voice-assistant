@@ -4,6 +4,7 @@ package io.github.ryoaonetsuki.mira.automation.agent
 
 import android.util.Log
 import io.github.ryoaonetsuki.mira.automation.MiraAutomationBridge
+import io.github.ryoaonetsuki.mira.network.GeminiRestClient
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async

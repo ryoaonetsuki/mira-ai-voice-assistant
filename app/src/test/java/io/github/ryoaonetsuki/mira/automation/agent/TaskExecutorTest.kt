@@ -1770,13 +1770,7 @@ class TaskExecutorTest {
 
     @Test
     fun testAppKnowledge_FacebookAndYoutubeContainSearchFlowAndScrollNotes() {
-        // Load knowledge via pure-JVM file reader pointing to project assets
-        val knowledge = AppKnowledge { path ->
-            val file = java.io.File(path).let {
-                if (it.exists()) it else java.io.File("app/src/main/assets", path)
-            }
-            if (file.exists()) file.readText() else null
-        }
+        val knowledge = AppKnowledge()
 
         // 1. Facebook note
         val fbNote = knowledge.noteForTarget("com.facebook.katana")

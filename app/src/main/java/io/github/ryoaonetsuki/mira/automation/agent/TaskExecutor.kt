@@ -1179,10 +1179,15 @@ class TaskExecutor(
                 lower.contains("ট্যাপ") || lower.contains("ক্লিক")
             if (hasButtonOrTap) return false
 
+            // Plain web-search phrasing with no app target ("search weather on
+            // google", "গানটা খুঁজো") is a web goal. The button/tap check above
+            // runs first so "search বাটনে click করো" stays an in-app goal.
             if (lower.contains("google search") || lower.contains("search google") ||
                 lower.contains("search the web") || lower.contains("search online") ||
+                lower.contains("search") || lower.contains("google") ||
                 lower.contains("browse") || lower.contains("website") || lower.contains("web") ||
-                lower.contains("ব্রাউজ") || lower.contains("সার্চ ইঞ্জিন") || lower.contains("ওয়েবসাইট")
+                lower.contains("খুঁজো") || lower.contains("সার্চ") || lower.contains("ব্রাউজ") ||
+                lower.contains("সার্চ ইঞ্জিন") || lower.contains("ওয়েবসাইট")
             ) return true
 
             return false

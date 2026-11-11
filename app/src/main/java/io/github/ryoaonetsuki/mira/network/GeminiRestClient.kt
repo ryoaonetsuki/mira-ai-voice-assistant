@@ -1484,6 +1484,15 @@ class GeminiRestClient(
         useServerProxy: Boolean = false,
         model: String = "gemini-3.8-flash"
     ): Result<Pair<Int, Int>> = withContext(Dispatchers.IO) {
+        if (apiKey.isBlank()) {
+            Log.w(TAG_VISION, "Vision locator failed: Gemini API key is missing or blank")
+            return@withContext Result.failure(IllegalStateException("Gemini API key is missing or blank"))
+        }
+        if (imageBytes.isEmpty()) {
+            Log.w(TAG_VISION, "Vision locator failed: screenshot JPEG is empty")
+            return@withContext Result.failure(IllegalStateException("Screenshot JPEG is empty"))
+        }
+
         val prompt = """
             You are a mobile screen visual element locator.
             Find the center (x, y) coordinates of the UI element matching: "$targetDescription".
@@ -1509,15 +1518,22 @@ class GeminiRestClient(
             enableThinking = false
         )
 
+        if (visionResult.isFailure) {
+            val err = visionResult.exceptionOrNull()
+            Log.w(TAG_VISION, "Vision locator failed: API call error: ${err?.message}", err)
+            return@withContext Result.failure(err ?: IllegalStateException("Vision API call failed"))
+        }
+
         visionResult.mapCatching { groundedResult ->
             parseVisionCoordinates(groundedResult.text, screenWidth, screenHeight)
-                ?: throw IllegalStateException("Failed to parse coordinates from vision output: ${groundedResult.text}")
+                ?: throw IllegalStateException("Failed to parse valid in-bounds coordinates from vision output: ${groundedResult.text}")
         }
     }
 
     companion object {
         private const val TAG = "MiraGeminiRestClient"
         private const val TAG_CHAT = "MiraChat"
+        const val TAG_VISION = "MiraVisionLocator"
 
         /** Automation think model (Turn F/c): fastest suitable model first. */
         const val AUTOMATION_THINK_MODEL: String = "gemini-3.5-flash-lite"
@@ -1536,6 +1552,7 @@ class GeminiRestClient(
             screenHeight: Int = 2400
         ): Pair<Int, Int>? {
             val clean = response.replace("```json", "").replace("```", "").trim()
+            var parsed: Pair<Int, Int>? = null
             try {
                 val json = JSONObject(clean)
                 if (json.has("x") && json.has("y")) {
@@ -1544,10 +1561,10 @@ class GeminiRestClient(
                     if (rawX >= 0.0 && rawY >= 0.0) {
                         val finalX = if (rawX <= 1000.0 && screenWidth > 0) ((rawX / 1000.0) * screenWidth).toInt() else rawX.toInt()
                         val finalY = if (rawY <= 1000.0 && screenHeight > 0) ((rawY / 1000.0) * screenHeight).toInt() else rawY.toInt()
-                        return Pair(finalX, finalY)
+                        parsed = Pair(finalX, finalY)
                     }
                 }
-                if (json.has("point")) {
+                if (parsed == null && json.has("point")) {
                     val arr = json.optJSONArray("point")
                     if (arr != null && arr.length() >= 2) {
                         val rawY = arr.optDouble(0, -1.0)
@@ -1555,22 +1572,37 @@ class GeminiRestClient(
                         if (rawX >= 0.0 && rawY >= 0.0) {
                             val finalX = if (rawX <= 1000.0 && screenWidth > 0) ((rawX / 1000.0) * screenWidth).toInt() else rawX.toInt()
                             val finalY = if (rawY <= 1000.0 && screenHeight > 0) ((rawY / 1000.0) * screenHeight).toInt() else rawY.toInt()
-                            return Pair(finalX, finalY)
+                            parsed = Pair(finalX, finalY)
                         }
                     }
                 }
             } catch (_: Throwable) {}
 
-            val xMatch = Regex(""""x"\s*:\s*(\d+)""").find(clean)
-            val yMatch = Regex(""""y"\s*:\s*(\d+)""").find(clean)
-            if (xMatch != null && yMatch != null) {
-                val rx = xMatch.groupValues[1].toDoubleOrNull() ?: return null
-                val ry = yMatch.groupValues[1].toDoubleOrNull() ?: return null
-                val finalX = if (rx <= 1000.0 && screenWidth > 0) ((rx / 1000.0) * screenWidth).toInt() else rx.toInt()
-                val finalY = if (ry <= 1000.0 && screenHeight > 0) ((ry / 1000.0) * screenHeight).toInt() else ry.toInt()
-                return Pair(finalX, finalY)
+            if (parsed == null) {
+                val xMatch = Regex(""""x"\s*:\s*(\d+)""").find(clean)
+                val yMatch = Regex(""""y"\s*:\s*(\d+)""").find(clean)
+                if (xMatch != null && yMatch != null) {
+                    val rx = xMatch.groupValues[1].toDoubleOrNull()
+                    val ry = yMatch.groupValues[1].toDoubleOrNull()
+                    if (rx != null && ry != null && rx >= 0.0 && ry >= 0.0) {
+                        val finalX = if (rx <= 1000.0 && screenWidth > 0) ((rx / 1000.0) * screenWidth).toInt() else rx.toInt()
+                        val finalY = if (ry <= 1000.0 && screenHeight > 0) ((ry / 1000.0) * screenHeight).toInt() else ry.toInt()
+                        parsed = Pair(finalX, finalY)
+                    }
+                }
             }
-            return null
+
+            if (parsed == null) {
+                Log.w(TAG_VISION, "Vision locator failed: unparseable output: $clean")
+                return null
+            }
+
+            val (x, y) = parsed
+            if (x < 0 || x > screenWidth || y < 0 || y > screenHeight) {
+                Log.w(TAG_VISION, "Vision locator failed: coordinates out of bounds ($x, $y) for screen ${screenWidth}x${screenHeight}")
+                return null
+            }
+            return parsed
         }
     }
 }

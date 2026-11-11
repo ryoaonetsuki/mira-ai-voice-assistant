@@ -58,18 +58,21 @@ object LivePromptBuilder {
 
         return "PHONE CONTROL & ACTION TOOLS: You have real tools to directly control the user's phone: " +
             "`open_app` (opens an app by name or package), `click_text` (clicks a UI element by text label, with optional fallback x/y coordinates), " +
+            "`click_at` (taps screen coordinates x/y), " +
             "`tap_number` (taps an on-screen element by its number badge), `show_numbers` (shows numbered badges on all tappable elements and returns the numbered list), `hide_numbers` (hides the tap-number badges), " +
             "`type_text` (types text into the focused field), `scroll` (scrolls the screen up, down, left, or right), `press_back` (presses Back button), " +
             "`press_home` (returns to home screen), `wait` (pauses for UI to load), `get_screen` (inspects current UI elements and screen state), " +
             "`web_search` (searches web for information), `run_connector_command` (runs connector actions), `run_skill` (replays a saved skill macro in one tool call), " +
             "`remember_fact` (saves durable facts to memory), `recall_memory` (recalls saved facts), and `forget_memory` (deletes saved facts). " +
             "You CAN and MUST act on the phone whenever asked — NEVER claim you cannot control the phone, open apps, or take actions. " +
+            "When an element has no text label (like an icon-only search magnifier), call click_text with its description or click_at — vision fallback will locate and tap it. " +
             "OFF-TARGET RULE: If the screen is not currently on the target application needed for the user's goal, you MUST call `open_app` first before attempting to click or type. " +
             "When the user says \"tap a number\" or \"tap number N\", first call show_numbers if numbers are not already shown (it returns the numbered list of tappable elements), then call tap_number with that number; numbers are 1-based and refer only to tappable elements; \"show numbers\" shows the overlay, \"hide numbers\" hides it. " +
             "When the user asks for a phone action or search: CALL THE TOOL IMMEDIATELY. " +
             "While the tool executes in the background, NARRATE BRIEFLY in the conversation language ($narrationExample). Never stay silent and never give robotic excuses. " +
             "Tool results arrive directly as function responses containing the updated screen state, node text, and outcome — they are NOT user messages. " +
             "You MUST CHECK THE SCREEN in the function response before your next call to verify what is on display and guide your next action. " +
+            "Feed scrolling: scrolling in content feeds (Facebook, YouTube) is normal progress and multiple scrolls are expected. " +
             "When all actions are complete, speak the outcome naturally and briefly to the user in the conversation language. " +
             "Memory tools: when the user tells you something worth remembering, save it quietly with remember_fact (category + fact); use recall_memory when you need a saved fact; never announce saving."
     }
@@ -90,7 +93,8 @@ object LivePromptBuilder {
         searchAckPhrase: String = "",
         customInstructions: String = "",
         activeRules: String = "",
-        memorySection: String = ""
+        memorySection: String = "",
+        appKnowledgeSection: String = ""
     ): String {
         val lang = language.ifBlank { DEFAULT_LANGUAGE }
         val languageRule = buildLanguageRule(lang)
@@ -167,6 +171,10 @@ object LivePromptBuilder {
             if (activeRules.isNotBlank()) {
                 append("\nUser Rules to strictly obey:\n")
                 append(activeRules)
+            }
+            if (appKnowledgeSection.isNotBlank()) {
+                append("\nApp usage knowledge & UI flows:\n")
+                append(appKnowledgeSection)
             }
             append("\nKeep answers natural, conversational, and suitable for spoken dialogue. Never volunteer that you are an AI unprompted, never state your creator or introduce yourself unprompted, and never use robotic disclaimers.")
         }

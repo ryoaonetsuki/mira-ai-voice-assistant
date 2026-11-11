@@ -30,6 +30,26 @@ class AppKnowledge(private val readAsset: (String) -> String?) {
             ?.trim()?.takeIf { it.isNotEmpty() }
     }
 
+    /**
+     * Shared search flow note for cross-app and in-app search actions.
+     */
+    fun searchFlowNote(): String? {
+        return readAsset("automation/knowledge/search.md")
+            ?.trim()?.takeIf { it.isNotEmpty() }
+    }
+
+    /**
+     * Returns a concise summary of usage notes for the Live voice system prompt.
+     */
+    fun summaryForPrompt(): String {
+        val notes = listOfNotNull(
+            searchFlowNote()?.let { "### Cross-App Search Flow\n$it" },
+            noteForTarget("facebook")?.let { "### Facebook Notes\n$it" },
+            noteForTarget("youtube")?.let { "### YouTube Notes\n$it" }
+        )
+        return notes.joinToString("\n\n")
+    }
+
     companion object {
         private val TARGET_TO_SLUG = mapOf(
             "com.google.android.youtube" to "youtube",
@@ -44,6 +64,7 @@ class AppKnowledge(private val readAsset: (String) -> String?) {
             "chrome" to "chrome",
             "com.google.android.gm" to "gmail",
             "gmail" to "gmail",
+            "search" to "search",
         )
 
         fun slugFor(target: String): String? {

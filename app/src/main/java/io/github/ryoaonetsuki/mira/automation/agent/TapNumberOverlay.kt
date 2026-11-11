@@ -8,12 +8,21 @@ import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.TextView
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.math.roundToInt
+
+sealed class ShowOverlayResult {
+    object Success : ShowOverlayResult()
+    object PermissionMissing : ShowOverlayResult()
+    data class WindowManagerFailed(val error: Throwable?) : ShowOverlayResult()
+}
 
 class TapNumberOverlay(
     private val context: Context,
@@ -76,7 +85,37 @@ class TapNumberOverlay(
     }
 
     fun show(numbered: List<Pair<Int, ScreenNode>>): Boolean {
-        if (!Settings.canDrawOverlays(context)) return false
+        return showDetailed(numbered) is ShowOverlayResult.Success
+    }
+
+    fun showDetailed(numbered: List<Pair<Int, ScreenNode>>): ShowOverlayResult {
+        if (!Settings.canDrawOverlays(context)) {
+            Log.w(TAG, "Cannot show tap numbers: 'Display over other apps' (SYSTEM_ALERT_WINDOW) permission not granted")
+            return ShowOverlayResult.PermissionMissing
+        }
+
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            val latch = CountDownLatch(1)
+            var result: ShowOverlayResult = ShowOverlayResult.WindowManagerFailed(null)
+            handler.post {
+                try {
+                    result = showInternal(numbered)
+                } finally {
+                    latch.countDown()
+                }
+            }
+            try {
+                latch.await(2, TimeUnit.SECONDS)
+            } catch (_: InterruptedException) {
+                Log.w(TAG, "showDetailed interrupted while awaiting main thread dispatch")
+            }
+            return result
+        } else {
+            return showInternal(numbered)
+        }
+    }
+
+    private fun showInternal(numbered: List<Pair<Int, ScreenNode>>): ShowOverlayResult {
         container.removeAllViews()
         for ((number, node) in numbered.take(50)) {
             container.addView(badgeView(number), layoutParamsFor(node))
@@ -93,17 +132,27 @@ class TapNumberOverlay(
             )
             try {
                 windowManager.addView(container, params)
-            } catch (_: Throwable) {
-                return false
+            } catch (e: Throwable) {
+                Log.w(TAG, "windowManager.addView failed: ${e.message}", e)
+                return ShowOverlayResult.WindowManagerFailed(e)
             }
             isShowing = true
+            Log.i(TAG, "Tap numbers overlay shown with ${numbered.size} badges")
         }
         handler.removeCallbacks(refreshRunnable)
         handler.postDelayed(refreshRunnable, 750L)
-        return true
+        return ShowOverlayResult.Success
     }
 
     fun refresh(numbered: List<Pair<Int, ScreenNode>>) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            handler.post { refreshInternal(numbered) }
+        } else {
+            refreshInternal(numbered)
+        }
+    }
+
+    private fun refreshInternal(numbered: List<Pair<Int, ScreenNode>>) {
         if (!isShowing) return
         container.removeAllViews()
         for ((number, node) in numbered.take(50)) {
@@ -112,14 +161,29 @@ class TapNumberOverlay(
     }
 
     fun hide() {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            handler.post { hideInternal() }
+        } else {
+            hideInternal()
+        }
+    }
+
+    private fun hideInternal() {
         handler.removeCallbacks(refreshRunnable)
         if (isShowing) {
             try {
                 windowManager.removeView(container)
-            } catch (_: Throwable) {}
+            } catch (e: Throwable) {
+                Log.w(TAG, "windowManager.removeView failed: ${e.message}")
+            }
             isShowing = false
+            Log.i(TAG, "Tap numbers overlay hidden")
         }
         container.removeAllViews()
+    }
+
+    companion object {
+        private const val TAG = "TapNumberOverlay"
     }
 }
 

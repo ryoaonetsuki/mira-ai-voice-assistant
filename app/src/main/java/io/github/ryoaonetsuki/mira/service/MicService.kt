@@ -42,6 +42,7 @@ import io.github.ryoaonetsuki.mira.voice.pipecat.SessionManagerListener
 import io.github.ryoaonetsuki.mira.voice.pipecat.SessionManagerState
 import io.github.ryoaonetsuki.mira.voice.pipecat.VoiceEchoDetector
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -159,7 +160,6 @@ class MicService : Service() {
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     private var sessionManager: GeminiSessionManager? = null
-    private val handledTranscripts = Collections.synchronizedSet(mutableSetOf<String>())
     private var connectingWatchdogJob: Job? = null
     private var startVoiceSessionJob: Job? = null
     /**
@@ -173,6 +173,8 @@ class MicService : Service() {
     private var autoRestartAttempt: Int = 0
     private var livenessWatchdogJob: Job? = null
     @Volatile private var lastAudioFrameElapsedMs: Long = 0L
+    @Volatile private var lastServerActivityElapsedMs: Long = 0L
+    private val functionCallMutex = kotlinx.coroutines.sync.Mutex()
     @Volatile private var userRequestedStop: Boolean = false
     @Volatile private var connectsThisCall: Int = 0
     @Volatile private var lastAutomationGoal: String? = null
@@ -229,6 +231,26 @@ class MicService : Service() {
         }
     }
 
+    private val userTurnEscalator by lazy {
+        UserTurnEscalator(
+            scope = serviceScope,
+            timeoutMs = UserTurnEscalator.DEFAULT_ESCALATION_TIMEOUT_MS
+        ) { reason ->
+            Log.w(TAG, "MIRA_LIVE_VOICE: User-turn second-stage escalation fired ($reason) — requesting reconnect")
+            LiveVoiceDiagnostics.recordDropReason("escalation-$reason")
+            _liveState.value = LiveState.CONNECTING
+            _voiceStage.value = VoiceStage.CONNECTING
+            _isReconnecting.value = true
+            postCallNotificationIfForeground()
+            sessionManager?.requestReconnect(reason)
+        }
+    }
+
+    private fun noteServerActivity() {
+        lastServerActivityElapsedMs = android.os.SystemClock.elapsedRealtime()
+        userTurnEscalator.cancel()
+    }
+
     private val postCallWatchdog by lazy {
         TurnWatchdog(
             scope = serviceScope,
@@ -246,6 +268,8 @@ class MicService : Service() {
         if (isConnected) {
             Log.i(TAG, "MIRA_LIVE_VOICE: Injecting user turn nudge into same Live session: $transcript")
             sessionManager?.sendUserMessage(transcript)
+            // Symptom 3(b): arm second-stage escalation
+            userTurnEscalator.arm("no-model-response-after-nudge")
         } else {
             val action = WatchdogActionResolver.resolve(isLiveConnected = false, isUserInitiated = true)
             Log.i(TAG, "MIRA_LIVE_VOICE: Live not connected, action=$action; running direct path for: $transcript")
@@ -261,9 +285,37 @@ class MicService : Service() {
                             message = "${result.message} ($transcript)"
                         )
                     }
+                } else {
+                    // Symptom 5(f): near-miss acknowledgement in disconnected direct path
+                    if (containsAutomationVerbOrAppNoun(transcript)) {
+                        val skillService = SkillMemoryService.getInstance(applicationContext)
+                        val match = skillService.findMatch(transcript)
+                        if (match != null) {
+                            Log.i(TAG, "MIRA_LIVE_VOICE: Direct path near-miss found skill match for: $transcript")
+                            val result = automationBridge.executeSkill(match)
+                            recordAutomationNotification(
+                                title = "Replayed Skill ${if (result.status == TaskStatus.SUCCESS) "Completed" else "Failed"}",
+                                message = "${result.message} ($transcript)"
+                            )
+                        } else {
+                            Log.w(TAG, "MIRA_LIVE_VOICE: Command not understood in disconnected direct path: $transcript")
+                            recordAutomationNotification(
+                                title = "Command Not Understood",
+                                message = "Could not understand voice command: \"$transcript\""
+                            )
+                        }
+                    }
                 }
             }
         }
+    }
+
+    private fun containsAutomationVerbOrAppNoun(text: String): Boolean {
+        val lower = text.trim().lowercase()
+        if (lower.isEmpty()) return false
+        return MiraAutomationBridge.isAutomationIntent(text) ||
+            MiraAutomationBridge.extractTargetApp(text) != null ||
+            MiraAutomationBridge.parseDirectAction(text) != null
     }
 
     private fun handlePostCallWatchdogFired(outcome: String) {
@@ -393,6 +445,14 @@ class MicService : Service() {
         LiveVoiceDiagnostics.updateStage("ERROR")
         dismissNotification()
 
+        // Symptom 1: hide tap numbers on terminal call end
+        try {
+            automationPort.hideTapNumbers()
+            Log.i(TAG, "MIRA_LIVE_VOICE: Tap numbers hidden on call end (terminal error)")
+        } catch (e: Exception) {
+            Log.w(TAG, "MIRA_LIVE_VOICE: Failed to hide tap numbers on terminal error: ${e.message}")
+        }
+
         try {
             sessionManager?.stopSession()
         } catch (e: Exception) {
@@ -441,9 +501,26 @@ class MicService : Service() {
                 delay(VoiceLivenessPolicy.CHECK_INTERVAL_MS)
                 val live = _liveState.value == LiveState.LISTENING ||
                     _liveState.value == LiveState.SPEAKING
-                if (VoiceLivenessPolicy.shouldTriggerRestart(
+                val now = android.os.SystemClock.elapsedRealtime()
+
+                // Symptom 3(a): check server activity when a user turn is armed
+                if (userTurnWatchdog.state == WatchdogState.ARMED &&
+                    lastServerActivityElapsedMs > 0L &&
+                    (now - lastServerActivityElapsedMs > 15_000L)
+                ) {
+                    Log.w(TAG, "MIRA_LIVE_VOICE: Liveness watchdog fired — user turn armed but no server activity for >15s; requesting reconnect")
+                    LiveVoiceDiagnostics.recordDropReason(
+                        "watchdog-no-server-activity: no server activity for >15s while turn armed"
+                    )
+                    _liveState.value = LiveState.CONNECTING
+                    _voiceStage.value = VoiceStage.CONNECTING
+                    _isReconnecting.value = true
+                    postCallNotificationIfForeground()
+                    noteServerActivity()
+                    sessionManager?.requestReconnect("no-server-activity")
+                } else if (VoiceLivenessPolicy.shouldTriggerRestart(
                         lastAudioFrameElapsedMs,
-                        android.os.SystemClock.elapsedRealtime(),
+                        now,
                         _isMuted.value, live, _isReconnecting.value
                     )
                 ) {
@@ -598,7 +675,7 @@ class MicService : Service() {
             callStateStore.setLastGoal(null)
         }
 
-        stopLiveVoiceSessionInternal()
+        stopLiveVoiceSessionInternal(hideOverlay = !isAutoRestart)
         startLivenessWatchdog()
         _userTranscript.value = ""
         _modelTranscript.value = ""
@@ -874,6 +951,7 @@ class MicService : Service() {
                         autoRestartAttempt = 0
                         _reconnectAttempt.value = 0
                         noteAudioFrame()
+                        noteServerActivity()
                         connectsThisCall++
                         Log.i(TAG, "MIRA_LIVE_VOICE: Connected (connect #$connectsThisCall of this call, voice=$cachedVoiceName)")
 
@@ -948,6 +1026,7 @@ class MicService : Service() {
 
             override fun onBotSpeakingChanged(isSpeaking: Boolean) {
                 if (isSpeaking) {
+                    noteServerActivity()
                     userTurnWatchdog.cancel()
                     postCallWatchdog.cancel()
                 }
@@ -989,7 +1068,10 @@ class MicService : Service() {
                     return
                 }
 
-                if (isEchoOfModelSpeech(text)) {
+                // Proactive bug fix: do not drop user transcripts as echo when the bot is silent and it is an intentional automation command
+                val isIntentionalCommand = MiraAutomationBridge.parseDirectAction(text) != null ||
+                    MiraAutomationBridge.isAutomationIntent(text)
+                if (!isIntentionalCommand && isEchoOfModelSpeech(text)) {
                     Log.i(TAG, "MIRA_LIVE_VOICE: Dropping user transcript matching recent model speech: $text")
                     return
                 }
@@ -1008,6 +1090,7 @@ class MicService : Service() {
             override fun onTurnComplete() {}
 
             override fun onModelTranscript(text: String) {
+                noteServerActivity()
                 userTurnWatchdog.cancel()
                 postCallWatchdog.cancel()
                 noteAudioFrame()
@@ -1048,20 +1131,24 @@ class MicService : Service() {
 
             override fun onSessionEnded(reason: String, error: Throwable?) {
                 Log.i(TAG, "MIRA_LIVE_VOICE: Session ended (reason=$reason, error=${error?.message})")
-                // Turn G: a bare log line used to be the whole record. The
-                // reason is now kept in diagnostics so the next phone test
-                // can tell which suspect fired.
                 LiveVoiceDiagnostics.recordDropReason("session-ended: $reason")
                 flushPendingModelTranscript()
+                // Symptom 3(e): trigger auto-restart instead of silently staying at LISTENING
+                if (!userRequestedStop && callStateStore.isCallActive()) {
+                    Log.w(TAG, "MIRA_LIVE_VOICE: Session ended unexpectedly while call active ($reason) — auto-restarting")
+                    _liveState.value = LiveState.CONNECTING
+                    _voiceStage.value = VoiceStage.CONNECTING
+                    _isReconnecting.value = true
+                    _micAmplitude.value = 0f
+                    postCallNotificationIfForeground()
+                    scheduleAutoRestart("session-ended: $reason")
+                }
             }
 
             override fun onSessionResumed(resumed: Boolean) {
                 Log.i(TAG, "MIRA_LIVE_VOICE: Session (re)connect resumed=$resumed (connect #$connectsThisCall of this call, voice=$cachedVoiceName)")
                 if (resumed) return
                 if (connectsThisCall <= 1) return // first connect: nothing to re-seed
-                // Turn G: the resume failed, so this is a FRESH session in
-                // the same call — re-seed the task context instead of
-                // starting blank. One short note; Live treats it as context.
                 val goal = lastAutomationGoal
                 val lastModel = _modelTranscript.value
                 if (goal.isNullOrBlank() && lastModel.isBlank()) return
@@ -1074,6 +1161,7 @@ class MicService : Service() {
             }
 
             override fun onFunctionCall(id: String, name: String, args: Value.Array, rawArgs: Map<String, String>) {
+                noteServerActivity()
                 userTurnWatchdog.cancel()
                 Log.i(TAG, "MIRA_LIVE_VOICE: onFunctionCall: id=$id name=$name rawArgs=$rawArgs")
                 handleFunctionCall(id, name, args, rawArgs, emptyMap())
@@ -1086,6 +1174,7 @@ class MicService : Service() {
                 rawArgs: Map<String, String>,
                 typedArgs: Map<String, Any?>
             ) {
+                noteServerActivity()
                 userTurnWatchdog.cancel()
                 Log.i(TAG, "MIRA_LIVE_VOICE: onFunctionCall: id=$id name=$name rawArgs=$rawArgs typedArgs=$typedArgs")
                 handleFunctionCall(id, name, args, rawArgs, typedArgs)
@@ -1105,30 +1194,32 @@ class MicService : Service() {
         _statusText.value = "Running: $name"
         postCallNotificationIfForeground()
         serviceScope.launch(Dispatchers.IO) {
-            try {
-                val responseObj = executeFunctionCall(
-                    automationPort = automationPort,
-                    context = applicationContext,
-                    name = name,
-                    rawArgs = rawArgs,
-                    typedArgs = typedArgs,
-                    targetApp = currentAutomationTarget,
-                    goal = lastAutomationGoal,
-                    appKnowledge = appKnowledge
-                )
-                sessionManager?.sendFunctionResponse(id, name, responseObj)
-                val outcome = extractOutcomeString(responseObj)
-                postCallWatchdog.arm(outcome, TurnWatchdog.DEFAULT_POST_CALL_TIMEOUT_MS)
-            } catch (e: Exception) {
-                Log.e(TAG, "MIRA_LIVE_VOICE: Error handling function call $name: ${e.message}", e)
-                val errObj = Value.Object(
-                    "error" to Value.Str(e.message ?: "Function execution failed")
-                )
-                sessionManager?.sendFunctionResponse(id, name, errObj)
-                postCallWatchdog.arm("Function failed: ${e.message}", TurnWatchdog.DEFAULT_POST_CALL_TIMEOUT_MS)
-            } finally {
-                _statusText.value = ""
-                postCallNotificationIfForeground()
+            functionCallMutex.withLock {
+                try {
+                    val responseObj = executeFunctionCall(
+                        automationPort = automationPort,
+                        context = applicationContext,
+                        name = name,
+                        rawArgs = rawArgs,
+                        typedArgs = typedArgs,
+                        targetApp = currentAutomationTarget,
+                        goal = lastAutomationGoal,
+                        appKnowledge = appKnowledge
+                    )
+                    sessionManager?.sendFunctionResponse(id, name, responseObj)
+                    val outcome = extractOutcomeString(responseObj)
+                    postCallWatchdog.arm(outcome, TurnWatchdog.DEFAULT_POST_CALL_TIMEOUT_MS)
+                } catch (e: Exception) {
+                    Log.e(TAG, "MIRA_LIVE_VOICE: Error handling function call $name: ${e.message}", e)
+                    val errObj = Value.Object(
+                        "error" to Value.Str(e.message ?: "Function execution failed")
+                    )
+                    sessionManager?.sendFunctionResponse(id, name, errObj)
+                    postCallWatchdog.arm("Function failed: ${e.message}", TurnWatchdog.DEFAULT_POST_CALL_TIMEOUT_MS)
+                } finally {
+                    _statusText.value = ""
+                    postCallNotificationIfForeground()
+                }
             }
         }
     }
@@ -1217,11 +1308,20 @@ class MicService : Service() {
         _voiceStage.value = VoiceStage.IDLE
     }
 
-    private fun stopLiveVoiceSessionInternal() {
+    private fun stopLiveVoiceSessionInternal(hideOverlay: Boolean = true) {
         userTurnWatchdog.cancel()
         postCallWatchdog.cancel()
+        userTurnEscalator.cancel()
         sessionGenerationToken.incrementAndGet()
         automationBridge.cancel()
+        if (hideOverlay) {
+            try {
+                automationPort.hideTapNumbers()
+                Log.i(TAG, "MIRA_LIVE_VOICE: Tap numbers hidden on call end")
+            } catch (e: Exception) {
+                Log.w(TAG, "MIRA_LIVE_VOICE: Error hiding tap numbers on call end: ${e.message}")
+            }
+        }
         _statusText.value = ""
         startVoiceSessionJob?.cancel()
         startVoiceSessionJob = null
@@ -1232,7 +1332,6 @@ class MicService : Service() {
         isTtsPlaying = false
         connectingWatchdogJob?.cancel()
         connectingWatchdogJob = null
-        handledTranscripts.clear()
         currentAutomationTarget = null
         GoalToolTracker.reset()
 
@@ -1577,7 +1676,8 @@ internal fun isOffTargetForAction(
     action: String,
     currentPackage: String,
     target: String?,
-    goalText: String?
+    goalText: String?,
+    automationPort: AutomationPort? = null
 ): Boolean {
     if (action != TaskStep.ACTION_CLICK_TEXT && action != TaskStep.ACTION_TYPE_TEXT && action != "tap_number" && action != TaskStep.ACTION_CLICK_NUMBER) {
         return false
@@ -1594,7 +1694,14 @@ internal fun isOffTargetForAction(
     if (isWeb && TaskExecutor.isBrowserPackage(currentPackage)) {
         return false
     }
-    return !TaskExecutor.matchesTarget(effectiveTarget, currentPackage)
+    if (TaskExecutor.matchesTarget(effectiveTarget, currentPackage)) {
+        return false
+    }
+    // Symptom 2(b)(ii): fallback to label-based app verification
+    if (automationPort?.isTargetPackage(effectiveTarget, currentPackage) == true) {
+        return false
+    }
+    return true
 }
 
 internal suspend fun executeFunctionCall(
@@ -1771,7 +1878,7 @@ private suspend fun executeFunctionCallInternal(
             val deadline = System.currentTimeMillis() + pollTimeoutMs
             var currentPackage = automationPort.getCurrentPackage().orEmpty()
             while (System.currentTimeMillis() < deadline) {
-                if (TaskExecutor.openAppTargetReached(step, prePackage, currentPackage)) break
+                if (TaskExecutor.openAppTargetReached(step, prePackage, currentPackage, automationPort)) break
                 delay(pollIntervalMs)
                 currentPackage = automationPort.getCurrentPackage().orEmpty()
             }
@@ -1780,7 +1887,7 @@ private suspend fun executeFunctionCallInternal(
             }
 
             val postPackage = automationPort.getCurrentPackage().orEmpty()
-            val targetReached = TaskExecutor.openAppTargetReached(step, prePackage, postPackage)
+            val targetReached = TaskExecutor.openAppTargetReached(step, prePackage, postPackage, automationPort)
             val postNodes = automationPort.dumpScreen()
 
             val outcome = if (targetReached) {
@@ -1810,7 +1917,7 @@ private suspend fun executeFunctionCallInternal(
             val prePackage = automationPort.getCurrentPackage().orEmpty()
 
             // Milestone 6 Off-target refusal guard: refuse BEFORE executing click_text
-            if (isOffTargetForAction("click_text", prePackage, resolvedTarget, resolvedGoal)) {
+            if (isOffTargetForAction("click_text", prePackage, resolvedTarget, resolvedGoal, automationPort)) {
                 val postNodes = automationPort.dumpScreen()
                 val targetName = resolvedTarget ?: resolvedGoal?.let { MiraAutomationBridge.extractTargetApp(it) } ?: "target app"
                 val outcome = "Current screen package '$prePackage' is not on the target app '$targetName'. You must call open_app first before clicking."
@@ -2007,7 +2114,7 @@ private suspend fun executeFunctionCallInternal(
             val prePackage = automationPort.getCurrentPackage().orEmpty()
 
             // Milestone 6 Off-target refusal guard: refuse BEFORE executing tap_number
-            if (isOffTargetForAction("tap_number", prePackage, resolvedTarget, resolvedGoal)) {
+            if (isOffTargetForAction("tap_number", prePackage, resolvedTarget, resolvedGoal, automationPort)) {
                 val postNodes = automationPort.dumpScreen()
                 val targetName = resolvedTarget ?: resolvedGoal?.let { MiraAutomationBridge.extractTargetApp(it) } ?: "target app"
                 val outcome = "Current screen package '$prePackage' is not on the target app '$targetName'. You must call open_app first before tapping a number."
@@ -2167,7 +2274,7 @@ private suspend fun executeFunctionCallInternal(
             val prePackage = automationPort.getCurrentPackage().orEmpty()
 
             // Milestone 6 Off-target refusal guard: refuse BEFORE executing type_text
-            if (isOffTargetForAction("type_text", prePackage, resolvedTarget, resolvedGoal)) {
+            if (isOffTargetForAction("type_text", prePackage, resolvedTarget, resolvedGoal, automationPort)) {
                 val postNodes = automationPort.dumpScreen()
                 val targetName = resolvedTarget ?: resolvedGoal?.let { MiraAutomationBridge.extractTargetApp(it) } ?: "target app"
                 val outcome = "Current screen package '$prePackage' is not on the target app '$targetName'. You must call open_app first before typing."
@@ -2202,6 +2309,9 @@ private suspend fun executeFunctionCallInternal(
             val preNodes = automationPort.dumpScreen()
             val preSignature = TaskExecutor.computeNodeSignature(preNodes)
 
+            // Coordinator fix (round 3 review): capture the vision failure reason so
+            // the Live model hears WHY the field could not be found, not just that it failed.
+            var lastTypeVisionReason: String? = null
             val typeResult = TaskExecutor.executeTypeFlow(
                 automation = automationPort,
                 text = text,
@@ -2210,8 +2320,11 @@ private suspend fun executeFunctionCallInternal(
                 fallbackY = fallbackY,
                 pressEnter = pressEnter,
                 visionLocator = { query, nodes ->
-                    resolveVisionCoordinates(context, query, nodes, automationPort).coordinates
+                    val res = resolveVisionCoordinates(context, query, nodes, automationPort)
+                    lastTypeVisionReason = res.failureReason
+                    res.coordinates
                 },
+                visionFailureReasonProvider = { lastTypeVisionReason },
                 pollTimeoutMs = if (pollTimeoutMs == 0L) 0L else 2000L,
                 pollIntervalMs = pollIntervalMs
             )

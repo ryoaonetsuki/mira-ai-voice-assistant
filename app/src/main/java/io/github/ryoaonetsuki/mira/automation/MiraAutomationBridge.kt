@@ -339,6 +339,12 @@ class MiraAutomationBridge(
             "youtube", "whatsapp", "maps", "chrome", "camera", "messages",
             "phone", "gmail", "spotify", "facebook", "settings", "app", "music",
             "song", "songs", "gaan", "gan", "sms",
+            // Everyday Android apps (Symptom 2b)
+            "play store", "google play store", "playstore", "play games", "google play games",
+            "photos", "google photos", "gallery", "drive", "google drive",
+            "files", "files by google", "my files", "file manager",
+            "clock", "alarm", "calculator", "calendar", "google calendar",
+            "contacts", "keep", "google keep", "keep notes", "notes",
             // Multilingual Latin media/app nouns (es, fr, de, pt, tr, id, vi, it, nl, pl, sv)
             "música", "musica", "canción", "cancion", "musique", "chanson", "musik", "lied",
             "müzik", "muzik", "şarkı", "sarki", "lagu", "nhạc", "bài hát", "canzone",
@@ -354,6 +360,10 @@ class MiraAutomationBridge(
             // bn
             "ইউটিউব", "গান", "মিউজিক", "স্পটিফাই", "হোয়াটসঅ্যাপ", "ক্রোম",
             "ক্যামেরা", "সেটিংস", "মেসেজ", "কল", "ফোন", "ফেসবুক", "জিমেইল", "ম্যাপস", "অ্যাপ",
+            "প্লে স্টোর", "গুগল প্লে স্টোর", "প্লেস্টোর", "প্লে গেমস", "গুগল প্লে গেমস",
+            "ফটোস", "ছবি", "গ্যালারি", "গুগল ফটোস", "ড্রাইভ", "গুগল ড্রাইভ",
+            "ফাইলস", "ফাইল ম্যানেজার", "ক্লক", "ঘড়ি", "অ্যালার্ম", "ক্যালকুলেটর", "ক্যালেন্ডার",
+            "কনট্যাক্টস", "কন্টাক্টস", "যোগাযোগ", "কিপ", "গুগল কিপ", "নোটস",
             // hi & mr
             "यूट्यूब", "युट्युब", "गाना", "गीत", "संगीत", "म्यूजिक", "म्युझिक", "गाणं", "गाणे",
             "स्पॉटिफाई", "स्पॉटिफाय", "व्हाट्सएप", "वॉट्सऐप", "व्हॉट्सअॅप", "क्रोम", "कैमरा", "कॅमेरा",
@@ -459,7 +469,37 @@ class MiraAutomationBridge(
                 "müzik", "muzik", "şarkı", "sarki", "lagu", "nhạc", "bài hát", "canzone",
                 "muziek", "nummer", "muzyka", "muzykę", "piosenka", "piosenkę", "låt",
                 "music", "song", "songs", "gaan", "gan"
-            ) to "com.google.android.youtube"
+            ) to "com.google.android.youtube",
+            listOf(
+                "প্লে স্টোর", "গুগল প্লে স্টোর", "প্লেস্টোর", "play store", "google play store", "playstore"
+            ) to "com.android.vending",
+            listOf(
+                "ফটোস", "ছবি", "গ্যালারি", "গুগল ফটোস", "photos", "google photos", "gallery"
+            ) to "com.google.android.apps.photos",
+            listOf(
+                "ড্রাইভ", "গুগল ড্রাইভ", "drive", "google drive"
+            ) to "com.google.android.apps.docs",
+            listOf(
+                "ফাইলস", "ফাইল ম্যানেজার", "files", "files by google", "my files", "file manager"
+            ) to "com.google.android.apps.nbu.files",
+            listOf(
+                "ক্লক", "ঘড়ি", "অ্যালার্ম", "clock", "alarm"
+            ) to "com.google.android.deskclock",
+            listOf(
+                "ক্যালকুলেটর", "calculator"
+            ) to "com.google.android.calculator",
+            listOf(
+                "ক্যালেন্ডার", "calendar", "google calendar"
+            ) to "com.google.android.calendar",
+            listOf(
+                "কনট্যাক্টস", "কন্টাক্টস", "যোগাযোগ", "contacts"
+            ) to "com.google.android.contacts",
+            listOf(
+                "কিপ", "গুগল কিপ", "নোটস", "keep", "google keep", "keep notes", "notes"
+            ) to "com.google.android.keep",
+            listOf(
+                "প্লে গেমস", "গুগল প্লে গেমস", "play games", "google play games"
+            ) to "com.google.android.play.games"
         )
 
         private fun isLatinWordToken(token: String): Boolean =
@@ -474,6 +514,26 @@ class MiraAutomationBridge(
                     )
             }
 
+        private fun editDistance(s1: String, s2: String): Int {
+            val m = s1.length
+            val n = s2.length
+            val dp = IntArray(n + 1) { it }
+            for (i in 1..m) {
+                var prev = dp[0]
+                dp[0] = i
+                for (j in 1..n) {
+                    val temp = dp[j]
+                    dp[j] = if (s1[i - 1] == s2[j - 1]) {
+                        prev
+                    } else {
+                        1 + minOf(prev, dp[j], dp[j - 1])
+                    }
+                    prev = temp
+                }
+            }
+            return dp[n]
+        }
+
         fun extractTargetApp(text: String): String? {
             val lower = text.trim().lowercase()
             if (lower.isEmpty()) return null
@@ -485,6 +545,23 @@ class MiraAutomationBridge(
                         lower.contains(keyword)
                     }
                     if (matched) return canonical
+                }
+            }
+
+            // Fuzzy fallback for Latin tokens (Symptom 5d)
+            val tokens = tokenize(lower)
+            for (token in tokens) {
+                if (!isLatinWordToken(token) || token.length < 3) continue
+                val stripped = if (token.endsWith("s") && token.length > 4) token.dropLast(1) else token
+                for ((keywords, canonical) in TARGET_APP_CANONICAL_MAP) {
+                    for (keyword in keywords) {
+                        if (!isLatinWordToken(keyword) || keyword.length < 4) continue
+                        val kwLower = keyword.lowercase()
+                        if (stripped == kwLower) return canonical
+                        if (editDistance(token, kwLower) <= 1 || (stripped != token && editDistance(stripped, kwLower) <= 1)) {
+                            return canonical
+                        }
+                    }
                 }
             }
             return null
@@ -702,6 +779,11 @@ class MiraAutomationBridge(
             "แตะ", "தட்டு", "ట్యాప్", "ટેપ", "ਟੈਪ", "ടാപ്പ്", "ಟ್ಯಾಪ್", "πάτα", "点"
         )
 
+        /** Button nouns stripped from tap labels and used to reject search hijacking. */
+        private val BUTTON_WORDS = setOf(
+            "button", "buttons", "বাটন", "বাটনে", "বাটনটা", "বোতাম", "বোতামে"
+        )
+
         /** Filler / particle / politeness tokens ignored when judging "open-only". */
         private val PARTICLE_TOKENS = setOf(
             "তো", "না", "রে", "প্লিজ", "দয়া", "করে", "দাও", "দিন",
@@ -754,7 +836,32 @@ class MiraAutomationBridge(
             if (lower.isEmpty()) return false
             if (hasSecondAction(lower)) return false
             if (!hasOpenOrPlayVerb(lower)) return false
-            val remaining = tokenize(lower).filter { token ->
+
+            // Symptom 5(c): remove matched target-app phrase (longest matching keyword) before counting tokens
+            var collapsed = lower
+            var longestKw: String? = null
+            var maxLen = 0
+            for ((keywords, _) in TARGET_APP_CANONICAL_MAP) {
+                for (kw in keywords) {
+                    val k = kw.lowercase()
+                    if (k.length > maxLen && lower.contains(k)) {
+                        longestKw = k
+                        maxLen = k.length
+                    }
+                }
+            }
+            for (app in KNOWN_APPS) {
+                val k = app.lowercase()
+                if (k.length > maxLen && lower.contains(k)) {
+                    longestKw = k
+                    maxLen = k.length
+                }
+            }
+            if (longestKw != null) {
+                collapsed = collapsed.replaceFirst(longestKw, " __app__ ")
+            }
+
+            val remaining = tokenize(collapsed).filter { token ->
                 token !in PARTICLE_TOKENS &&
                     token !in OPEN_PLAY_VERBS_LATIN &&
                     OPEN_PLAY_VERBS_SUBSTRING.none { token.contains(it) }
@@ -825,19 +932,36 @@ class MiraAutomationBridge(
             return s
         }
 
+        private fun containsButtonWord(text: String): Boolean =
+            tokenize(text).any { it in BUTTON_WORDS } ||
+                BUTTON_WORDS.any { text.contains(it) }
+
         /** "search <query> [on <app>]" / "<query> খুঁজো". Null when the query is blank or just an app name. */
         private fun extractSearchQuery(text: String, lower: String): DirectAction.Search? {
+            // Symptom 2(a) / 5(a): refuse when a tap/click verb or button word is present
+            val hasTap = hasAnyLatin(lower, TAP_WORDS_LATIN) ||
+                hasAnySubstring(lower, TAP_WORDS_SUBSTRING)
+            if (hasTap || containsButtonWord(lower)) return null
+
             val verbFirst = Regex("""\b(search|find)\b\s+(.+)""").find(lower)
             if (verbFirst != null) {
                 val query = stripTrailingAppClause(verbFirst.groupValues[2].trim())
-                if (query.isNotBlank() && !isBareAppName(query)) {
+                if (query.isNotBlank() && !isBareAppName(query) &&
+                    !hasAnyLatin(query, TAP_WORDS_LATIN) &&
+                    !hasAnySubstring(query, TAP_WORDS_SUBSTRING) &&
+                    !containsButtonWord(query)
+                ) {
                     return DirectAction.Search(query, extractTargetApp(text))
                 }
             }
             if (lower.contains("খুঁজো")) {
                 val before = lower.substringBefore("খুঁজো").trim()
                 val query = stripAppWords(before)
-                if (query.isNotBlank() && !isBareAppName(query)) {
+                if (query.isNotBlank() && !isBareAppName(query) &&
+                    !hasAnyLatin(query, TAP_WORDS_LATIN) &&
+                    !hasAnySubstring(query, TAP_WORDS_SUBSTRING) &&
+                    !containsButtonWord(query)
+                ) {
                     return DirectAction.Search(query, extractTargetApp(text))
                 }
             }
@@ -893,7 +1017,7 @@ class MiraAutomationBridge(
             return sb.toString().toIntOrNull()
         }
 
-        /** "tap <label>" — the label is whatever remains after the tap verb and particles. */
+        /** "tap <label>" — the label is whatever remains after the tap verb, particles, and button words (Symptom 5b). */
         private fun extractTapLabel(lower: String): String? {
             val hasTap = hasAnyLatin(lower, TAP_WORDS_LATIN) ||
                 hasAnySubstring(lower, TAP_WORDS_SUBSTRING)
@@ -901,6 +1025,7 @@ class MiraAutomationBridge(
             val label = tokenize(lower).filter { token ->
                 token !in PARTICLE_TOKENS &&
                     token !in TAP_WORDS_LATIN &&
+                    token !in BUTTON_WORDS &&
                     TAP_WORDS_SUBSTRING.none { token.contains(it) }
             }.joinToString(" ")
             return label.ifBlank { null }
@@ -914,7 +1039,7 @@ class MiraAutomationBridge(
          * refuses multi-action goals ("open YouTube and play lofi" stays with
          * the AI loop).
          */
-        fun parseDirectAction(text: String): DirectAction? {
+        private fun parseDirectActionStrict(text: String): DirectAction? {
             val lower = text.trim().lowercase()
             if (lower.isEmpty()) return null
             extractSearchQuery(text, lower)?.let { return it }
@@ -936,6 +1061,34 @@ class MiraAutomationBridge(
             if (!isAutomationIntent(text)) return null
             if (!isOpenOnlyGoal(text)) return null
             return DirectAction.OpenApp(target)
+        }
+
+        fun parseDirectAction(text: String): DirectAction? {
+            val strict = parseDirectActionStrict(text)
+            if (strict != null) return strict
+
+            // Symptom 5(e): tolerant fallback on normalized form
+            val normalized = normalizeForDirectAction(text)
+            if (normalized.isNotBlank() && normalized != text.trim().lowercase()) {
+                return parseDirectActionStrict(normalized)
+            }
+            return null
+        }
+
+        private fun normalizeForDirectAction(text: String): String {
+            var s = " " + text.trim().lowercase() + " "
+            // Collapse "search button" / "search বাটনে" / "search বাটন" -> "search"
+            s = s.replace(Regex("""\bsearch\s+(?:button|buttons|বাটন|বাটনে|বাটনটা|বোতাম|বোতামে)\b"""), " search ")
+            for (b in BUTTON_WORDS) {
+                s = s.replace(Regex("""(?<![\p{L}\p{M}\p{N}])${Regex.escape(b)}(?![\p{L}\p{M}\p{N}])"""), " ")
+            }
+            val fillers = listOf(
+                "please", "প্লিজ", "একটু", "দয়া করে", "দয়া", "তো", "না"
+            )
+            for (f in fillers) {
+                s = s.replace(Regex("""(?<![\p{L}\p{M}\p{N}])${Regex.escape(f)}(?![\p{L}\p{M}\p{N}])"""), " ")
+            }
+            return tokenize(s).joinToString(" ")
         }
     }
 }

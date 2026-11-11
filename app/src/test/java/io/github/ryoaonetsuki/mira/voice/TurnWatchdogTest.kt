@@ -6,6 +6,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -171,7 +172,7 @@ class TurnWatchdogTest {
         delay(80L)
 
         assertFalse("Escalator must no longer be pending after firing", escalator.isPending)
-        assertEquals("test-escalation", escalatedReason)
+        assertEquals("test-escalation", escalatedReason ?: "")
     }
 
     @Test
@@ -214,6 +215,6 @@ class TurnWatchdogTest {
 
         escalator.fire("custom-escalate-reason")
         assertFalse(escalator.isPending)
-        assertEquals("custom-escalate-reason", escalatedReason)
+        assertEquals("custom-escalate-reason", escalatedReason ?: "")
     }
 }

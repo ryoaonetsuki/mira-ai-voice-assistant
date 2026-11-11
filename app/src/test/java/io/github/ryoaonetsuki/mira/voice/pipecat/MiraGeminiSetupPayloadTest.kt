@@ -111,7 +111,7 @@ class MiraGeminiSetupPayloadTest {
         assertNotNull("tools[0] must be Value.Object", toolDeclObj)
         val funcDecls = toolDeclObj!!.value["functionDeclarations"] as? Value.Array
         assertNotNull("functionDeclarations must be present", funcDecls)
-        assertEquals("Must declare all 17 phone tools", 17, funcDecls!!.value.size)
+        assertEquals("Must declare all 18 phone tools", 18, funcDecls!!.value.size)
 
         val declaredNames = funcDecls.value.mapNotNull {
             ((it as? Value.Object)?.value?.get("name") as? Value.Str)?.value
@@ -119,6 +119,7 @@ class MiraGeminiSetupPayloadTest {
         val expectedTools = listOf(
             "open_app",
             "click_text",
+            "click_at",
             "tap_number",
             "show_numbers",
             "hide_numbers",
@@ -249,7 +250,7 @@ class MiraGeminiSetupPayloadTest {
         val jsonTools = jsonObj.getJSONArray("tools")
         assertEquals(1, jsonTools.length())
         val jsonFuncDecls = jsonTools.getJSONObject(0).getJSONArray("functionDeclarations")
-        assertEquals(17, jsonFuncDecls.length())
+        assertEquals(18, jsonFuncDecls.length())
 
         // Live API requirement: google_search grounding must NOT be combined with function calling
         assertFalse("google_search grounding MUST NOT be in setup alongside function calling", jsonString.contains("google_search") || jsonString.contains("googleSearch"))

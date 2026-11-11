@@ -506,4 +506,89 @@ class GeminiRestClientTest {
         val coords = GeminiRestClient.parseVisionCoordinates(prose, 1080, 2400)
         assertNull("Unparseable prose must return null", coords)
     }
+
+    @Test
+    fun testParseVisionElements_ObjectXYForm_ScalesCorrectly() {
+        val raw = """{"elements": [{"text": "Search", "role": "tab", "x": 500, "y": 800, "action": "open search"}]}"""
+        val elements = GeminiRestClient.parseVisionElements(raw, 1000, 2000)
+        assertNotNull(elements)
+        assertEquals(1, elements!!.size)
+        val elem = elements[0]
+        assertEquals("Search", elem.text)
+        assertEquals("tab", elem.role)
+        assertEquals(500, elem.xPx)
+        assertEquals(1600, elem.yPx)
+        assertEquals("open search", elem.action)
+    }
+
+    @Test
+    fun testParseVisionElements_Box2dCenter_ScalesToCenter() {
+        val raw = """{"elements": [{"text": "Search", "role": "button", "box_2d": [100, 200, 300, 400]}]}"""
+        val elements = GeminiRestClient.parseVisionElements(raw, 1000, 1000)
+        assertNotNull(elements)
+        assertEquals(1, elements!!.size)
+        // Center x = (200 + 400) / 2 = 300; Center y = (100 + 300) / 2 = 200
+        assertEquals(300, elements[0].xPx)
+        assertEquals(200, elements[0].yPx)
+    }
+
+    @Test
+    fun testParseVisionElements_PointArrayForm_ScalesCorrectly() {
+        val raw = """{"elements": [{"text": "Profile", "role": "icon", "point": [400, 300]}]}"""
+        val elements = GeminiRestClient.parseVisionElements(raw, 1000, 2000)
+        assertNotNull(elements)
+        assertEquals(1, elements!!.size)
+        // point = [y, x] -> rawX = 300 (300/1000 * 1000 = 300), rawY = 400 (400/1000 * 2000 = 800)
+        assertEquals(300, elements[0].xPx)
+        assertEquals(800, elements[0].yPx)
+    }
+
+    @Test
+    fun testParseVisionElements_TopLevelArrayForm() {
+        val raw = """[{"text": "Submit", "role": "button", "x": 500, "y": 500, "action": "submit"}]"""
+        val elements = GeminiRestClient.parseVisionElements(raw, 1000, 1000)
+        assertNotNull(elements)
+        assertEquals(1, elements!!.size)
+        assertEquals("Submit", elements[0].text)
+        assertEquals(500, elements[0].xPx)
+        assertEquals(500, elements[0].yPx)
+    }
+
+    @Test
+    fun testParseVisionElements_DecimalCoords_ParsesSuccessfully() {
+        val raw = """{"elements": [{"text": "Settings", "x": 250.5, "y": 750.5}]}"""
+        val elements = GeminiRestClient.parseVisionElements(raw, 1000, 1000)
+        assertNotNull(elements)
+        assertEquals(1, elements!!.size)
+        assertEquals(250, elements[0].xPx)
+        assertEquals(750, elements[0].yPx)
+    }
+
+    @Test
+    fun testParseVisionElements_GarbageInput_ReturnsNull() {
+        val prose = "I cannot find any elements on this screenshot because it is black."
+        val elements = GeminiRestClient.parseVisionElements(prose, 1080, 2400)
+        assertNull("Garbage prose must return null", elements)
+    }
+
+    @Test
+    fun testParseVisionElements_OutOfBoundsElement_Dropped() {
+        val raw = """{"elements": [{"text": "Valid", "x": 500, "y": 500}, {"text": "OutOfBounds", "x": 1500, "y": 500}]}"""
+        val elements = GeminiRestClient.parseVisionElements(raw, 1000, 1000)
+        assertNotNull(elements)
+        assertEquals(1, elements!!.size)
+        assertEquals("Valid", elements[0].text)
+    }
+
+    @Test
+    fun testParseVisionElements_ZeroTo1000_PxConversionWithRealDimensions() {
+        val raw = """{"elements": [{"text": "TopLeft", "x": 0, "y": 0}, {"text": "BottomRight", "x": 1000, "y": 1000}]}"""
+        val elements = GeminiRestClient.parseVisionElements(raw, 720, 1600)
+        assertNotNull(elements)
+        assertEquals(2, elements!!.size)
+        assertEquals(0, elements[0].xPx)
+        assertEquals(0, elements[0].yPx)
+        assertEquals(720, elements[1].xPx)
+        assertEquals(1600, elements[1].yPx)
+    }
 }

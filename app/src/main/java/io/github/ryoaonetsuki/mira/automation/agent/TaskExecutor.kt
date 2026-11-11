@@ -132,8 +132,22 @@ class TaskExecutor(
     private val historyStore: TaskHistoryStore? = null,
     private val apiKeyProvider: (suspend () -> String)? = null,
     var visionLocator: (suspend (target: String, nodes: List<ScreenNode>) -> Pair<Int, Int>?)? = null,
-    private val appKnowledge: io.github.ryoaonetsuki.mira.automation.AppKnowledge? = null
+    private val appKnowledge: io.github.ryoaonetsuki.mira.automation.AppKnowledge? = null,
+    var visionFirstPerception: VisionFirstPerception? = null
 ) {
+    fun getOrCreateVisionPerception(): VisionFirstPerception {
+        visionFirstPerception?.let { return it }
+        val helper = VisionFirstPerception(
+            automationPort = automation,
+            apiKeyProvider = apiKeyProvider,
+            visionDescribe = { key, bytes, dump, w, h, g ->
+                GeminiRestClient().describeScreenWithVision(key, bytes, dump, w, h, g)
+            },
+            visionLocator = { target, currentNodes -> resolveVisionCoordinates(target, currentNodes) }
+        )
+        visionFirstPerception = helper
+        return helper
+    }
     // Turn F(f): 700ms -> 350ms settle for non-open_app steps.
     private val settleDelayMs: Long = if (stepDelayMs == 0L) 0L else 350L
     // Tests pass stepDelayMs == 0, so polling is a single immediate check
@@ -622,7 +636,32 @@ class TaskExecutor(
             var prePackage: String
             var preSignature: Int
             val carried = carriedNodes
+            val nextTarget = when (step.action) {
+                TaskStep.ACTION_CLICK_TEXT -> step.stringParam("text")
+                TaskStep.ACTION_TYPE_TEXT -> step.stringParam("target") ?: step.stringParam("text")
+                TaskStep.ACTION_OPEN_APP -> step.stringParam("app") ?: step.stringParam("package")
+                else -> null
+            }
+
+            var useCarried = false
             if (carried != null && carriedPackage != null && carriedSignature != null) {
+                if (nextTarget.isNullOrBlank()) {
+                    useCarried = true
+                } else {
+                    val norm = VisionFirstPerception.normalizeTarget(nextTarget)
+                    val matches = carried.filter {
+                        it.text.contains(norm, ignoreCase = true) ||
+                            it.contentDescription.contains(norm, ignoreCase = true) ||
+                            (it.viewId.isNotBlank() && (it.viewId.equals(norm, ignoreCase = true) || it.viewId.endsWith(":id/$norm", ignoreCase = true)))
+                    }
+                    val labeledMatches = matches.filter { it.text.isNotBlank() || it.contentDescription.isNotBlank() }
+                    if (labeledMatches.size == 1) {
+                        useCarried = true
+                    }
+                }
+            }
+
+            if (useCarried && carried != null && carriedPackage != null && carriedSignature != null) {
                 preNodes = carried
                 prePackage = carriedPackage
                 preSignature = carriedSignature
@@ -630,10 +669,14 @@ class TaskExecutor(
                 carriedPackage = null
                 carriedSignature = null
             } else {
+                carriedNodes = null
+                carriedPackage = null
+                carriedSignature = null
                 enterPhase("observing", stepNumber, "reading screen (step $stepNumber)")
-                preNodes = dumpScreenSafe()
-                prePackage = automation.getCurrentPackage().orEmpty()
-                preSignature = computeNodeSignature(preNodes)
+                val perception = getOrCreateVisionPerception().perceive(goal = skill.goal, target = nextTarget)
+                preNodes = perception.nodes
+                prePackage = perception.packageName
+                preSignature = perception.screenSignature
             }
 
             // Turn G: no artificial action restrictions (owner order).
@@ -764,9 +807,19 @@ class TaskExecutor(
     fun shouldAttachScreenshot(
         nodes: List<ScreenNode>,
         lastStepHadNoEffect: Boolean,
-        lastStepWasOpenApp: Boolean = false
+        lastStepWasOpenApp: Boolean = false,
+        screenSignatureChanged: Boolean = false,
+        targetFoundInNodes: Boolean = false,
+        hasUnlabeledClickables: Boolean? = null
     ): Boolean =
-        Companion.shouldAttachScreenshot(nodes, lastStepHadNoEffect, lastStepWasOpenApp)
+        Companion.shouldAttachScreenshot(
+            nodes,
+            lastStepHadNoEffect,
+            lastStepWasOpenApp,
+            screenSignatureChanged,
+            targetFoundInNodes,
+            hasUnlabeledClickables
+        )
 
     internal suspend fun resolveVisionCoordinates(target: String, nodes: List<ScreenNode>): Pair<Int, Int>? {
         lastVisionFailureReason = null
@@ -827,18 +880,54 @@ class TaskExecutor(
                     val text = step.stringParam("text") ?: ""
                     var fallbackX = step.intParam("fallbackX") ?: step.intParam("x")
                     var fallbackY = step.intParam("fallbackY") ?: step.intParam("y")
-                    var success = automation.clickText(text, nodes, fallbackX, fallbackY)
-                    if (!success) {
-                        val visionCoords = resolveVisionCoordinates(text, nodes)
-                        if (visionCoords != null) {
-                            fallbackX = visionCoords.first
-                            fallbackY = visionCoords.second
-                            success = automation.clickAt(fallbackX.toFloat(), fallbackY.toFloat())
+
+                    val perceptionHelper = getOrCreateVisionPerception()
+                    val perception = perceptionHelper.perceive(goal = "click $text", target = text)
+                    val resolution = perceptionHelper.findTarget(perception, text, "click $text")
+
+                    var success = false
+                    if (resolution.source == TargetSource.NODES_EXACT) {
+                        success = automation.clickText(text, perception.nodes, resolution.x, resolution.y)
+                        fallbackX = resolution.x
+                        fallbackY = resolution.y
+                    } else if (resolution.source == TargetSource.VISION) {
+                        var preTap = perceptionHelper.verifyPreTap(Pair(resolution.x, resolution.y), resolution.matchedVisionElement, perception.nodes)
+                        var targetX = resolution.x
+                        var targetY = resolution.y
+
+                        if (preTap is PreTapResult.Mismatch) {
+                            perceptionHelper.recordFailedAttempt(perception.screenSignature, text)
+                            val reperception = perceptionHelper.perceive(goal = "click $text", target = text, forceVision = true)
+                            val retryRes = perceptionHelper.findTarget(reperception, text, "click $text")
+                            preTap = perceptionHelper.verifyPreTap(Pair(retryRes.x, retryRes.y), retryRes.matchedVisionElement, reperception.nodes)
+                            if (preTap is PreTapResult.Mismatch) {
+                                lastActionError = "vision/node mismatch at (${retryRes.x},${retryRes.y}): vision said '${preTap.visionText}', screen says '${preTap.nodeText}'"
+                                return false
+                            }
+                            targetX = retryRes.x
+                            targetY = retryRes.y
+                        }
+
+                        if (targetX > 0 && targetY > 0) {
+                            success = automation.clickAt(targetX.toFloat(), targetY.toFloat())
+                            fallbackX = targetX
+                            fallbackY = targetY
+                        }
+                    } else { // NODES_FALLBACK
+                        if (resolution.x > 0 && resolution.y > 0) {
+                            success = automation.clickAt(resolution.x.toFloat(), resolution.y.toFloat())
+                            fallbackX = resolution.x
+                            fallbackY = resolution.y
+                        } else {
+                            success = automation.clickText(text, nodes, fallbackX, fallbackY)
                         }
                     }
+
                     if (!success) {
                         lastActionError = if (fallbackX != null && fallbackY != null) {
                             "clickText '$text' not found and fallback coordinate tap ($fallbackX, $fallbackY) rejected/timed out"
+                        } else if (!resolution.failureReason.isNullOrBlank()) {
+                            "clickText '$text' not found on screen and vision fallback failed: ${resolution.failureReason}"
                         } else if (!lastVisionFailureReason.isNullOrBlank()) {
                             "clickText '$text' not found on screen and vision fallback failed: $lastVisionFailureReason"
                         } else {
@@ -1302,9 +1391,11 @@ class TaskExecutor(
             visionLocator: (suspend (target: String, nodes: List<ScreenNode>) -> Pair<Int, Int>?)? = null,
             visionFailureReasonProvider: (() -> String?)? = null,
             pollTimeoutMs: Long = 2000L,
-            pollIntervalMs: Long = 100L
+            pollIntervalMs: Long = 100L,
+            visionPerception: VisionFirstPerception? = null
         ): TypeFlowResult {
             var currentNodes = automation.dumpScreen()
+            val preTypeSignature = computeNodeSignature(currentNodes)
 
             fun findEditableCandidate(nodes: List<ScreenNode>): ScreenNode? {
                 if (!targetQuery.isNullOrBlank()) {
@@ -1341,6 +1432,16 @@ class TaskExecutor(
                     tapped = automation.clickAt(candidate.centerX.toFloat(), candidate.centerY.toFloat())
                 } else if (fallbackX != null && fallbackY != null && fallbackX > 0 && fallbackY > 0) {
                     tapped = automation.clickAt(fallbackX.toFloat(), fallbackY.toFloat())
+                } else if (visionPerception != null) {
+                    val query = targetQuery ?: "search text field"
+                    val perception = visionPerception.perceive(goal = "tap $query", target = query)
+                    val resolution = visionPerception.findTarget(perception, query, "tap $query")
+                    if (resolution.x > 0 && resolution.y > 0) {
+                        val preTap = visionPerception.verifyPreTap(Pair(resolution.x, resolution.y), resolution.matchedVisionElement, perception.nodes)
+                        if (preTap !is PreTapResult.Mismatch) {
+                            tapped = automation.clickAt(resolution.x.toFloat(), resolution.y.toFloat())
+                        }
+                    }
                 } else if (visionLocator != null) {
                     val coords = visionLocator(targetQuery ?: "search text field", currentNodes)
                     if (coords != null) {
@@ -1348,12 +1449,19 @@ class TaskExecutor(
                     }
                 }
 
-                // If field not found or tap did not focus, RE-SCAN screen (fresh node dump + vision)
-                if (!tapped) {
+                // If not focused after tapping, re-perceive ONCE and re-tap once
+                if (!automation.isInputFocused()) {
                     currentNodes = automation.dumpScreen()
                     candidate = findEditableCandidate(currentNodes)
                     if (candidate != null && candidate.centerX > 0 && candidate.centerY > 0) {
                         tapped = automation.clickAt(candidate.centerX.toFloat(), candidate.centerY.toFloat())
+                    } else if (visionPerception != null) {
+                        val query = targetQuery ?: "search text field"
+                        val perception = visionPerception.perceive(goal = "tap $query", target = query, forceVision = true)
+                        val resolution = visionPerception.findTarget(perception, query, "tap $query")
+                        if (resolution.x > 0 && resolution.y > 0) {
+                            tapped = automation.clickAt(resolution.x.toFloat(), resolution.y.toFloat())
+                        }
                     } else if (visionLocator != null) {
                         val coords = visionLocator(targetQuery ?: "search text field", currentNodes)
                         if (coords != null) {
@@ -1405,11 +1513,26 @@ class TaskExecutor(
                 automation.pressEnter()
             }
 
+            // Verify results appeared if pressEnter was sent
+            var hasResults = false
+            if (pressEnter) {
+                val postEnterNodes = automation.dumpScreen()
+                val postEnterSignature = computeNodeSignature(postEnterNodes)
+                hasResults = (postEnterSignature != preTypeSignature) ||
+                    postEnterNodes.size > currentNodes.size ||
+                    postEnterNodes.any { it.text.contains(text, ignoreCase = true) }
+            }
+
             val success = setOk || readBack == text
             return if (success) {
-                TypeFlowResult(true, "Successfully typed '$text'", textTyped = readBack.ifEmpty { text })
+                val msg = if (pressEnter && hasResults) {
+                    "Successfully typed '$text' and submitted search; results appeared on screen"
+                } else {
+                    "Successfully typed '$text'"
+                }
+                TypeFlowResult(true, msg, textTyped = readBack.ifEmpty { text })
             } else {
-                TypeFlowResult(false, "typeText failed to set text '$text' (read back: '$readBack')")
+                TypeFlowResult(false, "typeText failed to set text '$text' (read back: '$readBack', no focus or change)")
             }
         }
 
@@ -1426,15 +1549,26 @@ class TaskExecutor(
         fun shouldAttachScreenshot(
             nodes: List<ScreenNode>,
             lastStepHadNoEffect: Boolean,
-            lastStepWasOpenApp: Boolean = false
+            lastStepWasOpenApp: Boolean = false,
+            screenSignatureChanged: Boolean = false,
+            targetFoundInNodes: Boolean = false,
+            hasUnlabeledClickables: Boolean? = null
         ): Boolean {
             // (1) Just opened an app — look at its home screen before deciding.
             if (lastStepWasOpenApp) return true
             // (2) No nodes at all — pixels are the only signal.
             if (nodes.isEmpty()) return true
+
+            // (4) Screen signature changed (real screen change) AND
+            // (goal's target was not found by nodes on the new screen OR the new screen has unlabeled clickables)
+            val clickableNodes = nodes.filter { it.isClickable }
+            val unlabeled = hasUnlabeledClickables ?: (clickableNodes.isNotEmpty() && clickableNodes.any { it.text.isBlank() && it.contentDescription.isBlank() })
+            if (screenSignatureChanged && (!targetFoundInNodes || unlabeled)) {
+                return true
+            }
+
             // (3) Previous step had NO effect AND the text is insufficient.
             if (!lastStepHadNoEffect) return false
-            val clickableNodes = nodes.filter { it.isClickable }
             if (clickableNodes.isNotEmpty()) {
                 val unlabeledCount = clickableNodes.count { it.text.isBlank() && it.contentDescription.isBlank() }
                 if (unlabeledCount * 2 > clickableNodes.size) return true

@@ -416,4 +416,63 @@ class GeminiRestClientTest {
             server.stop()
         }
     }
+
+    @Test
+    fun testParseVisionCoordinates_Standard1080x2400_ScalesCorrectly() {
+        val json = """{"x": 500, "y": 250}"""
+        val coords = GeminiRestClient.parseVisionCoordinates(json, 1080, 2400)
+        assertNotNull(coords)
+        assertEquals(540, coords!!.first)
+        assertEquals(600, coords.second)
+    }
+
+    @Test
+    fun testParseVisionCoordinates_NonStandardMetrics_ScalesToRealDisplay() {
+        // e.g. 720 x 1600 budget display
+        val json = """{"x": 500, "y": 500}"""
+        val coords720 = GeminiRestClient.parseVisionCoordinates(json, 720, 1600)
+        assertNotNull(coords720)
+        assertEquals(360, coords720!!.first)
+        assertEquals(800, coords720.second)
+
+        // e.g. 1440 x 3120 high-res Pro display
+        val coords1440 = GeminiRestClient.parseVisionCoordinates(json, 1440, 3120)
+        assertNotNull(coords1440)
+        assertEquals(720, coords1440!!.first)
+        assertEquals(1560, coords1440.second)
+    }
+
+    @Test
+    fun testParseVisionCoordinates_MarkdownCodeFences_ParsesSuccessfully() {
+        val raw = "```json\n{\"x\": 100, \"y\": 200}\n```"
+        val coords = GeminiRestClient.parseVisionCoordinates(raw, 1000, 1000)
+        assertNotNull(coords)
+        assertEquals(100, coords!!.first)
+        assertEquals(200, coords.second)
+    }
+
+    @Test
+    fun testParseVisionCoordinates_PointArrayFormat_ScalesCorrectly() {
+        // {"point": [y, x]} format used by some vision locators
+        val raw = """{"point": [300, 400]}"""
+        val coords = GeminiRestClient.parseVisionCoordinates(raw, 1000, 2000)
+        assertNotNull(coords)
+        assertEquals(400, coords!!.first)
+        assertEquals(600, coords.second)
+    }
+
+    @Test
+    fun testParseVisionCoordinates_OutOfBounds_ReturnsNull() {
+        // Negative coordinates or coordinates beyond screen size
+        val jsonOutOfBounds = """{"x": 1500, "y": 500}"""
+        val coords = GeminiRestClient.parseVisionCoordinates(jsonOutOfBounds, 720, 1600)
+        assertNull("Coordinates exceeding screen dimensions must return null", coords)
+    }
+
+    @Test
+    fun testParseVisionCoordinates_UnparseableProse_ReturnsNull() {
+        val prose = "I cannot find the search magnifier on this screen."
+        val coords = GeminiRestClient.parseVisionCoordinates(prose, 1080, 2400)
+        assertNull("Unparseable prose must return null", coords)
+    }
 }

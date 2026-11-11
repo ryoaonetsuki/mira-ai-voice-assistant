@@ -1928,4 +1928,133 @@ class TaskExecutorTest {
             result.message.contains("custom vision locator returned null")
         )
     }
+
+    @Test
+    fun testShouldAttachScreenshot_Condition4_ScreenSignatureChanged_TargetAbsent_ReturnsTrue() {
+        val labeledNode = ScreenNode(
+            index = 0,
+            text = "Home",
+            contentDescription = "",
+            className = "android.widget.Button",
+            viewId = "home",
+            isClickable = true,
+            isEditable = false,
+            isScrollable = false,
+            isCheckable = false,
+            isEnabled = true,
+            left = 0, top = 0, right = 100, bottom = 100, centerX = 50, centerY = 50
+        )
+        val nodes = listOf(labeledNode)
+
+        // Screen signature changed + target absent from new nodes -> true
+        val result = TaskExecutor.shouldAttachScreenshot(
+            nodes = nodes,
+            lastStepHadNoEffect = false,
+            lastStepWasOpenApp = false,
+            screenSignatureChanged = true,
+            targetFoundInNodes = false
+        )
+        assertTrue("Condition 4 must trigger when signature changed and target is absent", result)
+    }
+
+    @Test
+    fun testShouldAttachScreenshot_UnchangedScreen_ExactMatchPresent_ReturnsFalse() {
+        val labeledNode = ScreenNode(
+            index = 0,
+            text = "Search",
+            contentDescription = "Search button",
+            className = "android.widget.Button",
+            viewId = "search",
+            isClickable = true,
+            isEditable = false,
+            isScrollable = false,
+            isCheckable = false,
+            isEnabled = true,
+            left = 0, top = 0, right = 100, bottom = 100, centerX = 50, centerY = 50
+        )
+        val nodes = listOf(labeledNode)
+
+        // Unchanged screen + exact match present -> false
+        val result = TaskExecutor.shouldAttachScreenshot(
+            nodes = nodes,
+            lastStepHadNoEffect = false,
+            lastStepWasOpenApp = false,
+            screenSignatureChanged = false,
+            targetFoundInNodes = true
+        )
+        assertFalse("Unchanged screen with exact match present must return false", result)
+    }
+
+    @Test
+    fun testShouldAttachScreenshot_ExistingConditionsStillPass() {
+        val labeledNode = ScreenNode(
+            index = 0,
+            text = "Button",
+            contentDescription = "",
+            className = "android.widget.Button",
+            viewId = "btn",
+            isClickable = true,
+            isEditable = false,
+            isScrollable = false,
+            isCheckable = false,
+            isEnabled = true,
+            left = 0, top = 0, right = 100, bottom = 100, centerX = 50, centerY = 50
+        )
+        // (1) lastStepWasOpenApp
+        assertTrue("Condition 1 open_app must return true", TaskExecutor.shouldAttachScreenshot(listOf(labeledNode), false, lastStepWasOpenApp = true))
+
+        // (2) empty nodes
+        assertTrue("Condition 2 empty nodes must return true", TaskExecutor.shouldAttachScreenshot(emptyList(), false, false))
+
+        // (3) lastStepHadNoEffect with unlabeled clickables > 50%
+        val unlabeledNode = ScreenNode(
+            index = 1,
+            text = "",
+            contentDescription = "",
+            className = "android.widget.ImageButton",
+            viewId = "icon",
+            isClickable = true,
+            isEditable = false,
+            isScrollable = false,
+            isCheckable = false,
+            isEnabled = true,
+            left = 0, top = 0, right = 100, bottom = 100, centerX = 50, centerY = 50
+        )
+        assertTrue(
+            "Condition 3 failed step with majority unlabeled nodes must return true",
+            TaskExecutor.shouldAttachScreenshot(listOf(unlabeledNode), lastStepHadNoEffect = true, lastStepWasOpenApp = false)
+        )
+    }
+
+    @Test
+    fun testReplaySkillFrom_CarriedDumpDiscardedWhenNextTargetAbsentOrAmbiguous() = runBlocking {
+        var dumpCallCount = 0
+        val fakePort = object : FakeAutomationPort() {
+            override fun dumpScreen(): List<ScreenNode> {
+                dumpCallCount++
+                return screenNodes
+            }
+        }
+        val memory = SkillMemoryService()
+        val executor = TaskExecutor(
+            automation = fakePort,
+            skills = memory,
+            stepDelayMs = 0L
+        )
+
+        // Step 1: click Home.
+        // Step 2: click AbsentTarget (target absent from carried nodes).
+        val skill = Skill(
+            goal = "two-step test",
+            steps = listOf(
+                TaskStep(action = TaskStep.ACTION_CLICK_TEXT, params = mapOf("text" to "Home")),
+                TaskStep(action = TaskStep.ACTION_CLICK_TEXT, params = mapOf("text" to "AbsentTarget"))
+            )
+        )
+
+        // When AbsentTarget is absent from carried nodes, carried dump is discarded and a fresh dump is performed.
+        val initialDumpCalls = dumpCallCount
+        executor.replaySkillFrom(skill, startIndex = 0)
+        assertTrue("Carried dump must be discarded and screen re-dumped when target is absent", dumpCallCount > initialDumpCalls)
+    }
 }

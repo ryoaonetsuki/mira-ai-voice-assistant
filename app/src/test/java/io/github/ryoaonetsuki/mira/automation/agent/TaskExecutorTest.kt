@@ -120,7 +120,29 @@ class TaskExecutorTest {
         override fun clickAt(x: Float, y: Float): Boolean {
             if (!actionSuccess) return false
             actionsPerformed.add("clickAt:$x,$y")
+            inputFocusedState = true
             mutateScreenState("clickedAt:$x,$y")
+            return true
+        }
+
+        var inputFocusedState: Boolean = false
+        var currentFieldText: String? = null
+        var setAttempts: Int = 0
+        var failFirstSet: Boolean = false
+
+        override fun isInputFocused(): Boolean = inputFocusedState
+        override fun getFocusedText(): String? = currentFieldText
+
+        override fun setTextOnFocused(text: String): Boolean {
+            if (!actionSuccess) return false
+            setAttempts++
+            actionsPerformed.add("setTextOnFocused:$text#$setAttempts")
+            if (failFirstSet && setAttempts == 1) {
+                currentFieldText = "mismatched_text"
+                return true
+            }
+            currentFieldText = text
+            mutateScreenState("setTextOnFocused:$text")
             return true
         }
 
@@ -1546,5 +1568,247 @@ class TaskExecutorTest {
         val result = executor.replaySkillDirect(skill)
         assertEquals(TaskStatus.FAILED, result.status)
         assertFalse("dialNumber must NOT have been called with empty number", fakePort.actionsPerformed.any { it.startsWith("dialNumber") })
+    }
+
+    @Test
+    fun testVisionFallbackTrigger_NodeSearchFailsCallsVision_NodeSearchSucceedsDoesNotCallVision() = runBlocking {
+        var visionLocatorCalledWith: String? = null
+        val visionLocator: suspend (String, List<ScreenNode>) -> Pair<Int, Int>? = { target, _ ->
+            visionLocatorCalledWith = target
+            Pair(450, 120)
+        }
+
+        // Case A: Node search fails -> vision fallback is requested and tapped
+        val fakePortNoMatch = FakeAutomationPort(
+            requireNodeMatchForClickText = true,
+            screenNodes = listOf(
+                ScreenNode(
+                    index = 0,
+                    text = "Profile",
+                    contentDescription = "Profile tab",
+                    className = "android.widget.TextView",
+                    viewId = "profile_tab",
+                    isClickable = true,
+                    isEditable = false,
+                    isScrollable = false,
+                    isCheckable = false,
+                    isEnabled = true,
+                    left = 10,
+                    top = 10,
+                    right = 100,
+                    bottom = 50,
+                    centerX = 55,
+                    centerY = 30
+                )
+            )
+        )
+        val executorWithVision = TaskExecutor(
+            automation = fakePortNoMatch,
+            skills = SkillMemoryService(InMemorySkillStore()),
+            stepDelayMs = 0L,
+            visionLocator = visionLocator
+        )
+
+        val searchStep = TaskStep(action = TaskStep.ACTION_CLICK_TEXT, params = mapOf("text" to "Search Magnifier"))
+        val skillNoMatch = Skill(goal = "search facebook", steps = listOf(searchStep))
+        val resultA = executorWithVision.replaySkillDirect(skillNoMatch)
+
+        assertEquals(TaskStatus.SUCCESS, resultA.status)
+        assertEquals("Search Magnifier", visionLocatorCalledWith)
+        assertTrue(
+            "clickAt must have been dispatched with vision coordinates (450, 120)",
+            fakePortNoMatch.actionsPerformed.contains("clickAt:450.0,120.0")
+        )
+
+        // Case B: Node search succeeds -> vision fallback is NOT called
+        visionLocatorCalledWith = null
+        val fakePortWithMatch = FakeAutomationPort(
+            requireNodeMatchForClickText = true,
+            screenNodes = listOf(
+                ScreenNode(
+                    index = 0,
+                    text = "Search Magnifier",
+                    contentDescription = "Search",
+                    className = "android.widget.Button",
+                    viewId = "search_btn",
+                    isClickable = true,
+                    isEditable = false,
+                    isScrollable = false,
+                    isCheckable = false,
+                    isEnabled = true,
+                    left = 10,
+                    top = 10,
+                    right = 100,
+                    bottom = 50,
+                    centerX = 55,
+                    centerY = 30
+                )
+            )
+        )
+        val executorDirect = TaskExecutor(
+            automation = fakePortWithMatch,
+            skills = SkillMemoryService(InMemorySkillStore()),
+            stepDelayMs = 0L,
+            visionLocator = visionLocator
+        )
+
+        val resultB = executorDirect.replaySkillDirect(skillNoMatch)
+        assertEquals(TaskStatus.SUCCESS, resultB.status)
+        assertNull("Vision locator must NOT be called when node search succeeds", visionLocatorCalledWith)
+        assertTrue(
+            "clickText must be called directly",
+            fakePortWithMatch.actionsPerformed.contains("clickText:Search Magnifier")
+        )
+        assertFalse(
+            "clickAt must NOT be called when node search succeeds",
+            fakePortWithMatch.actionsPerformed.any { it.startsWith("clickAt") }
+        )
+    }
+
+    @Test
+    fun testTypeFlow_FocusThenSetThenReadbackAndRetryOnMismatch() = runBlocking {
+        // Sub-test A: Normal flow - focus field, wait, set text, read back, enter
+        val normalPort = FakeAutomationPort()
+        normalPort.inputFocusedState = false
+        normalPort.screenNodes = listOf(
+            ScreenNode(
+                index = 0,
+                text = "Search input",
+                contentDescription = "Search",
+                className = "android.widget.EditText",
+                viewId = "search_src_text",
+                isClickable = true,
+                isEditable = true,
+                isScrollable = false,
+                isCheckable = false,
+                isEnabled = true,
+                left = 50,
+                top = 50,
+                right = 500,
+                bottom = 150,
+                centerX = 275,
+                centerY = 100
+            )
+        )
+
+        val normalResult = TaskExecutor.executeTypeFlow(
+            automation = normalPort,
+            text = "salman",
+            targetQuery = "Search input",
+            pressEnter = true,
+            pollTimeoutMs = 0L
+        )
+
+        assertTrue("executeTypeFlow must succeed", normalResult.success)
+        assertEquals("salman", normalResult.textTyped)
+        assertTrue("Must tap to focus editable field", normalPort.actionsPerformed.contains("clickAt:275.0,100.0"))
+        assertTrue("Must set text on focused field", normalPort.actionsPerformed.any { it.startsWith("setTextOnFocused:salman") })
+        assertTrue("Must press enter after typing", normalPort.actionsPerformed.contains("pressEnter"))
+        assertEquals("Readback must equal typed text", "salman", normalPort.getFocusedText())
+        assertEquals("Should set once when readback matches immediately", 1, normalPort.setAttempts)
+
+        // Sub-test B: Readback mismatch triggers retry
+        val retryPort = FakeAutomationPort()
+        retryPort.inputFocusedState = true // already focused
+        retryPort.failFirstSet = true
+
+        val retryResult = TaskExecutor.executeTypeFlow(
+            automation = retryPort,
+            text = "android dev",
+            pressEnter = false,
+            pollTimeoutMs = 0L
+        )
+
+        assertTrue("executeTypeFlow must succeed after retry", retryResult.success)
+        assertEquals("android dev", retryResult.textTyped)
+        assertEquals("Must retry setting text once upon readback mismatch", 2, retryPort.setAttempts)
+        assertEquals("Final text must match intended text after retry", "android dev", retryPort.getFocusedText())
+        assertFalse("Must NOT press enter when pressEnter is false", retryPort.actionsPerformed.contains("pressEnter"))
+    }
+
+    @Test
+    fun testScrollGuard_FiveConsecutiveScrollsAllExecuteWithoutFailFast() = runBlocking {
+        // In content feeds (Facebook, YouTube), headers dominate node dumps,
+        // so simulateEffect is false (node signature does not change across scrolls).
+        val feedPort = FakeAutomationPort(
+            currentPkg = "com.facebook.katana",
+            simulateEffect = false
+        )
+        val executor = TaskExecutor(
+            automation = feedPort,
+            skills = SkillMemoryService(InMemorySkillStore()),
+            stepDelayMs = 0L
+        )
+
+        val fiveScrollSteps = (1..5).map {
+            TaskStep(action = TaskStep.ACTION_SCROLL, params = mapOf("direction" to "down"))
+        }
+        val feedScrollSkill = Skill(
+            goal = "browse facebook feed",
+            steps = fiveScrollSteps
+        )
+
+        val result = executor.replaySkillDirect(feedScrollSkill)
+        assertEquals("Skill with 5 consecutive scrolls must SUCCEED", TaskStatus.SUCCESS, result.status)
+        val scrollDispatches = feedPort.actionsPerformed.filter { it == "scroll:down" }
+        assertEquals("All 5 scroll actions must execute without being aborted by loop guard", 5, scrollDispatches.size)
+
+        // Also verify verifyEffect logic directly for scrolls in same package
+        for (i in 1..5) {
+            val verified = TaskExecutor.verifyEffect(
+                step = TaskStep(action = TaskStep.ACTION_SCROLL, params = mapOf("direction" to "down")),
+                prePackage = "com.facebook.katana",
+                preSignature = 12345,
+                postPackage = "com.facebook.katana",
+                postSignature = 12345, // identical signature hash in feed!
+                goal = "browse facebook feed",
+                targetApp = "com.facebook.katana"
+            )
+            assertTrue("Scroll within the same package must verify as true even with identical signature", verified)
+        }
+    }
+
+    @Test
+    fun testAppKnowledge_FacebookAndYoutubeContainSearchFlowAndScrollNotes() {
+        // Load knowledge via pure-JVM file reader pointing to project assets
+        val knowledge = AppKnowledge { path ->
+            val file = java.io.File(path).let {
+                if (it.exists()) it else java.io.File("app/src/main/assets", path)
+            }
+            if (file.exists()) file.readText() else null
+        }
+
+        // 1. Facebook note
+        val fbNote = knowledge.noteForTarget("com.facebook.katana")
+        assertNotNull("Facebook knowledge note must load", fbNote)
+        assertTrue("Facebook note must mention top bar search icon", fbNote!!.contains("top bar", ignoreCase = true))
+        assertTrue("Facebook note must mention vision coordinates for icon-only magnifier", fbNote.contains("vision coordinates", ignoreCase = true))
+        assertTrue("Facebook note must explain screen after tapping (search field + keyboard)", fbNote.contains("keyboard", ignoreCase = true))
+        assertTrue("Facebook note must state typing needs field focused first", fbNote.contains("focused first", ignoreCase = true))
+        assertTrue("Facebook note must verify text read back", fbNote.contains("read back", ignoreCase = true))
+        assertTrue("Facebook note must state feed scrolls are normal and not loop failure", fbNote.contains("not a loop failure", ignoreCase = true))
+
+        // 2. YouTube note
+        val ytNote = knowledge.noteForTarget("com.google.android.youtube")
+        assertNotNull("YouTube knowledge note must load", ytNote)
+        assertTrue("YouTube note must mention magnifier icon in top bar", ytNote!!.contains("magnifier", ignoreCase = true))
+        assertTrue("YouTube note must mention vision coordinates fallback", ytNote.contains("vision coordinates", ignoreCase = true))
+        assertTrue("YouTube note must mention search field and keyboard", ytNote.contains("keyboard", ignoreCase = true))
+        assertTrue("YouTube note must mention focus before typing", ytNote.contains("focused first", ignoreCase = true))
+        assertTrue("YouTube note must state video/feed scrolls are normal and not loop failure", ytNote.contains("not a loop failure", ignoreCase = true))
+
+        // 3. Shared search flow note
+        val searchNote = knowledge.searchFlowNote()
+        assertNotNull("Search flow note must load", searchNote)
+        assertTrue("Search note must mention magnifier with no text label", searchNote!!.contains("magnifier", ignoreCase = true))
+        assertTrue("Search note must mention vision coordinates", searchNote.contains("vision coordinates", ignoreCase = true))
+        assertTrue("Search note must mention read back to verify", searchNote.contains("read back", ignoreCase = true))
+        assertTrue("Search note must mention feed scrolls are not a loop failure", searchNote.contains("not a loop failure", ignoreCase = true))
+
+        // 4. Summary for prompt
+        val summary = knowledge.summaryForPrompt()
+        assertTrue("Summary must include search flow", summary.contains("Cross-App Search Flow", ignoreCase = true))
+        assertTrue("Summary must include Facebook notes", summary.contains("Facebook Notes", ignoreCase = true))
+        assertTrue("Summary must include YouTube notes", summary.contains("YouTube Notes", ignoreCase = true))
     }
 }

@@ -654,15 +654,6 @@ class MiraAccessibilityService : AccessibilityService() {
             }
         } catch (_: Throwable) {}
 
-        val isFocused = try {
-            val root = rootInActiveWindow
-            root?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) != null
-        } catch (_: Throwable) { false }
-        if (isFocused) {
-            val metrics = resources?.displayMetrics
-            val h = metrics?.heightPixels ?: 2400
-            if (y >= (h * 0.55f).toInt()) return true
-        }
         return false
     }
 

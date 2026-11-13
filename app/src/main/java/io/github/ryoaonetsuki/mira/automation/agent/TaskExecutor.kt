@@ -53,10 +53,10 @@ interface AutomationPort {
         fallbackX: Int?,
         fallbackY: Int?
     ): Boolean {
-        if (clickText(text, nodes)) return true
         if (fallbackX != null && fallbackY != null && fallbackX > 0 && fallbackY > 0) {
-            return clickAt(fallbackX.toFloat(), fallbackY.toFloat())
+            if (clickAt(fallbackX.toFloat(), fallbackY.toFloat())) return true
         }
+        if (clickText(text, nodes)) return true
         return false
     }
     fun clickNumber(number: Int, nodes: List<ScreenNode>): Boolean {
@@ -110,6 +110,12 @@ data class TypeFlowResult(
     val success: Boolean,
     val message: String,
     val textTyped: String = ""
+)
+
+data class WaitForTextResult(
+    val found: Boolean,
+    val elapsedMs: Long,
+    val nodes: List<ScreenNode>
 )
 
 /**
@@ -1052,12 +1058,14 @@ class TaskExecutor(
                             actualX = reResolved.centerX.toFloat()
                             actualY = reResolved.centerY.toFloat()
                         } else {
-                            logWarn("Stale recorded coordinate ($x, $y): target '$targetText' not found at coordinates in fresh node dump — skipping blind tap")
-                            return true
+                            lastActionError = "Stale recorded coordinate ($x, $y): target '$targetText' not found at coordinates in fresh node dump — tap skipped, step failed"
+                            logWarn("Stale recorded coordinate ($x, $y): target '$targetText' not found at coordinates in fresh node dump — tap skipped, step failed")
+                            return false
                         }
                     } else if (nodes.isNotEmpty() && !nodes.any { x in it.left..it.right && y in it.top..it.bottom }) {
-                        logWarn("Stale recorded coordinate ($x, $y): no clickable element found at coordinates in fresh node dump — skipping blind tap")
-                        return true
+                        lastActionError = "Stale recorded coordinate ($x, $y): no clickable element found at coordinates in fresh node dump — tap skipped, step failed"
+                        logWarn("Stale recorded coordinate ($x, $y): no clickable element found at coordinates in fresh node dump — tap skipped, step failed")
+                        return false
                     } else {
                         actualX = x.toFloat()
                         actualY = y.toFloat()
@@ -1374,10 +1382,10 @@ class TaskExecutor(
                             true
                         }
                     } else {
-                        // Scrolling within the same package is valid progress!
-                        // In feeds (Facebook, YouTube), headers keep preSignature == postSignature,
-                        // which must not fail or be treated as no-effect.
-                        true
+                        // Scrolling within the same package is valid progress only if
+                        // the screen actually changed — a rejected swipe at the bottom
+                        // of a feed must not report success.
+                        postSignature != preSignature || frameChanged == true
                     }
                 }
                 TaskStep.ACTION_CLICK_TEXT,
@@ -1403,7 +1411,16 @@ class TaskExecutor(
                         } else if (isWeb) {
                             isBrowserPackage(postPackage) || frameChanged == true
                         } else {
-                            true
+                            // A-M5/A-M18: when the target is unknown, a package change
+                            // away from a known non-launcher app is a failure, not an effect.
+                            if (prePackage.isNotEmpty()
+                                && !isLauncherPackage(prePackage)
+                                && prePackage != "io.github.ryoaonetsuki.mira"
+                                && postPackage != prePackage) {
+                                false
+                            } else {
+                                true
+                            }
                         }
                     } else {
                         postSignature != preSignature || frameChanged == true
@@ -1615,6 +1632,31 @@ class TaskExecutor(
                 if (unlabeledCount * 2 > clickableNodes.size) return true
             }
             return false
+        }
+
+        suspend fun waitForText(
+            automation: AutomationPort,
+            text: String,
+            timeoutMs: Long,
+            pollIntervalMs: Long = 1000L
+        ): WaitForTextResult {
+            val start = System.currentTimeMillis()
+            var nodes: List<ScreenNode> = emptyList()
+            while (true) {
+                val elapsed = System.currentTimeMillis() - start
+                if (elapsed >= timeoutMs) {
+                    return WaitForTextResult(found = false, elapsedMs = elapsed, nodes = nodes)
+                }
+                nodes = automation.dumpScreen()
+                if (nodes.any { it.text.contains(text, ignoreCase = true) || it.contentDescription.contains(text, ignoreCase = true) }) {
+                    return WaitForTextResult(found = true, elapsedMs = elapsed, nodes = nodes)
+                }
+                val remaining = timeoutMs - elapsed
+                val sleepMs = minOf(pollIntervalMs, remaining)
+                if (sleepMs > 0) {
+                    delay(sleepMs)
+                }
+            }
         }
     }
 }

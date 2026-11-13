@@ -1272,7 +1272,9 @@ class MicService : Service() {
         targetApp = targetApp ?: currentAutomationTarget,
         goal = goal ?: lastAutomationGoal,
         skillsService = skillsService,
-        appKnowledge = appKnowledge ?: this@MicService.appKnowledge
+        appKnowledge = appKnowledge ?: this@MicService.appKnowledge,
+        appPacing = appPacing,
+        screenPort = screenPort()
     ).also { response ->
         val success = (response.value["success"] as? Value.Bool)?.value == true
         if (success && name.equals("open_app", ignoreCase = true)) {
@@ -1754,7 +1756,9 @@ internal suspend fun executeFunctionCall(
     targetApp: String? = null,
     goal: String? = null,
     skillsService: SkillMemoryService? = null,
-    appKnowledge: io.github.ryoaonetsuki.mira.automation.AppKnowledge? = null
+    appKnowledge: io.github.ryoaonetsuki.mira.automation.AppKnowledge? = null,
+    appPacing: AppPacing = MIRA_DEFAULT_OPERATING_PACE.appPacing(),
+    screenPort: MiraScreenPort? = null
 ): Value.Object {
     val startTimeMs = System.currentTimeMillis()
     val argsSummary = (typedArgs.ifEmpty { rawArgs }).toString()
@@ -1821,7 +1825,9 @@ internal suspend fun executeFunctionCall(
             resolvedTarget = resolvedTarget,
             resolvedGoal = resolvedGoal,
             skillsService = skillsService,
-            appKnowledge = appKnowledge
+            appKnowledge = appKnowledge,
+            appPacing = appPacing,
+            screenPort = screenPort
         )
         val latencyMs = System.currentTimeMillis() - startTimeMs
         val success = (response.value["success"] as? Value.Bool)?.value
@@ -1848,7 +1854,9 @@ private suspend fun executeFunctionCallInternal(
     resolvedTarget: String? = null,
     resolvedGoal: String? = null,
     skillsService: SkillMemoryService? = null,
-    appKnowledge: io.github.ryoaonetsuki.mira.automation.AppKnowledge? = null
+    appKnowledge: io.github.ryoaonetsuki.mira.automation.AppKnowledge? = null,
+    appPacing: AppPacing = MIRA_DEFAULT_OPERATING_PACE.appPacing(),
+    screenPort: MiraScreenPort? = null
 ): Value.Object {
     val normName = name.lowercase(Locale.ROOT)
 
@@ -2058,7 +2066,7 @@ private suspend fun executeFunctionCallInternal(
             var actionSuccess = if (resolution.source == TargetSource.NODES_EXACT) {
                 automationPort.clickText(text, perception.nodes, tapX, tapY)
             } else if (tapX != null && tapY != null && tapX > 0 && tapY > 0) {
-                screenPort()?.let { sp ->
+                screenPort?.let { sp ->
                     val result = sp.tapXY(tapX, tapY)
                     result is MiraActionResult.Ok
                 } ?: automationPort.clickAt(tapX.toFloat(), tapY.toFloat())
@@ -2181,7 +2189,7 @@ private suspend fun executeFunctionCallInternal(
             val preSignature = TaskExecutor.computeNodeSignature(preNodes)
 
             delay(appPacing.waitBefore(System.currentTimeMillis()))
-            val actionSuccess = screenPort()?.let { sp ->
+            val actionSuccess = screenPort?.let { sp ->
                 val result = sp.tapXY(x, y)
                 result is MiraActionResult.Ok
             } ?: automationPort.clickAt(x.toFloat(), y.toFloat())
@@ -2549,7 +2557,7 @@ private suspend fun executeFunctionCallInternal(
             val preSignature = TaskExecutor.computeNodeSignature(preNodes)
 
             delay(appPacing.waitBefore(System.currentTimeMillis()))
-            val actionSuccess = screenPort()?.let { sp ->
+            val actionSuccess = screenPort?.let { sp ->
                 val result = sp.scroll(ref = null, snapshotId = null, down = direction == "down")
                 result is MiraActionResult.Ok
             } ?: automationPort.scroll(direction)

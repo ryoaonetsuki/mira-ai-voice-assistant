@@ -43,9 +43,22 @@ class CallResilienceTest {
         assertTrue(CallRestartPolicy.isTerminalFailure("Gemini key missing — add it in Settings"))
         assertTrue(CallRestartPolicy.isTerminalFailure("Microphone permission not granted — allow it in Settings"))
         assertTrue(CallRestartPolicy.isTerminalFailure("Free-tier limit reached: maximum 1 concurrent sessions allowed"))
+        assertTrue(CallRestartPolicy.isTerminalFailure("HTTP 401 Unauthorized"))
+        assertTrue(CallRestartPolicy.isTerminalFailure("API key not valid. Please pass a valid API key"))
+        assertTrue(CallRestartPolicy.isTerminalFailure("403 permission denied"))
+        assertTrue(CallRestartPolicy.isTerminalFailure("400 bad request: invalid model"))
         assertFalse(CallRestartPolicy.isTerminalFailure("Live voice: Connection failed after 5 retries — tap to retry"))
         assertFalse(CallRestartPolicy.isTerminalFailure("socket-dropped: websocket closed (state=CONNECTED)"))
         assertFalse(CallRestartPolicy.isTerminalFailure("Live voice: Setup timed out after 15s — tap to retry"))
+    }
+
+    @Test
+    fun testShouldRestart_CappedAtMaxAttempts() {
+        assertTrue(CallRestartPolicy.shouldRestart(0, "Live voice: Connection failed after 5 retries — tap to retry"))
+        assertTrue(CallRestartPolicy.shouldRestart(4, "Live voice: Connection failed after 5 retries — tap to retry"))
+        assertFalse(CallRestartPolicy.shouldRestart(5, "Live voice: Connection failed after 5 retries — tap to retry"))
+        assertFalse(CallRestartPolicy.shouldRestart(0, "HTTP 401 Unauthorized"))
+        assertFalse(CallRestartPolicy.shouldRestart(0, "API key not valid. Please pass a valid API key"))
     }
 
     @Test

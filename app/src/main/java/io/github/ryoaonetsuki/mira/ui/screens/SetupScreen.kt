@@ -199,6 +199,8 @@ fun SetupScreen(
         )
     }
 
+    var isOverlayGranted by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
+
     val checkStandardIntegrations: () -> Boolean = {
         listOf(
             Manifest.permission.CAMERA,
@@ -229,6 +231,7 @@ fun SetupScreen(
                     ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
                 } else true
                 isNotificationListenerEnabled = NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
+                isOverlayGranted = Settings.canDrawOverlays(context)
                 areStandardIntegrationsGranted = checkStandardIntegrations()
             }
         }
@@ -644,7 +647,6 @@ fun SetupScreen(
 
                 // Required 5: Overlay
                 item {
-                    val isOverlayGranted = Settings.canDrawOverlays(context)
                     PermissionRow(
                         title = "Display Over Other Apps (Required for Tap Numbers)",
                         subtitle = "Allows floating orb over apps and home screen, and tap-number badges",
@@ -696,10 +698,10 @@ fun SetupScreen(
                 } else true
                 isAccessibilityEnabled = MiraAccessibilityService.isEnabled(context)
                 isNotificationListenerEnabled = NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
+                isOverlayGranted = Settings.canDrawOverlays(context)
                 areStandardIntegrationsGranted = checkStandardIntegrations()
             }
 
-            val isOverlayGranted = Settings.canDrawOverlays(context)
             val allPermissionsGranted = hasMicPermission && isBatteryIgnoringOptimizations && hasFileAccess && isAccessibilityEnabled && isOverlayGranted
             val isReady = allPermissionsGranted
             MiraButton(

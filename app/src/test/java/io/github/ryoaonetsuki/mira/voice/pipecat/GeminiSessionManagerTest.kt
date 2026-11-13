@@ -103,6 +103,7 @@ class GeminiSessionManagerTest {
         var disconnectCallCount = 0
         var releaseCallCount = 0
         val sentMessages = mutableListOf<String>()
+        val sentFunctionResponses = mutableListOf<Triple<String, String, Value.Object>>()
         private var sessionEndedFiredOnDisconnect = false
 
         override fun connect(options: MiraGeminiServiceOptions) {
@@ -131,6 +132,10 @@ class GeminiSessionManagerTest {
 
         override fun sendUserMessage(content: String) {
             sentMessages.add(content)
+        }
+
+        override fun sendFunctionResponse(id: String, name: String, response: Value.Object) {
+            sentFunctionResponses.add(Triple(id, name, response))
         }
     }
 
@@ -1056,5 +1061,22 @@ class GeminiSessionManagerTest {
             "handle_must_survive_stage4_silence",
             (sessionResumption.value["handle"] as Value.Str).value
         )
+    }
+
+    @Test
+    fun test26_SendFunctionResponse_RecordsOnFakeClient() = runTest {
+        val manager = createManager(this)
+        manager.startSession()
+        runCurrent()
+        val client = fakeFactory.createdClients[0]
+
+        val response = Value.Object(mapOf("result" to Value.Str("ok")))
+        manager.sendFunctionResponse("call_1", "open_app", response)
+        runCurrent()
+
+        assertEquals(1, client.sentFunctionResponses.size)
+        assertEquals("call_1", client.sentFunctionResponses[0].first)
+        assertEquals("open_app", client.sentFunctionResponses[0].second)
+        assertEquals(response, client.sentFunctionResponses[0].third)
     }
 }

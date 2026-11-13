@@ -11,7 +11,7 @@ plugins {
 android {
     namespace = "io.github.ryoaonetsuki.mira"
     compileSdk = 36
-    ndkVersion = "26.3.11579264"
+    ndkVersion = "28.2.13676358"
 
     defaultConfig {
         applicationId = "io.github.ryoaonetsuki.mira"

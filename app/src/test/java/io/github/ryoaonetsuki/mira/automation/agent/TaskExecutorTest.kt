@@ -1776,18 +1776,33 @@ class TaskExecutorTest {
         val scrollDispatches = feedPort.actionsPerformed.filter { it == "scroll:down" }
         assertEquals("All 5 scroll actions must execute without being aborted by loop guard", 5, scrollDispatches.size)
 
-        // Also verify verifyEffect logic directly for scrolls in same package
+        // A-M3 (Fix Round 2): a scroll with no signature change and no frame
+        // evidence is NOT verified — the old "identical signature still verifies"
+        // assertion is superseded. Replay still succeeds (it forces scroll
+        // effectVerified=true), but direct verifyEffect is now honest.
         for (i in 1..5) {
-            val verified = TaskExecutor.verifyEffect(
+            val verifiedNoEvidence = TaskExecutor.verifyEffect(
                 step = TaskStep(action = TaskStep.ACTION_SCROLL, params = mapOf("direction" to "down")),
                 prePackage = "com.facebook.katana",
                 preSignature = 12345,
                 postPackage = "com.facebook.katana",
                 postSignature = 12345, // identical signature hash in feed!
                 goal = "browse facebook feed",
-                targetApp = "com.facebook.katana"
+                targetApp = "com.facebook.katana",
+                frameChanged = null
             )
-            assertTrue("Scroll within the same package must verify as true even with identical signature", verified)
+            assertFalse("Scroll with identical signature and no frame evidence must NOT verify", verifiedNoEvidence)
+            val verifiedWithFrame = TaskExecutor.verifyEffect(
+                step = TaskStep(action = TaskStep.ACTION_SCROLL, params = mapOf("direction" to "down")),
+                prePackage = "com.facebook.katana",
+                preSignature = 12345,
+                postPackage = "com.facebook.katana",
+                postSignature = 12345, // identical signature hash in feed!
+                goal = "browse facebook feed",
+                targetApp = "com.facebook.katana",
+                frameChanged = true
+            )
+            assertTrue("Scroll with pixel frame change verifies even with identical signature", verifiedWithFrame)
         }
     }
 
@@ -2075,5 +2090,286 @@ class TaskExecutorTest {
         val initialDumpCalls = dumpCallCount
         executor.replaySkillFrom(skill, startIndex = 0)
         assertTrue("Carried dump must be discarded and screen re-dumped when target is absent", dumpCallCount > initialDumpCalls)
+    }
+
+    // =========================================================================
+    // waitForText tests
+    // =========================================================================
+
+    @Test
+    fun testWaitForText_FoundOnFirstPoll() = runBlocking {
+        val fakePort = FakeAutomationPort(
+            screenNodes = listOf(
+                ScreenNode(
+                    index = 0, text = "Install", contentDescription = "",
+                    className = "android.widget.Button", viewId = "install_btn",
+                    isClickable = true, isEditable = false, isScrollable = false,
+                    isCheckable = false, isEnabled = true,
+                    left = 0, top = 0, right = 100, bottom = 50, centerX = 50, centerY = 25
+                )
+            )
+        )
+        val result = TaskExecutor.waitForText(automation = fakePort, text = "Install", timeoutMs = 5000L)
+        assertTrue("Should find text on first poll", result.found)
+        assertTrue("elapsedMs should be in range 0..2000, was ${result.elapsedMs}", result.elapsedMs in 0L..2000L)
+        assertEquals(1, result.nodes.size)
+        assertEquals("Install", result.nodes.first().text)
+    }
+
+    @Test
+    fun testWaitForText_FoundOnLaterPoll() = runBlocking {
+        val fakePort = FakeAutomationPort(
+            screenNodes = listOf(
+                ScreenNode(
+                    index = 0, text = "Loading", contentDescription = "",
+                    className = "android.widget.TextView", viewId = "loading",
+                    isClickable = false, isEditable = false, isScrollable = false,
+                    isCheckable = false, isEnabled = true,
+                    left = 0, top = 0, right = 100, bottom = 50, centerX = 50, centerY = 25
+                )
+            )
+        )
+        val job = launch {
+            TaskExecutor.waitForText(automation = fakePort, text = "Installed", timeoutMs = 5000L, pollIntervalMs = 50L)
+        }
+        delay(100L)
+        fakePort.screenNodes = listOf(
+            ScreenNode(
+                index = 0, text = "Installed", contentDescription = "",
+                className = "android.widget.Button", viewId = "installed_btn",
+                isClickable = true, isEditable = false, isScrollable = false,
+                isCheckable = false, isEnabled = true,
+                left = 0, top = 0, right = 100, bottom = 50, centerX = 50, centerY = 25
+            )
+        )
+        val result = job.await()
+        assertTrue("Should find text on later poll", result.found)
+        assertTrue("elapsedMs should be >= 50ms, was ${result.elapsedMs}", result.elapsedMs >= 50L)
+        assertEquals("Installed", result.nodes.first().text)
+    }
+
+    @Test
+    fun testWaitForText_NotFound_Timeout() = runBlocking {
+        val fakePort = FakeAutomationPort(
+            screenNodes = listOf(
+                ScreenNode(
+                    index = 0, text = "Loading", contentDescription = "",
+                    className = "android.widget.TextView", viewId = "loading",
+                    isClickable = false, isEditable = false, isScrollable = false,
+                    isCheckable = false, isEnabled = true,
+                    left = 0, top = 0, right = 100, bottom = 50, centerX = 50, centerY = 25
+                )
+            )
+        )
+        val start = System.currentTimeMillis()
+        val result = TaskExecutor.waitForText(automation = fakePort, text = "Never", timeoutMs = 150L)
+        val elapsed = System.currentTimeMillis() - start
+        assertFalse("Should not find text that never appears", result.found)
+        assertTrue("elapsedMs should be >= 150ms, was ${result.elapsedMs}", result.elapsedMs >= 150L)
+        assertTrue("elapsedMs should be < 1000ms, was ${result.elapsedMs}", result.elapsedMs < 1000L)
+    }
+
+    @Test
+    fun testWaitForText_EmptyNodes_NotFound() = runBlocking {
+        val fakePort = FakeAutomationPort(screenNodes = emptyList())
+        val result = TaskExecutor.waitForText(automation = fakePort, text = "Anything", timeoutMs = 150L)
+        assertFalse("Should not find text in empty node list", result.found)
+        assertTrue("Nodes should be empty", result.nodes.isEmpty())
+    }
+
+    // --- A-M6: 4-arg clickText must try coordinates before text search ---
+
+    @Test
+    fun testClickTextFourArg_CoordinatesFirst_When2ArgReturnsFalse() {
+        val fakePort = FakeAutomationPort(
+            actionSuccess = true,
+            requireNodeMatchForClickText = true,
+            screenNodes = listOf(
+                ScreenNode(
+                    index = 0,
+                    text = "Other",
+                    contentDescription = "Other button",
+                    className = "android.widget.Button",
+                    viewId = "other_btn",
+                    isClickable = true,
+                    isEditable = false,
+                    isScrollable = false,
+                    isCheckable = false,
+                    isEnabled = true,
+                    left = 10,
+                    top = 10,
+                    right = 100,
+                    bottom = 50,
+                    centerX = 55,
+                    centerY = 30
+                )
+            )
+        )
+
+        // 4-arg default method: coordinates first, 2-arg text search only as fallback
+        val result = fakePort.clickText("Search", fakePort.screenNodes, 500, 800)
+
+        assertTrue(result)
+        assertTrue(fakePort.actionsPerformed.contains("clickAt:500.0,800.0"))
+        assertFalse(fakePort.actionsPerformed.any { it.startsWith("clickText:") })
+    }
+
+    @Test
+    fun testClickTextFourArg_FallsBackTo2Arg_WhenCoordinatesAreNull() {
+        val fakePort = FakeAutomationPort(
+            actionSuccess = true,
+            screenNodes = listOf(
+                ScreenNode(
+                    index = 0,
+                    text = "Search",
+                    contentDescription = "Search button",
+                    className = "android.widget.Button",
+                    viewId = "search_btn",
+                    isClickable = true,
+                    isEditable = false,
+                    isScrollable = false,
+                    isCheckable = false,
+                    isEnabled = true,
+                    left = 10,
+                    top = 10,
+                    right = 100,
+                    bottom = 50,
+                    centerX = 55,
+                    centerY = 30
+                )
+            )
+        )
+
+        val result = fakePort.clickText("Search", fakePort.screenNodes, null, null)
+
+        assertTrue(result)
+        assertTrue(fakePort.actionsPerformed.contains("clickText:Search"))
+    }
+
+    // =========================================================================
+    // Round 2 Run 3 — A-M3, A-M5/A-M18, A-M7 verification tests
+    // =========================================================================
+
+    @Test
+    fun testVerifyEffect_Scroll_SamePackage_RequiresRealChange() {
+        // Same package, same signature, no frame change -> false (A-M3)
+        assertFalse(
+            TaskExecutor.verifyEffect(
+                step = TaskStep(action = TaskStep.ACTION_SCROLL, params = mapOf("direction" to "down")),
+                prePackage = "com.facebook.katana",
+                preSignature = 12345,
+                postPackage = "com.facebook.katana",
+                postSignature = 12345,
+                goal = "browse facebook feed",
+                targetApp = "com.facebook.katana",
+                frameChanged = null
+            )
+        )
+        // Same package, same signature, frameChanged = true -> true
+        assertTrue(
+            TaskExecutor.verifyEffect(
+                step = TaskStep(action = TaskStep.ACTION_SCROLL, params = mapOf("direction" to "down")),
+                prePackage = "com.facebook.katana",
+                preSignature = 12345,
+                postPackage = "com.facebook.katana",
+                postSignature = 12345,
+                goal = "browse facebook feed",
+                targetApp = "com.facebook.katana",
+                frameChanged = true
+            )
+        )
+        // Same package, changed signature -> true
+        assertTrue(
+            TaskExecutor.verifyEffect(
+                step = TaskStep(action = TaskStep.ACTION_SCROLL, params = mapOf("direction" to "down")),
+                prePackage = "com.facebook.katana",
+                preSignature = 12345,
+                postPackage = "com.facebook.katana",
+                postSignature = 99999,
+                goal = "browse facebook feed",
+                targetApp = "com.facebook.katana",
+                frameChanged = null
+            )
+        )
+    }
+
+    @Test
+    fun testVerifyEffect_Click_UnknownTarget_WrongPackageIsFailure() {
+        val clickStep = TaskStep(action = TaskStep.ACTION_CLICK_TEXT, params = mapOf("text" to "Send"))
+
+        // prePackage is a known app, postPackage is a different app, target null, goal not web -> false (A-M5/A-M18)
+        assertFalse(
+            TaskExecutor.verifyEffect(
+                step = clickStep,
+                prePackage = "com.facebook.katana",
+                preSignature = 100,
+                postPackage = "com.android.chrome",
+                postSignature = 200,
+                goal = "send message on facebook",
+                targetApp = null
+            )
+        )
+
+        // Same packages -> true
+        assertTrue(
+            TaskExecutor.verifyEffect(
+                step = clickStep,
+                prePackage = "com.facebook.katana",
+                preSignature = 100,
+                postPackage = "com.facebook.katana",
+                postSignature = 200,
+                goal = "send message on facebook",
+                targetApp = null
+            )
+        )
+
+        // prePackage is a launcher package -> true (allowed)
+        assertTrue(
+            TaskExecutor.verifyEffect(
+                step = clickStep,
+                prePackage = "com.android.launcher3",
+                preSignature = 100,
+                postPackage = "com.android.chrome",
+                postSignature = 200,
+                goal = "send message on facebook",
+                targetApp = null
+            )
+        )
+    }
+
+    @Test
+    fun testStaleTap_ClickAt_ReturnsFailure() = runBlocking {
+        val fakePort = FakeAutomationPort(
+            serviceEnabled = true,
+            screenNodes = listOf(
+                ScreenNode(
+                    index = 0,
+                    text = "Home",
+                    contentDescription = "Home button",
+                    className = "android.widget.Button",
+                    viewId = "home_btn",
+                    isClickable = true,
+                    isEditable = false,
+                    isScrollable = false,
+                    isCheckable = false,
+                    isEnabled = true,
+                    left = 10,
+                    top = 10,
+                    right = 100,
+                    bottom = 50,
+                    centerX = 55,
+                    centerY = 30
+                )
+            )
+        )
+        val skills = SkillMemoryService(InMemorySkillStore())
+        val step = TaskStep(action = TaskStep.ACTION_CLICK_AT, params = mapOf("x" to 500, "y" to 1500))
+        val skill = Skill(goal = "test stale tap", steps = listOf(step))
+        val executor = TaskExecutor(automation = fakePort, skills = skills, stepDelayMs = 0)
+
+        val result = executor.replaySkillDirect(skill)
+        assertEquals(TaskStatus.FAILED, result.status)
+        assertTrue("Result message must mention stale tap failure: ${result.message}",
+            result.message.contains("Stale recorded coordinate") || result.message.contains("tap skipped"))
     }
 }

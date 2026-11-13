@@ -562,6 +562,7 @@ class MicServiceFunctionCallTest {
             "press_back",
             "press_home",
             "wait",
+            "wait_for_text",
             "get_screen",
             "web_search",
             "run_connector_command",
@@ -570,7 +571,7 @@ class MicServiceFunctionCallTest {
             "recall_memory",
             "forget_memory"
         )
-        assertEquals("defaultPhoneTools must declare exactly the 18 tools", expected, toolNames)
+        assertEquals("defaultPhoneTools must declare exactly the 19 tools", expected, toolNames)
     }
 
     @Test

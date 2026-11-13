@@ -548,6 +548,10 @@ class MiraGeminiLiveTransport(
         client?.setOutputSuppressed(suppressed)
     }
 
+    fun sendFunctionResponse(id: String, name: String, response: Value.Object) {
+        client?.sendFunctionResponse(id, name, response) ?: Log.w(TAG, "sendFunctionResponse: client is null")
+    }
+
     override fun state(): TransportState = state
 
     override fun setState(state: TransportState) {

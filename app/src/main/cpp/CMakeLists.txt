@@ -356,6 +356,7 @@ add_library(
 )
 
 if(ANDROID)
+    target_link_options(mira_webrtc_aec PRIVATE "-Wl,-z,max-page-size=16384" "-Wl,-z,common-page-size=16384")
     target_link_libraries(
         mira_webrtc_aec
         absl::base

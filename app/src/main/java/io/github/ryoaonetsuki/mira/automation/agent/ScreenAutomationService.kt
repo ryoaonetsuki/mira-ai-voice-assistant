@@ -224,15 +224,14 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
         fallbackX: Int?,
         fallbackY: Int?
     ): Boolean {
-        if (clickText(text, nodes)) return true
         if (fallbackX != null && fallbackY != null && fallbackX > 0 && fallbackY > 0) {
-            try {
-                Log.i(TAG, "clickText '$text' not found on screen; falling back to recorded coordinates ($fallbackX, $fallbackY)")
-            } catch (_: Throwable) {}
             val clicked = clickAt(fallbackX.toFloat(), fallbackY.toFloat())
-            if (clicked) tapOverlay?.hide()
-            return clicked
+            if (clicked) {
+                tapOverlay?.hide()
+                return true
+            }
         }
+        if (clickText(text, nodes)) return true
         return false
     }
 
@@ -245,6 +244,11 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
 
             // 1. Direct clickable node matching text or description
             val directClickable = nodes.firstOrNull { node ->
+                node.isClickable && (
+                    node.text.equals(text, ignoreCase = true) ||
+                        node.contentDescription.equals(text, ignoreCase = true)
+                )
+            } ?: nodes.firstOrNull { node ->
                 node.isClickable && (
                     node.text.contains(text, ignoreCase = true) ||
                         node.contentDescription.contains(text, ignoreCase = true)
@@ -275,6 +279,9 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
 
             // 2. Matching node that may not be clickable itself
             val matchingNode = nodes.firstOrNull { node ->
+                node.text.equals(text, ignoreCase = true) ||
+                    node.contentDescription.equals(text, ignoreCase = true)
+            } ?: nodes.firstOrNull { node ->
                 node.text.contains(text, ignoreCase = true) ||
                     node.contentDescription.contains(text, ignoreCase = true)
             } ?: run {

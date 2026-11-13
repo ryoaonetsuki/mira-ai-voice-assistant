@@ -869,6 +869,25 @@ class TaskExecutorTest {
     }
 
     @Test
+    fun testB5_ClickAtInsideImeArea_ReturnsFalse() = runBlocking {
+        val fakePort = object : FakeAutomationPort() {
+            override fun isInsideImeArea(x: Int, y: Int): Boolean = true
+        }
+        val skills = SkillMemoryService(InMemorySkillStore())
+        val executor = TaskExecutor(
+            automation = fakePort,
+            skills = skills,
+            stepDelayMs = 0
+        )
+        val step = TaskStep(action = TaskStep.ACTION_CLICK_AT, params = mapOf("x" to 500, "y" to 1500))
+        val skill = Skill(goal = "test", steps = listOf(step))
+        val result = executor.replaySkillDirect(skill)
+        assertEquals(TaskStatus.FAILED, result.status)
+        assertTrue("Result must mention keyboard/tap refused: ${result.message}",
+            result.message.contains("keyboard") || result.message.contains("tap refused"))
+    }
+
+    @Test
     fun testC3_ClickTextFallbackToRecordedCoordinatesWhenTextGone() = runBlocking {
         // Recorder convertEventsToSteps preserves fallbackX and fallbackY on click_text steps
         val recordedSteps = io.github.ryoaonetsuki.mira.service.MiraAccessibilityService.convertEventsToSteps(

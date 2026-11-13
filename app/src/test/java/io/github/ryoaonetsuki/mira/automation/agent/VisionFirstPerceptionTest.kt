@@ -393,4 +393,61 @@ class VisionFirstPerceptionTest {
         assertEquals(540, res.x)
         assertEquals(150, res.y)
     }
+
+    // --- A-M12: Vision picker must not return position-only elements ---
+
+    @Test
+    fun testPickBestVisionElement_PositionalOnlyElement_ReturnsNoVisionResolution() = runBlocking {
+        // A bottom tab with no text match to the target must not be selected
+        // purely on position (A-M12 fix).
+        val port = TestAutomationPort(
+            screenNodes = emptyList(),
+            currentPkg = "com.example.app",
+            dimensions = Pair(1080, 2400)
+        )
+
+        val bottomTab = VisionElement("Home", "tab", 540, 2275, "bottom nav tab")
+        val perceptionEngine = VisionFirstPerception(
+            automationPort = port,
+            apiKeyProvider = { "fake_key" },
+            visionDescribe = { _, _, _, _, _, _ ->
+                Result.success(listOf(bottomTab))
+            }
+        )
+
+        val perception = perceptionEngine.perceive("search", target = "Search Magnifier")
+        val resolution = perceptionEngine.findTarget(perception, "Search Magnifier", "search")
+
+        // No text match -> no vision resolution, falls back to NODES_FALLBACK
+        assertEquals(TargetSource.NODES_FALLBACK, resolution.source)
+        assertEquals(0, resolution.x)
+        assertEquals(0, resolution.y)
+    }
+
+    @Test
+    fun testPickBestVisionElement_TextMatchBeatsPositionOnlyElement() = runBlocking {
+        // A text-matching element must win over a position-only bottom tab (A-M12 fix).
+        val port = TestAutomationPort(
+            screenNodes = emptyList(),
+            currentPkg = "com.example.app",
+            dimensions = Pair(1080, 2400)
+        )
+
+        val bottomTab = VisionElement("Home", "tab", 540, 2275, "bottom nav tab")
+        val searchButton = VisionElement("Search", "button", 540, 100, "search button")
+        val perceptionEngine = VisionFirstPerception(
+            automationPort = port,
+            apiKeyProvider = { "fake_key" },
+            visionDescribe = { _, _, _, _, _, _ ->
+                Result.success(listOf(bottomTab, searchButton))
+            }
+        )
+
+        val perception = perceptionEngine.perceive("search", target = "Search")
+        val resolution = perceptionEngine.findTarget(perception, "Search", "search")
+
+        assertEquals(TargetSource.VISION, resolution.source)
+        assertEquals(540, resolution.x)
+        assertEquals(100, resolution.y)
+    }
 }

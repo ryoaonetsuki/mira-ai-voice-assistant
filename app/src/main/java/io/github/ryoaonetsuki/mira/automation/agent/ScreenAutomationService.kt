@@ -224,6 +224,9 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
         fallbackX: Int?,
         fallbackY: Int?
     ): Boolean {
+        // Turn C contract (restored): live text search first; recorded
+        // fallback coordinates are ONLY for when the text is gone.
+        if (clickText(text, nodes)) return true
         if (fallbackX != null && fallbackY != null && fallbackX > 0 && fallbackY > 0) {
             val clicked = clickAt(fallbackX.toFloat(), fallbackY.toFloat())
             if (clicked) {
@@ -231,7 +234,6 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
                 return true
             }
         }
-        if (clickText(text, nodes)) return true
         return false
     }
 

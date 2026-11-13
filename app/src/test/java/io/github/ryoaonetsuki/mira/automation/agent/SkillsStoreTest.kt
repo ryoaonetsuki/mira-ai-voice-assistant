@@ -6,6 +6,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import io.github.ryoaonetsuki.mira.backend.SupabaseMacro
 
 class SkillsStoreTest {
 
@@ -203,5 +204,84 @@ class SkillsStoreTest {
         val exactMatch = service.findMatch("open facebook")
         assertNotNull(exactMatch)
         assertEquals("open facebook", exactMatch?.goal)
+    }
+
+    @Test
+    fun testSyncAdminMacros_JsonArraySteps_AppearsInGetAllSkills() {
+        val store = InMemorySkillStore()
+        val service = SkillMemoryService(store)
+
+        val stepsJson = """[
+            {"action": "open_app", "params": {"app": "YouTube"}},
+            {"action": "click_text", "params": {"text": "Search"}}
+        ]"""
+        val macro = SupabaseMacro(id = "1", title = "Open YouTube and Search", description = "", steps = stepsJson, isActive = true)
+
+        service.syncAdminMacros(listOf(macro))
+
+        val allSkills = service.getAllSkills()
+        assertEquals(1, allSkills.size)
+        assertEquals("Open YouTube and Search", allSkills[0].goal)
+        assertEquals(2, allSkills[0].steps.size)
+        assertTrue(allSkills[0].id.startsWith("admin:"))
+    }
+
+    @Test
+    fun testSyncAdminMacros_UnparseableSteps_Skipped() {
+        val store = InMemorySkillStore()
+        val service = SkillMemoryService(store)
+
+        val macro = SupabaseMacro(id = "2", title = "Bad Macro", description = "", steps = "not json", isActive = true)
+        service.syncAdminMacros(listOf(macro))
+
+        assertTrue(service.getAllSkills().isEmpty())
+    }
+
+    @Test
+    fun testSyncAdminMacros_LocalSkillShadowsAdminMacro() {
+        val store = InMemorySkillStore()
+        val service = SkillMemoryService(store)
+
+        val adminMacro = SupabaseMacro(id = "3", title = "open facebook", description = "", steps = """[{"action": "open_app", "params": {"app": "Facebook"}}]""", isActive = true)
+        service.syncAdminMacros(listOf(adminMacro))
+
+        val localStep = TaskStep(action = TaskStep.ACTION_OPEN_APP, params = mapOf("app" to "com.facebook.katana"))
+        service.saveOrUpdate("open facebook", listOf(localStep))
+
+        val allSkills = service.getAllSkills()
+        assertEquals(1, allSkills.size)
+        assertEquals("open facebook", allSkills[0].goal)
+        assertFalse(allSkills[0].id.startsWith("admin:"))
+    }
+
+    @Test
+    fun testAdminMacroCannotBeRenamedOrDeleted() {
+        val store = InMemorySkillStore()
+        val service = SkillMemoryService(store)
+
+        val adminMacro = SupabaseMacro(id = "4", title = "open twitter", description = "", steps = """[{"action": "open_app", "params": {"app": "Twitter"}}]""", isActive = true)
+        service.syncAdminMacros(listOf(adminMacro))
+
+        val adminId = "admin:4"
+        assertFalse(service.renameSkill(adminId, "new goal"))
+        assertFalse(service.deleteSkill(adminId))
+        service.delete(adminId)
+
+        assertEquals(1, service.getAllSkills().size)
+        assertEquals("open twitter", service.getAllSkills()[0].goal)
+    }
+
+    @Test
+    fun testFindMatch_ReturnsAdminMacro() {
+        val store = InMemorySkillStore()
+        val service = SkillMemoryService(store)
+
+        val adminMacro = SupabaseMacro(id = "5", title = "open instagram", description = "", steps = """[{"action": "open_app", "params": {"app": "Instagram"}}]""", isActive = true)
+        service.syncAdminMacros(listOf(adminMacro))
+
+        val match = service.findMatch("open instagram")
+        assertNotNull(match)
+        assertEquals("open instagram", match?.goal)
+        assertTrue(match?.id?.startsWith("admin:") ?: false)
     }
 }

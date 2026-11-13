@@ -8,6 +8,9 @@ import android.net.Uri
 import android.os.Bundle
 import android.util.Log
 import android.view.accessibility.AccessibilityNodeInfo
+import io.github.ryoaonetsuki.mira.automation.agent.TextField
+import io.github.ryoaonetsuki.mira.automation.agent.Verification
+import io.github.ryoaonetsuki.mira.automation.agent.typeAndVerifyBlocking
 import io.github.ryoaonetsuki.mira.service.MiraAccessibilityService
 import kotlinx.coroutines.CancellationException
 
@@ -453,10 +456,18 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
                 ?: findFirstEditable(root)
                 ?: return false
             focused.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-            val args = Bundle().apply {
-                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+            val field = object : TextField {
+                override fun read(): String? = getFocusedText()
+                override fun write(t: String): Boolean {
+                    val args = Bundle().apply {
+                        putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, t)
+                    }
+                    return focused.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+                }
+                override fun retry(t: String): Boolean = write(t)
             }
-            focused.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+            val result = typeAndVerifyBlocking(field, text, secret = focused.isPassword)
+            return result == Verification.MATCH || result == Verification.UNKNOWN
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {

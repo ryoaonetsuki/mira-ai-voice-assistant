@@ -26,6 +26,7 @@ import io.github.ryoaonetsuki.mira.automation.agent.SkillMemoryService
 import io.github.ryoaonetsuki.mira.automation.agent.TaskExecutor
 import io.github.ryoaonetsuki.mira.automation.agent.TaskStatus
 import io.github.ryoaonetsuki.mira.automation.agent.TaskStep
+import io.github.ryoaonetsuki.mira.automation.agent.TypeFlowResult
 import io.github.ryoaonetsuki.mira.automation.agent.TapNumbersResult
 import io.github.ryoaonetsuki.mira.automation.agent.TargetSource
 import io.github.ryoaonetsuki.mira.automation.agent.PreTapResult

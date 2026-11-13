@@ -13,6 +13,7 @@ import io.github.ryoaonetsuki.mira.automation.agent.Verification
 import io.github.ryoaonetsuki.mira.automation.agent.typeAndVerifyBlocking
 import io.github.ryoaonetsuki.mira.service.MiraAccessibilityService
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.runBlocking
 
 data class ScreenNode(
     val index: Int,
@@ -626,6 +627,8 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
             // 1. Resolve known-app alias table (English & Bangla) before label search
             val aliasCandidates = resolveKnownAppPackages(q)
             for (pkg in aliasCandidates) {
+                val portResult = openAppViaPort(pkg)
+                if (portResult != null) return portResult
                 val aliasIntent = pm.getLaunchIntentForPackage(pkg)
                 if (aliasIntent != null) {
                     aliasIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -642,6 +645,8 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
             }
 
             // 2. Try resolving query as package name directly
+            val portResult = openAppViaPort(q)
+            if (portResult != null) return portResult
             val directIntent = pm.getLaunchIntentForPackage(q)
             if (directIntent != null) {
                 directIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -679,6 +684,8 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
 
             if (target != null) {
                 val pkg = target.activityInfo.packageName
+                val portResult = openAppViaPort(pkg)
+                if (portResult != null) return portResult
                 val launchIntent = pm.getLaunchIntentForPackage(pkg)
                 if (launchIntent != null) {
                     launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -699,6 +706,18 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
             throw e
         } catch (e: Throwable) {
             Log.e(TAG, "openApp failed for query: $q", e)
+            null
+        }
+    }
+
+    private fun openAppViaPort(pkg: String): String? {
+        val service = MiraAccessibilityService.instance ?: return null
+        return try {
+            val port = MiraAndroidScreen(service)
+            val result = runBlocking { port.openApp(pkg, cold = false) }
+            if (result is MiraActionResult.Ok) pkg else null
+        } catch (e: Throwable) {
+            Log.w(TAG, "openApp via port failed for $pkg: ${e.message}")
             null
         }
     }

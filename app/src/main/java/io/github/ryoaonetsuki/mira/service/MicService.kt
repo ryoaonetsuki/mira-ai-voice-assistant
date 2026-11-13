@@ -226,7 +226,11 @@ class MicService : Service() {
     internal var activeGeminiApiKey: String? = null
 
     private fun screenPort(): MiraScreenPort? {
-        val s = MiraAccessibilityService.instance ?: return cachedScreenPort
+        val s = MiraAccessibilityService.instance ?: run {
+            cachedScreenPort = null
+            cachedScreenService = null
+            return null
+        }
         if (cachedScreenService !== s) {
             cachedScreenPort = MiraAndroidScreen(s)
             cachedScreenService = s
@@ -705,7 +709,7 @@ class MicService : Service() {
             callStateStore.setLastGoal(null)
         }
 
-        stopLiveVoiceSessionInternal(hideOverlay = !isAutoRestart)
+        stopLiveVoiceSessionInternal(hideOverlay = !isAutoRestart, cancelAutomation = !isAutoRestart)
         startLivenessWatchdog()
         _userTranscript.value = ""
         _modelTranscript.value = ""
@@ -1035,13 +1039,7 @@ class MicService : Service() {
                         _voiceStage.value = VoiceStage.CONNECTING
                     }
                     SessionManagerState.ERROR -> {
-                        connectingWatchdogJob?.cancel()
-                        connectingWatchdogJob = null
-                        _isReconnecting.value = false
-                        _liveState.value = LiveState.ERROR
-                        _voiceStage.value = VoiceStage.ERROR
-                        _micAmplitude.value = 0f
-                        dismissNotification()
+                        handleTerminalError("Live session error")
                         return
                     }
                     SessionManagerState.STOPPED -> {
@@ -1277,7 +1275,7 @@ class MicService : Service() {
         name: String,
         rawArgs: Map<String, String>,
         typedArgs: Map<String, Any?> = emptyMap(),
-        pollTimeoutMs: Long = 4000L,
+        pollTimeoutMs: Long = TaskExecutor.DEFAULT_OPEN_APP_POLL_TIMEOUT_MS,
         pollIntervalMs: Long = 200L,
         settleDelayMs: Long = 100L,
         targetApp: String? = null,
@@ -1357,12 +1355,14 @@ class MicService : Service() {
         _voiceStage.value = VoiceStage.IDLE
     }
 
-    private fun stopLiveVoiceSessionInternal(hideOverlay: Boolean = true) {
+    private fun stopLiveVoiceSessionInternal(hideOverlay: Boolean = true, cancelAutomation: Boolean = true) {
         userTurnWatchdog.cancel()
         postCallWatchdog.cancel()
         userTurnEscalator.cancel()
         sessionGenerationToken.incrementAndGet()
-        automationBridge.cancel()
+        if (cancelAutomation) {
+            automationBridge.cancel()
+        }
         if (hideOverlay) {
             try {
                 automationPort.hideTapNumbers()
@@ -1733,6 +1733,14 @@ private fun isWrongPackageChange(
     if (target != null) {
         return !TaskExecutor.matchesTarget(target, postPackage)
     }
+    // A-M5/A-M18: when the target is unknown, a package change away from a known
+    // non-launcher app is a wrong-package change.
+    if (prePackage.isNotEmpty()
+        && !TaskExecutor.isLauncherPackage(prePackage)
+        && prePackage != "io.github.ryoaonetsuki.mira"
+        && postPackage != prePackage) {
+        return true
+    }
     return false
 }
 
@@ -1774,7 +1782,7 @@ internal suspend fun executeFunctionCall(
     name: String,
     rawArgs: Map<String, String>,
     typedArgs: Map<String, Any?> = emptyMap(),
-    pollTimeoutMs: Long = 4000L,
+    pollTimeoutMs: Long = TaskExecutor.DEFAULT_OPEN_APP_POLL_TIMEOUT_MS,
     pollIntervalMs: Long = 200L,
     settleDelayMs: Long = 100L,
     targetApp: String? = null,
@@ -1892,7 +1900,7 @@ private suspend fun executeFunctionCallInternal(
     name: String,
     rawArgs: Map<String, String>,
     typedArgs: Map<String, Any?> = emptyMap(),
-    pollTimeoutMs: Long = 4000L,
+    pollTimeoutMs: Long = TaskExecutor.DEFAULT_OPEN_APP_POLL_TIMEOUT_MS,
     pollIntervalMs: Long = 200L,
     settleDelayMs: Long = 100L,
     resolvedTarget: String? = null,
@@ -2600,7 +2608,7 @@ private suspend fun executeFunctionCallInternal(
             val wrongPackage = isWrongPackageChange(step.action, prePackage, postPackage, effectiveTarget, resolvedGoal)
 
             val effectVerified = !wrongPackage && typeResult.success && (
-                postSignature != preSignature || typeResult.textTyped.isNotEmpty() || TaskExecutor.verifyEffect(
+                postSignature != preSignature || TaskExecutor.verifyEffect(
                     step = step,
                     prePackage = prePackage,
                     preSignature = preSignature,
@@ -2679,7 +2687,7 @@ private suspend fun executeFunctionCallInternal(
                 frameChanged = frameChanged
             )
 
-            val overallSuccess = !wrongPackage && actionSuccess && (effectVerified || postPackage == prePackage)
+            val overallSuccess = !wrongPackage && actionSuccess && effectVerified
             val outcome = if (wrongPackage) {
                 "Action scroll $direction changed package from '$prePackage' to '$postPackage' which does not match target '$effectiveTarget' (wrong-package change failure)"
             } else if (overallSuccess) {
@@ -2836,6 +2844,37 @@ private suspend fun executeFunctionCallInternal(
                 postNodes = postNodes,
                 isStepOpenApp = false,
                 descriptionContext = "Waited ${ms}ms",
+                appKnowledge = appKnowledge
+            )
+        }
+
+        "wait_for_text" -> {
+            val text = (typedArgs["text"]?.toString() ?: rawArgs["text"] ?: "").trim()
+            if (text.isEmpty()) {
+                return Value.Object("error" to Value.Str("Missing text argument for wait_for_text"))
+            }
+            val timeoutRaw = typedArgs["timeoutMs"] ?: rawArgs["timeoutMs"]
+            val timeoutMs = when (timeoutRaw) {
+                is Number -> timeoutRaw.toLong()
+                is String -> timeoutRaw.toLongOrNull() ?: 60000L
+                else -> 60000L
+            }.coerceIn(5000L, 120000L) // 120s cap = per-goal task timeout (GoalToolTracker.MAX_GOAL_DURATION_MS)
+
+            val result = TaskExecutor.waitForText(automationPort, text, timeoutMs)
+            val postPackage = automationPort.getCurrentPackage().orEmpty()
+            val outcome = if (result.found) {
+                "Saw '$text' on screen after ${result.elapsedMs}ms"
+            } else {
+                "Did not see '$text' on screen within ${timeoutMs}ms — check the screen state and decide the next step; do NOT report success"
+            }
+            return buildActionResult(
+                automationPort = automationPort,
+                outcome = outcome,
+                success = result.found,
+                postPackage = postPackage,
+                postNodes = result.nodes,
+                isStepOpenApp = false,
+                descriptionContext = "Waited for '$text'",
                 appKnowledge = appKnowledge
             )
         }

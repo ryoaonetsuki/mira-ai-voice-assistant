@@ -2324,8 +2324,13 @@ class TaskExecutorTest {
             )
         )
 
-        // prePackage is a launcher package -> true (allowed)
-        assertTrue(
+        // prePackage is a launcher package BUT the target is known (facebook
+        // extracted from the goal) and Chrome is the wrong app -> false.
+        // Opening the wrong app from the home screen is still a failure;
+        // the launcher carve-out only applies when the target is UNKNOWN
+        // (see the next assertion). Returning true here would be
+        // success-masking.
+        assertFalse(
             TaskExecutor.verifyEffect(
                 step = clickStep,
                 prePackage = "com.android.launcher3",
@@ -2333,6 +2338,22 @@ class TaskExecutorTest {
                 postPackage = "com.android.chrome",
                 postSignature = 200,
                 goal = "send message on facebook",
+                targetApp = null
+            )
+        )
+
+        // prePackage is a launcher package and the target is UNKNOWN
+        // (no goal text, no targetApp) -> true (allowed). From the home
+        // screen any app may legitimately open, and with no known target
+        // the change cannot be judged wrong.
+        assertTrue(
+            TaskExecutor.verifyEffect(
+                step = clickStep,
+                prePackage = "com.android.launcher3",
+                preSignature = 100,
+                postPackage = "com.android.chrome",
+                postSignature = 200,
+                goal = null,
                 targetApp = null
             )
         )

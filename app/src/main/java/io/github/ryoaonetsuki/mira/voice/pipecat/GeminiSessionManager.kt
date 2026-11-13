@@ -131,6 +131,10 @@ class DefaultSessionClient(
     override fun setOutputSuppressed(suppressed: Boolean) {
         transport.setOutputSuppressed(suppressed)
     }
+
+    override fun sendFunctionResponse(id: String, name: String, response: Value.Object) {
+        transport.sendFunctionResponse(id, name, response)
+    }
 }
 
 class DefaultSessionClientFactory : SessionClientFactory {

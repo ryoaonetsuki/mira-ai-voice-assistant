@@ -713,7 +713,40 @@ class MicServiceFunctionCallTest {
     }
 
     @Test
-    fun testPhoneActionTool_FindMatchReplaysSkillDirectly() = runBlocking {
+    fun testPhoneActionTool_NonMatchingFirstStep_NotHijacked() = runBlocking {
+        val fakePort = TestAutomationPort(
+            currentPkg = "com.google.android.youtube"
+        )
+        val store = InMemorySkillStore()
+        val skillsService = SkillMemoryService(store)
+
+        val step1 = TaskStep(action = TaskStep.ACTION_OPEN_APP, params = mapOf("app" to "YouTube"))
+        val step2 = TaskStep(action = TaskStep.ACTION_CLICK_TEXT, params = mapOf("text" to "Search YouTube"))
+        skillsService.saveOrUpdate("open youtube and search", listOf(step1, step2))
+
+        // Model calls click_text, but skill's first step is open_app — must NOT hijack
+        val response = executeFunctionCall(
+            automationPort = fakePort,
+            context = null,
+            name = "click_text",
+            rawArgs = mapOf("text" to "Search YouTube"),
+            typedArgs = mapOf("text" to "Search YouTube"),
+            goal = "open youtube and search",
+            skillsService = skillsService,
+            targetApp = "com.google.android.youtube",
+            pollTimeoutMs = 0L
+        )
+
+        val resultMap = response.value
+        assertEquals("Success must be true", true, (resultMap["success"] as? Value.Bool)?.value)
+        // The requested click_text step executed
+        assertTrue("click_text must have run", fakePort.clickedTexts.contains("Search YouTube"))
+        // The skill did NOT replay as a whole
+        assertFalse("openApp must NOT have run (no hijack)", fakePort.openedApps.contains("YouTube"))
+    }
+
+    @Test
+    fun testPhoneActionTool_MatchingFirstStep_ReplaysOnSuccess() = runBlocking {
         val fakePort = TestAutomationPort(
             currentPkg = "com.google.android.apps.nexuslauncher",
             targetPkgOnOpen = "com.google.android.youtube"
@@ -725,7 +758,7 @@ class MicServiceFunctionCallTest {
         val step2 = TaskStep(action = TaskStep.ACTION_CLICK_TEXT, params = mapOf("text" to "Search YouTube"))
         skillsService.saveOrUpdate("open youtube and search", listOf(step1, step2))
 
-        // Live model calls open_app, but goal matches saved skill!
+        // Model calls open_app, skill's first step is open_app — replays whole macro
         val response = executeFunctionCall(
             automationPort = fakePort,
             context = null,
@@ -740,11 +773,42 @@ class MicServiceFunctionCallTest {
 
         val resultMap = response.value
         assertEquals("Success must be true", true, (resultMap["success"] as? Value.Bool)?.value)
-        // Verified: it ran the whole macro (both openApp AND clickText) instead of just single open_app
         assertTrue("Macro openApp must have run", fakePort.openedApps.contains("YouTube"))
         assertTrue("Macro clickText must have run", fakePort.clickedTexts.contains("Search YouTube"))
         val resultStr = (resultMap["result"] as? Value.Str)?.value.orEmpty()
         assertTrue("Result should report memorized skill outcome: $resultStr", resultStr.contains("memorized skill"))
+    }
+
+    @Test
+    fun testPhoneActionTool_FailedReplay_FallsThroughToRequestedTool() = runBlocking {
+        val fakePort = TestAutomationPort(
+            currentPkg = "com.google.android.youtube",
+            targetPkgOnOpen = "com.google.android.youtube"
+        )
+        val store = InMemorySkillStore()
+        val skillsService = SkillMemoryService(store)
+
+        // Second step's text is absent from default nodes -> replay fails
+        val step1 = TaskStep(action = TaskStep.ACTION_OPEN_APP, params = mapOf("app" to "YouTube"))
+        val step2 = TaskStep(action = TaskStep.ACTION_CLICK_TEXT, params = mapOf("text" to "Nonexistent Button"))
+        skillsService.saveOrUpdate("open youtube and search", listOf(step1, step2))
+
+        // Model calls open_app, skill matches but replay fails -> fall through to open_app
+        val response = executeFunctionCall(
+            automationPort = fakePort,
+            context = null,
+            name = "open_app",
+            rawArgs = mapOf("app" to "YouTube"),
+            typedArgs = mapOf("app" to "YouTube"),
+            goal = "open youtube and search",
+            skillsService = skillsService,
+            targetApp = "com.google.android.youtube",
+            pollTimeoutMs = 0L
+        )
+
+        val resultMap = response.value
+        assertEquals("Success must be true (fall-through open_app succeeded)", true, (resultMap["success"] as? Value.Bool)?.value)
+        assertTrue("Requested open_app must have executed", fakePort.openedApps.contains("YouTube"))
     }
 
     @Test

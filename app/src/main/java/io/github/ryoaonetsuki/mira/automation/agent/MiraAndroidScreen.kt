@@ -97,13 +97,10 @@ class MiraAndroidScreen(private val service: MiraAccessibilityService) : MiraScr
     override suspend fun peek(): MiraScreenSnapshot {
         val (w, h) = dimensions()
         val read = MikaScreenReader.read(service.windows, w, h)
-        val id = lastSnapshotId ?: nextSnapshotId()
-        if (lastSnapshotId == null) {
-            lastRead = read
-            lastSnapshotId = id
-        }
+        lastRead = read
+        lastSnapshotId = nextSnapshotId()
         return MiraScreenSnapshot(
-            snapshotId = id,
+            snapshotId = lastSnapshotId!!,
             packageName = read.topPackage,
             elements = read.entries.map { it.element },
             width = w,
@@ -364,7 +361,8 @@ class MiraAndroidScreen(private val service: MiraAccessibilityService) : MiraScr
             val norm = text.lowercase()
             val exact = elements.firstOrNull { it.name.lowercase() == norm }?.ref
             if (exact != null) return exact
-            return elements.firstOrNull { it.name.lowercase().contains(norm) }?.ref
+            val substringMatches = elements.filter { it.name.lowercase().contains(norm) }
+            return substringMatches.minByOrNull { it.name.length }?.ref
         }
     }
 }

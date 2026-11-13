@@ -184,4 +184,23 @@ class MiraAndroidScreenRegistryTest {
     fun findTapRef_emptyList() {
         assertNull(MiraAndroidScreen.findTapRef(emptyList(), "Search"))
     }
+
+    @Test
+    fun findTapRef_exactMatchWinsOverEarlierSubstring() {
+        val elements = listOf(
+            MikaUiElement("e1", "Button", "Search YouTube", 100, 100, listOf(), null, true, false, false, false, false, false, null, false, emptySet()),
+            MikaUiElement("e2", "Button", "Search", 200, 200, listOf(), null, true, false, false, false, false, false, null, false, emptySet())
+        )
+        assertEquals("e2", MiraAndroidScreen.findTapRef(elements, "Search"))
+    }
+
+    @Test
+    fun findTapRef_shortestNameWinsAmongSubstringMatches() {
+        val elements = listOf(
+            MikaUiElement("e1", "Button", "Search YouTube Videos", 100, 100, listOf(), null, true, false, false, false, false, false, null, false, emptySet()),
+            MikaUiElement("e2", "Button", "Search", 200, 200, listOf(), null, true, false, false, false, false, false, null, false, emptySet()),
+            MikaUiElement("e3", "Button", "Search Results", 300, 300, listOf(), null, true, false, false, false, false, false, null, false, emptySet())
+        )
+        assertEquals("e2", MiraAndroidScreen.findTapRef(elements, "Search"))
+    }
 }

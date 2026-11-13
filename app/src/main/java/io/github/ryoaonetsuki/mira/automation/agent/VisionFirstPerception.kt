@@ -300,10 +300,11 @@ class VisionFirstPerception(
         val isFieldIntent = rawLower.contains("field") || rawLower.contains("input") || rawLower.contains("edit") || rawLower.contains("text") || rawLower.contains("top") || rawLower.contains("box")
 
         var bestElem: VisionElement? = null
-        var bestScore = -1
+        var bestTotalScore = -1
 
         for (elem in elements) {
-            var score = 0
+            var matchScore = 0
+            var positionScore = 0
             val eText = elem.text.lowercase(Locale.ROOT)
             val eRole = elem.role.lowercase(Locale.ROOT)
             val eAction = elem.action.lowercase(Locale.ROOT)
@@ -311,48 +312,49 @@ class VisionFirstPerception(
 
             // Direct text match
             if (eText == targetLower) {
-                score += 100
+                matchScore += 100
             } else if (eText.contains(targetLower) || (targetLower.length > 2 && targetLower.contains(eText))) {
-                score += 60
+                matchScore += 60
             }
 
             // Semantic icon description matching
             val isSearchTarget = targetLower.contains("search") || goalLower.contains("search") || targetLower.contains("সার্চ") || targetLower.contains("খুঁজ")
             if (isSearchTarget) {
                 if (eText.contains("search") || eText.contains("magnifier") || eText.contains("glass")) {
-                    score += 50
+                    matchScore += 50
                 }
             }
 
             // Action matching
             if (eAction.contains(targetLower) || (isSearchTarget && eAction.contains("search"))) {
-                score += 30
+                matchScore += 30
             }
 
             // Generic positional priors
             // (a) Bottom navigation / tab prior: y >= screenHeight * 0.70
             if (y >= screenHeight * 0.70) {
-                if (eRole == "tab" || eRole == "navigation") score += 40
-                if (isTabIntent) score += 50
-                if (!isFieldIntent && eRole == "tab") score += 30
+                if (eRole == "tab" || eRole == "navigation") positionScore += 40
+                if (isTabIntent) positionScore += 50
+                if (!isFieldIntent && eRole == "tab") positionScore += 30
             }
 
             // (b) Top search field / input prior: y <= screenHeight * 0.30
             if (y <= screenHeight * 0.30) {
-                if (eRole in listOf("text_field", "input", "edit", "search_field", "search_box")) score += 60
-                if (isFieldIntent) score += 50
+                if (eRole in listOf("text_field", "input", "edit", "search_field", "search_box")) positionScore += 60
+                if (isFieldIntent) positionScore += 50
                 if (isSearchTarget && (eRole.contains("field") || eRole.contains("edit") || eRole == "input" || eText.contains("search"))) {
-                    score += 40
+                    positionScore += 40
                 }
             }
 
-            if (score > bestScore) {
-                bestScore = score
+            val totalScore = matchScore + positionScore
+            if (matchScore > 0 && totalScore > bestTotalScore) {
+                bestTotalScore = totalScore
                 bestElem = elem
             }
         }
 
-        return if (bestScore > 0) bestElem else null
+        return bestElem
     }
 
     /**

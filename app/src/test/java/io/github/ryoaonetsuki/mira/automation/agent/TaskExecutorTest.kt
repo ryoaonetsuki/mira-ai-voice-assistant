@@ -3,6 +3,7 @@ package io.github.ryoaonetsuki.mira.automation.agent
 import io.github.ryoaonetsuki.mira.automation.AppKnowledge
 import io.github.ryoaonetsuki.mira.automation.MiraAutomationBridge
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -2129,7 +2130,7 @@ class TaskExecutorTest {
                 )
             )
         )
-        val job = launch {
+        val job = async {
             TaskExecutor.waitForText(automation = fakePort, text = "Installed", timeoutMs = 5000L, pollIntervalMs = 50L)
         }
         delay(100L)

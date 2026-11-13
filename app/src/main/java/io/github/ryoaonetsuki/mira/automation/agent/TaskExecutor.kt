@@ -1359,7 +1359,8 @@ class TaskExecutor(
             postSignature: Int,
             goal: String? = null,
             targetApp: String? = null,
-            port: AutomationPort? = null
+            port: AutomationPort? = null,
+            frameChanged: Boolean? = null
         ): Boolean {
             val target = targetApp ?: goal?.let { MiraAutomationBridge.extractTargetApp(it) }
             val isWeb = isWebGoal(goal) || (target != null && isBrowserPackage(target))
@@ -1404,12 +1405,12 @@ class TaskExecutor(
                                 false // Turn G: A wrong-package change is a failure, never an effect!
                             }
                         } else if (isWeb) {
-                            isBrowserPackage(postPackage)
+                            isBrowserPackage(postPackage) || frameChanged == true
                         } else {
                             true
                         }
                     } else {
-                        postSignature != preSignature
+                        postSignature != preSignature || frameChanged == true
                     }
                 }
                 else -> true

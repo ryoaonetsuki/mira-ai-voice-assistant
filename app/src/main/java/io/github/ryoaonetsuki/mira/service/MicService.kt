@@ -435,7 +435,7 @@ class MicService : Service() {
         livenessWatchdogJob = null
 
         if (!userRequestedStop && callStateStore.isCallActive() &&
-            !CallRestartPolicy.isTerminalFailure(message)
+            CallRestartPolicy.shouldRestart(autoRestartAttempt, message)
         ) {
             Log.w(TAG, "MIRA_LIVE_VOICE: Terminal error while call expected live — auto-restarting: $message")
             LiveVoiceDiagnostics.recordDropReason("terminal-error: $message")
@@ -485,8 +485,12 @@ class MicService : Service() {
         activeSessionManager = null
     }
 
-    /** Turn G: schedule a fresh session start on the capped restart backoff. */
-    private fun scheduleAutoRestart(reason: String) {
+    /** Turn G: schedule a fresh session start on the capped restart backoff. Returns true when scheduled. */
+    private fun scheduleAutoRestart(reason: String): Boolean {
+        if (autoRestartAttempt >= CallRestartPolicy.MAX_AUTO_RESTART_ATTEMPTS) {
+            Log.w(TAG, "MIRA_LIVE_VOICE: Auto-restart exhausted (attempt $autoRestartAttempt >= max ${CallRestartPolicy.MAX_AUTO_RESTART_ATTEMPTS}) — not scheduling")
+            return false
+        }
         autoRestartJob?.cancel()
         autoRestartAttempt++
         val delayMs = CallRestartPolicy.delayForAttempt(autoRestartAttempt)
@@ -504,6 +508,7 @@ class MicService : Service() {
             _isReconnecting.value = false
             startLiveVoiceSession(isAutoRestart = true)
         }
+        return true
     }
 
     /** Turn G: a mic frame arrived — the capture path and transport are alive. */
@@ -693,6 +698,7 @@ class MicService : Service() {
             lastAutomationGoal = null
             callVoiceName = null
             callLanguage = null
+            autoRestartAttempt = 0
             callStateStore.setVoiceName(null)
             callStateStore.setLanguage(null)
             callStateStore.setLastGoal(null)
@@ -754,8 +760,23 @@ class MicService : Service() {
                 Log.i(TAG, "MIRA_LIVE_VOICE: Starting Native Gemini Live primary voice session (gen=$currentGeneration)")
                 startPrimaryGeminiLiveSession(geminiKey, currentGeneration)
             } else if (keySource is io.github.ryoaonetsuki.mira.backend.KeySource.ServerKey) {
-                Log.i(TAG, "MIRA_LIVE_VOICE: Server key configured — starting Gemini Live session (gen=$currentGeneration)")
-                startPrimaryGeminiLiveSession(resolver.anonKey, currentGeneration)
+                val mintResult = resolver.mintLiveToken()
+                val token = mintResult.getOrNull()
+                if (!token.isNullOrBlank()) {
+                    Log.i(TAG, "MIRA_LIVE_VOICE: Minted server-key Live token — starting Gemini Live session (gen=$currentGeneration)")
+                    startPrimaryGeminiLiveSession(token, currentGeneration)
+                } else {
+                    val reason = mintResult.exceptionOrNull()?.message ?: "mint failed"
+                    Log.e(TAG, "MIRA_LIVE_VOICE: Server-key token mint failed: $reason")
+                    callStateStore.setCallActive(false)
+                    _liveState.value = LiveState.ERROR
+                    _voiceStage.value = VoiceStage.ERROR
+                    _errorMessage.value = "Server voice unavailable — $reason — add your own Gemini key in Settings or tap to retry"
+                    LiveVoiceDiagnostics.updateLastError(_errorMessage.value!!)
+                    LiveVoiceDiagnostics.updateStage("ERROR")
+                    dismissNotification()
+                    return@launch
+                }
             } else {
                 Log.w(TAG, "MIRA_LIVE_VOICE: No Gemini API key available for voice session")
                 // Turn G: a call that can never start must not be resumed later.
@@ -1164,7 +1185,9 @@ class MicService : Service() {
                     _isReconnecting.value = true
                     _micAmplitude.value = 0f
                     postCallNotificationIfForeground()
-                    scheduleAutoRestart("session-ended: $reason")
+                    if (!scheduleAutoRestart("session-ended: $reason")) {
+                        handleTerminalError("Live voice session ended ($reason) — tap to retry")
+                    }
                 }
             }
 
@@ -1842,6 +1865,26 @@ internal suspend fun executeFunctionCall(
     }
 }
 
+    /**
+     * Maps a phone-action tool name to the first-step action a matched skill must
+     * start with for the skill-replay intercept to apply. If the skill's first step
+     * is a different action, the requested tool executes normally instead of being
+     * hijacked by a whole saved macro.
+     */
+    private fun toolNameToFirstStepAction(toolName: String): String? {
+        return when (toolName) {
+            "open_app" -> TaskStep.ACTION_OPEN_APP
+            "click_text" -> TaskStep.ACTION_CLICK_TEXT
+            "click_at" -> TaskStep.ACTION_CLICK_AT
+            "type_text" -> TaskStep.ACTION_TYPE_TEXT
+            "scroll" -> TaskStep.ACTION_SCROLL
+            "tap_number" -> TaskStep.ACTION_CLICK_NUMBER
+            "show_numbers" -> TaskStep.ACTION_SHOW_NUMBERS
+            "hide_numbers" -> TaskStep.ACTION_HIDE_NUMBERS
+            else -> null
+        }
+    }
+
 private suspend fun executeFunctionCallInternal(
     automationPort: AutomationPort,
     context: Context?,
@@ -1870,32 +1913,39 @@ private suspend fun executeFunctionCallInternal(
 
     // Phone-action tool findMatch check: when a phone-action tool (open_app, click_text, click_at, type_text, scroll, tap_number, show_numbers, hide_numbers)
     // is invoked and SkillMemoryService.findMatch matches the current goal, replay the skill directly
-    // instead of executing the single step, and return the replay result as the tool result.
+    // instead of executing the single step — but ONLY when the matched skill's first step
+    // is the requested tool. A failed replay falls through to the normal tool branch.
     val isPhoneAction = normName in setOf("open_app", "click_text", "click_at", "type_text", "scroll", "tap_number", "show_numbers", "hide_numbers")
     if (isPhoneAction && !resolvedGoal.isNullOrBlank() && skills != null) {
         val matchedSkill = skills.findMatch(resolvedGoal)
-        if (matchedSkill != null) {
-            val executor = TaskExecutor(
-                automation = automationPort,
-                skills = skills,
-                stepDelayMs = if (pollTimeoutMs == 0L) 0L else 600L,
-                apiKeyProvider = { (context as? MicService)?.activeGeminiApiKey ?: getEffectiveGeminiApiKey(context).orEmpty() },
-                visionLocator = { target, currentNodes -> resolveVisionCoordinates(context, target, currentNodes, automationPort).coordinates },
-                appKnowledge = appKnowledge
-            )
-            val replayResult = executor.replaySkillDirect(matchedSkill)
-            val postPackage = automationPort.getCurrentPackage().orEmpty()
-            val postNodes = automationPort.dumpScreen()
-            return buildActionResult(
-                automationPort = automationPort,
-                outcome = replayResult.message,
-                success = replayResult.status == TaskStatus.SUCCESS,
-                postPackage = postPackage,
-                postNodes = postNodes,
-                isStepOpenApp = matchedSkill.steps.any { it.action == TaskStep.ACTION_OPEN_APP },
-                descriptionContext = matchedSkill.goal,
-                appKnowledge = appKnowledge
-            )
+        if (matchedSkill != null && matchedSkill.steps.isNotEmpty()) {
+            val expectedFirstAction = toolNameToFirstStepAction(normName)
+            if (expectedFirstAction != null && matchedSkill.steps.first().action == expectedFirstAction) {
+                val executor = TaskExecutor(
+                    automation = automationPort,
+                    skills = skills,
+                    stepDelayMs = if (pollTimeoutMs == 0L) 0L else 600L,
+                    apiKeyProvider = { (context as? MicService)?.activeGeminiApiKey ?: getEffectiveGeminiApiKey(context).orEmpty() },
+                    visionLocator = { target, currentNodes -> resolveVisionCoordinates(context, target, currentNodes, automationPort).coordinates },
+                    appKnowledge = appKnowledge
+                )
+                val replayResult = executor.replaySkillDirect(matchedSkill)
+                if (replayResult.status == TaskStatus.SUCCESS) {
+                    val postPackage = automationPort.getCurrentPackage().orEmpty()
+                    val postNodes = automationPort.dumpScreen()
+                    return buildActionResult(
+                        automationPort = automationPort,
+                        outcome = replayResult.message,
+                        success = replayResult.status == TaskStatus.SUCCESS,
+                        postPackage = postPackage,
+                        postNodes = postNodes,
+                        isStepOpenApp = matchedSkill.steps.any { it.action == TaskStep.ACTION_OPEN_APP },
+                        descriptionContext = matchedSkill.goal,
+                        appKnowledge = appKnowledge
+                    )
+                }
+                // Replay failed — fall through to the normal when (normName) branch
+            }
         }
     }
 
@@ -2063,8 +2113,25 @@ private suspend fun executeFunctionCallInternal(
             delay(appPacing.waitBefore(System.currentTimeMillis()))
 
             // Dispatch tap
+            // B4: NODES_EXACT goes through the verified ref tap on the screen port
+            // first (snapshot -> tapRef, one re-snapshot on ref_expired); any miss
+            // or failure falls back to the legacy node tap below.
+            val portTap: Boolean? = if (resolution.source == TargetSource.NODES_EXACT) {
+                screenPort?.let { sp ->
+                    val snap = sp.snapshot()
+                    val ref = MiraAndroidScreen.findTapRef(snap.elements, text) ?: return@let null
+                    val first = sp.tapRef(ref, snap.snapshotId)
+                    if (first is MiraActionResult.Ok) return@let true
+                    if (first is MiraActionResult.Failed && first.reason == "ref_expired") {
+                        val snap2 = sp.snapshot()
+                        val ref2 = MiraAndroidScreen.findTapRef(snap2.elements, text) ?: return@let null
+                        return@let if (sp.tapRef(ref2, snap2.snapshotId) is MiraActionResult.Ok) true else null
+                    }
+                    null
+                }
+            } else null
             var actionSuccess = if (resolution.source == TargetSource.NODES_EXACT) {
-                automationPort.clickText(text, perception.nodes, tapX, tapY)
+                portTap ?: automationPort.clickText(text, perception.nodes, tapX, tapY)
             } else if (tapX != null && tapY != null && tapX > 0 && tapY > 0) {
                 screenPort?.let { sp ->
                     val result = sp.tapXY(tapX, tapY)
@@ -2098,7 +2165,10 @@ private suspend fun executeFunctionCallInternal(
                     tapY = resolution.y
                     visionUsed = (resolution.source == TargetSource.VISION)
                     visionFailureReason = resolution.failureReason
-                    actionSuccess = automationPort.clickAt(tapX.toFloat(), tapY.toFloat())
+                    actionSuccess = screenPort?.let { sp ->
+                        val result = sp.tapXY(tapX, tapY)
+                        result is MiraActionResult.Ok
+                    } ?: automationPort.clickAt(tapX.toFloat(), tapY.toFloat())
                     if (settleDelayMs > 0L) {
                         delay(settleDelayMs)
                     }
@@ -2472,25 +2542,44 @@ private suspend fun executeFunctionCallInternal(
 
             // Coordinator fix (round 3 review): capture the vision failure reason so
             // the Live model hears WHY the field could not be found, not just that it failed.
-            delay(appPacing.waitBefore(System.currentTimeMillis()))
             var lastTypeVisionReason: String? = null
-            val typeResult = TaskExecutor.executeTypeFlow(
-                automation = automationPort,
-                text = text,
-                targetQuery = rawArgs["target"] ?: typedArgs["target"]?.toString(),
-                fallbackX = fallbackX,
-                fallbackY = fallbackY,
-                pressEnter = pressEnter,
-                visionLocator = { query, nodes ->
-                    val res = resolveVisionCoordinates(context, query, nodes, automationPort)
-                    lastTypeVisionReason = res.failureReason
-                    res.coordinates
-                },
-                visionFailureReasonProvider = { lastTypeVisionReason },
-                pollTimeoutMs = if (pollTimeoutMs == 0L) 0L else 2000L,
-                pollIntervalMs = pollIntervalMs,
-                visionPerception = perceptionHelper
-            )
+            var typeResult: TypeFlowResult
+            val portTypeResult = screenPort?.let { sp ->
+                val snap = sp.snapshot()
+                val targetQuery = rawArgs["target"] ?: typedArgs["target"]?.toString()
+                val ref = if (!targetQuery.isNullOrBlank()) {
+                    MiraAndroidScreen.findTapRef(snap.elements, targetQuery)
+                } else null
+                val result = sp.typeText(ref, snap.snapshotId, text)
+                if (result is MiraActionResult.Ok) {
+                    if (pressEnter) {
+                        sp.pressKey(android.view.KeyEvent.KEYCODE_ENTER)
+                    }
+                    TypeFlowResult(true, "Successfully typed '$text' via verified port", textTyped = text)
+                } else null
+            }
+            if (portTypeResult != null) {
+                typeResult = portTypeResult
+            } else {
+                delay(appPacing.waitBefore(System.currentTimeMillis()))
+                typeResult = TaskExecutor.executeTypeFlow(
+                    automation = automationPort,
+                    text = text,
+                    targetQuery = rawArgs["target"] ?: typedArgs["target"]?.toString(),
+                    fallbackX = fallbackX,
+                    fallbackY = fallbackY,
+                    pressEnter = pressEnter,
+                    visionLocator = { query, nodes ->
+                        val res = resolveVisionCoordinates(context, query, nodes, automationPort)
+                        lastTypeVisionReason = res.failureReason
+                        res.coordinates
+                    },
+                    visionFailureReasonProvider = { lastTypeVisionReason },
+                    pollTimeoutMs = if (pollTimeoutMs == 0L) 0L else 2000L,
+                    pollIntervalMs = pollIntervalMs,
+                    visionPerception = perceptionHelper
+                )
+            }
 
             if (settleDelayMs > 0L) {
                 delay(settleDelayMs)
@@ -2622,7 +2711,8 @@ private suspend fun executeFunctionCallInternal(
             val preNodes = automationPort.dumpScreen()
             val preSignature = TaskExecutor.computeNodeSignature(preNodes)
 
-            val actionSuccess = automationPort.pressBack()
+            val portBack = screenPort?.let { sp -> sp.back() }
+            val actionSuccess = if (portBack is MiraActionResult.Ok) true else automationPort.pressBack()
             if (settleDelayMs > 0L) {
                 delay(settleDelayMs)
             }
@@ -2675,7 +2765,10 @@ private suspend fun executeFunctionCallInternal(
             val preNodes = automationPort.dumpScreen()
             val preSignature = TaskExecutor.computeNodeSignature(preNodes)
 
-            val actionSuccess = automationPort.pressHome()
+            val portHome = screenPort?.let { sp ->
+                sp.pressKey(android.view.KeyEvent.KEYCODE_HOME)
+            }
+            val actionSuccess = if (portHome is MiraActionResult.Ok) true else automationPort.pressHome()
             if (settleDelayMs > 0L) {
                 delay(settleDelayMs)
             }

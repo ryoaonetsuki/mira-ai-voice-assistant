@@ -247,6 +247,10 @@ class MiraAndroidScreen(private val service: MiraAccessibilityService) : MiraScr
                 val ok = service.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_RECENTS)
                 if (ok) MiraActionResult.Ok(changed = null) else MiraActionResult.Failed("key_failed")
             }
+            android.view.KeyEvent.KEYCODE_ENTER -> {
+                val ok = service.pressKey("enter")
+                if (ok) MiraActionResult.Ok(changed = null) else MiraActionResult.Failed("key_failed")
+            }
             else -> MiraActionResult.Failed("unsupported_key")
         }
     }
@@ -350,5 +354,17 @@ class MiraAndroidScreen(private val service: MiraAccessibilityService) : MiraScr
                 "activity" -> value != null && topPackage == value
                 else -> false
             }
+
+        /**
+         * Pure element matcher: exact name match (case-insensitive) first, then
+         * contains-match, else null. Used by the port-first click_text / type_text
+         * attempts in MicService.
+         */
+        fun findTapRef(elements: List<MikaUiElement>, text: String): String? {
+            val norm = text.lowercase()
+            val exact = elements.firstOrNull { it.name.lowercase() == norm }?.ref
+            if (exact != null) return exact
+            return elements.firstOrNull { it.name.lowercase().contains(norm) }?.ref
+        }
     }
 }

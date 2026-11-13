@@ -356,6 +356,70 @@ fun PersonalSettingsScreen(
                 }
             }
 
+            // Licence Key Card
+            item {
+                Text(
+                    text = "Licence Key",
+                    fontSize = 13.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = palette.primary
+                )
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                MiraCard(modifier = Modifier.fillMaxWidth()) {
+                    var licenceKeyInput by remember { mutableStateOf(securePrefs.getLicenceKey() ?: "") }
+
+                    OutlinedTextField(
+                        value = licenceKeyInput,
+                        onValueChange = { licenceKeyInput = it },
+                        label = { Text("Licence Key") },
+                        placeholder = { Text("Enter your licence key") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(12.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = palette.primary,
+                            unfocusedBorderColor = palette.borderSubtle
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        MiraButton(
+                            text = "Save Licence Key",
+                            onClick = {
+                                val trimmed = licenceKeyInput.trim()
+                                if (trimmed.isNotBlank() && securePrefs.isSecureStorageAvailable()) {
+                                    val saved = securePrefs.setLicenceKey(trimmed)
+                                    if (saved) {
+                                        licenceKeyInput = ""
+                                    }
+                                }
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (securePrefs.getLicenceKey() != null) {
+                            OutlinedButton(
+                                onClick = {
+                                    securePrefs.clearLicenceKey()
+                                    licenceKeyInput = ""
+                                },
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, palette.borderSubtle),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Clear", color = palette.textSecondary)
+                            }
+                        }
+                    }
+                }
+            }
+
             // Music Preferences Card
             item {
                 Text(

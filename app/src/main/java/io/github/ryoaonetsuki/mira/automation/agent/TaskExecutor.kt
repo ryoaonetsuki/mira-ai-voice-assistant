@@ -53,10 +53,14 @@ interface AutomationPort {
         fallbackX: Int?,
         fallbackY: Int?
     ): Boolean {
+        // Turn C contract (restored): live text search first; recorded
+        // fallback coordinates are ONLY for when the text is gone from the
+        // screen. Tapping stale recorded coordinates while the live node
+        // is present taps the wrong item.
+        if (clickText(text, nodes)) return true
         if (fallbackX != null && fallbackY != null && fallbackX > 0 && fallbackY > 0) {
             if (clickAt(fallbackX.toFloat(), fallbackY.toFloat())) return true
         }
-        if (clickText(text, nodes)) return true
         return false
     }
     fun clickNumber(number: Int, nodes: List<ScreenNode>): Boolean {

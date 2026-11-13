@@ -33,6 +33,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import io.github.ryoaonetsuki.mira.R
 import io.github.ryoaonetsuki.mira.automation.MiraAutomationBridge
+import io.github.ryoaonetsuki.mira.backend.SupabaseClient
 import io.github.ryoaonetsuki.mira.automation.agent.Skill
 import io.github.ryoaonetsuki.mira.automation.agent.SkillMemoryService
 import io.github.ryoaonetsuki.mira.automation.agent.SkillSettings
@@ -40,6 +41,7 @@ import io.github.ryoaonetsuki.mira.automation.agent.TaskHistoryEntry
 import io.github.ryoaonetsuki.mira.automation.agent.TaskHistoryStore
 import io.github.ryoaonetsuki.mira.automation.agent.TaskStatus
 import io.github.ryoaonetsuki.mira.automation.agent.TaskStep
+import io.github.ryoaonetsuki.mira.backend.SupabaseMacro
 import io.github.ryoaonetsuki.mira.service.MiraAccessibilityService
 import io.github.ryoaonetsuki.mira.ui.components.MiraCard
 import io.github.ryoaonetsuki.mira.ui.components.MiraSwitch
@@ -63,6 +65,12 @@ fun SkillsScreen(
 
     val skillMemoryService = remember { SkillMemoryService.getInstance(context) }
     val skills by skillMemoryService.skillsFlow.collectAsState()
+
+    LaunchedEffect(Unit) {
+        scope.launch(Dispatchers.IO) {
+            skillMemoryService.refreshAdminMacros(SupabaseClient())
+        }
+    }
 
     val skillSettings = remember { SkillSettings.getInstance(context) }
     val skillsEnabled by skillSettings.skillsEnabledFlow.collectAsState()

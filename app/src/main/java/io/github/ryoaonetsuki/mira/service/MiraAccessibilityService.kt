@@ -21,8 +21,12 @@ import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
+import io.github.ryoaonetsuki.mira.automation.agent.MikaScreenReader
 import io.github.ryoaonetsuki.mira.automation.agent.TaskExecutor
 import io.github.ryoaonetsuki.mira.automation.agent.TaskStep
+import io.github.ryoaonetsuki.mira.automation.agent.TextField
+import io.github.ryoaonetsuki.mira.automation.agent.Verification
+import io.github.ryoaonetsuki.mira.automation.agent.typeAndVerifyBlocking
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -278,10 +282,13 @@ class MiraAccessibilityService : AccessibilityService() {
         val className = node.className?.toString().orEmpty()
         val viewId = node.viewIdResourceName.orEmpty()
 
+        val enrichedDesc = if (text.isBlank() && desc.isBlank() && node.isClickable) {
+            runCatching { MikaScreenReader.labelOf(node) }.getOrNull().orEmpty()
+        } else desc
         val interactive =
             node.isClickable || node.isEditable || node.isScrollable ||
                 node.isCheckable || node.isLongClickable
-        val hasLabel = text.isNotBlank() || desc.isNotBlank()
+        val hasLabel = text.isNotBlank() || enrichedDesc.isNotBlank()
         val onScreen = rect.width() > 0 && rect.height() > 0
 
         if (node.isVisibleToUser && onScreen && (interactive || hasLabel)) {
@@ -289,7 +296,7 @@ class MiraAccessibilityService : AccessibilityService() {
                 hashMapOf(
                     "index" to index,
                     "text" to text,
-                    "contentDescription" to desc,
+                    "contentDescription" to enrichedDesc,
                     "className" to className,
                     "viewId" to viewId,
                     "isClickable" to node.isClickable,
@@ -534,13 +541,21 @@ class MiraAccessibilityService : AccessibilityService() {
             if (target == null) return false
 
             target.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-            val args = Bundle().apply {
-                putCharSequence(
-                    AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
-                    text
-                )
+            val field = object : TextField {
+                override fun read(): String? = MikaScreenReader.fieldText(target)
+                override fun write(t: String): Boolean {
+                    val args = Bundle().apply {
+                        putCharSequence(
+                            AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                            t
+                        )
+                    }
+                    return target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+                }
+                override fun retry(t: String): Boolean = write(t)
             }
-            target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+            val result = typeAndVerifyBlocking(field, text, secret = target.isPassword)
+            return result == Verification.MATCH || result == Verification.UNKNOWN
         } catch (e: Throwable) {
             Log.e(TAG, "typeText failed", e)
             false

@@ -61,7 +61,7 @@ object LivePromptBuilder {
             "`click_at` (taps screen coordinates x/y), " +
             "`tap_number` (taps an on-screen element by its number badge), `show_numbers` (shows numbered badges on all tappable elements and returns the numbered list), `hide_numbers` (hides the tap-number badges), " +
             "`type_text` (types text into the focused field), `scroll` (scrolls the screen up, down, left, or right), `press_back` (presses Back button), " +
-            "`press_home` (returns to home screen), `wait` (pauses for UI to load), `get_screen` (inspects current UI elements and screen state), " +
+            "`press_home` (returns to home screen), `wait` (pauses for UI to load), `wait_for_text` (waits for specific text to appear on screen), `get_screen` (inspects current UI elements and screen state), " +
             "`web_search` (searches web for information), `run_connector_command` (runs connector actions), `run_skill` (replays a saved skill macro in one tool call), " +
             "`remember_fact` (saves durable facts to memory), `recall_memory` (recalls saved facts), and `forget_memory` (deletes saved facts). " +
             "You CAN and MUST act on the phone whenever asked — NEVER claim you cannot control the phone, open apps, or take actions. " +
@@ -72,6 +72,9 @@ object LivePromptBuilder {
             "While the tool executes in the background, NARRATE BRIEFLY in the conversation language ($narrationExample). Never stay silent and never give robotic excuses. " +
             "Tool results arrive directly as function responses containing the updated screen state, node text, and outcome — they are NOT user messages. " +
             "You MUST CHECK THE SCREEN in the function response before your next call to verify what is on display and guide your next action. " +
+            "A task is finished ONLY when the goal state is visible on the screen in the latest function response. A successful click on a button is NOT task completion — it is only one step. Never tell the user a task is done from a click result alone; always confirm the goal state on screen first. " +
+            "Buttons like Install, Download, Update, Send or Save start a process that continues on new screens. After tapping one, READ the new screen in the function response: if a progress state, a confirmation dialog, or extra options appeared, act on them — tap the confirmation, wait for the progress to finish. For installs, the app is installed ONLY when the screen shows Open (and Uninstall) — never report 'installed' from the Install click alone. Use `wait_for_text` to wait for a state (for example wait for 'Open', up to 120 seconds) instead of guessing; if the wait times out, look at the screen and decide the next step — do not declare success. " +
+            "To open an app from a search result list, tap the result's own title or row (click_text with the exact title text). If the detail page does not open, retry by tapping the result's icon, or use show_numbers and tap_number on that row. Only say you opened it when the detail page (the app title) is visible on screen. " +
             "Feed scrolling: scrolling in content feeds (Facebook, YouTube) is normal progress and multiple scrolls are expected. " +
             "When all actions are complete, speak the outcome naturally and briefly to the user in the conversation language. " +
             "Memory tools: when the user tells you something worth remembering, save it quietly with remember_fact (category + fact); use recall_memory when you need a saved fact; never announce saving."

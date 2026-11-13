@@ -29,6 +29,13 @@ import io.github.ryoaonetsuki.mira.automation.agent.TaskStep
 import io.github.ryoaonetsuki.mira.automation.agent.TapNumbersResult
 import io.github.ryoaonetsuki.mira.automation.agent.TargetSource
 import io.github.ryoaonetsuki.mira.automation.agent.PreTapResult
+import io.github.ryoaonetsuki.mira.automation.agent.AppPacing
+import io.github.ryoaonetsuki.mira.automation.agent.FrameDiff
+import io.github.ryoaonetsuki.mira.automation.agent.MikaReliableActions
+import io.github.ryoaonetsuki.mira.automation.agent.MiraActionResult
+import io.github.ryoaonetsuki.mira.automation.agent.MiraAndroidScreen
+import io.github.ryoaonetsuki.mira.automation.agent.MiraScreenPort
+import io.github.ryoaonetsuki.mira.automation.agent.MIRA_DEFAULT_OPERATING_PACE
 import io.github.ryoaonetsuki.mira.automation.agent.VisionFirstPerception
 import io.github.ryoaonetsuki.mira.automation.agent.formatNumberedList
 import io.github.ryoaonetsuki.mira.data.local.MiraDatabase
@@ -183,6 +190,9 @@ class MicService : Service() {
     @Volatile private var connectsThisCall: Int = 0
     @Volatile private var lastAutomationGoal: String? = null
     @Volatile private var currentAutomationTarget: String? = null
+    private var cachedScreenPort: MiraAndroidScreen? = null
+    private var cachedScreenService: MiraAccessibilityService? = null
+    private val appPacing: AppPacing = MIRA_DEFAULT_OPERATING_PACE.appPacing()
     /** Turn G: voice + language captured once at call start, reused for every reconnect in the call. */
     @Volatile private var callVoiceName: String? = null
     @Volatile private var callLanguage: String? = null
@@ -213,6 +223,15 @@ class MicService : Service() {
     }
     internal val automationPort: AutomationPort get() = automationPortProvider()
     internal var activeGeminiApiKey: String? = null
+
+    private fun screenPort(): MiraScreenPort? {
+        val s = MiraAccessibilityService.instance ?: return cachedScreenPort
+        if (cachedScreenService !== s) {
+            cachedScreenPort = MiraAndroidScreen(s)
+            cachedScreenService = s
+        }
+        return cachedScreenPort
+    }
 
     internal val appKnowledge by lazy {
         io.github.ryoaonetsuki.mira.automation.AppKnowledge { path ->
@@ -1891,6 +1910,7 @@ private suspend fun executeFunctionCallInternal(
             val prePackage = automationPort.getCurrentPackage().orEmpty()
             val preNodes = automationPort.dumpScreen()
             val preSignature = TaskExecutor.computeNodeSignature(preNodes)
+            delay(appPacing.waitBefore(System.currentTimeMillis()))
             automationPort.openApp(resolvedApp)
 
             // Poll for target app foreground (fix #3 form: wait for foreground package before returning screen)
@@ -1911,6 +1931,7 @@ private suspend fun executeFunctionCallInternal(
             val targetReached = TaskExecutor.openAppTargetReached(step, prePackage, postPackage, automationPort)
             val postNodes = automationPort.dumpScreen()
             val postSignature = TaskExecutor.computeNodeSignature(postNodes)
+            appPacing.noteAction(postPackage, System.currentTimeMillis(), newScreen = postPackage != prePackage)
 
             val outcome = if (targetReached) {
                 "Successfully opened $resolvedApp (package: $postPackage)"
@@ -1940,6 +1961,8 @@ private suspend fun executeFunctionCallInternal(
             }
 
             val prePackage = automationPort.getCurrentPackage().orEmpty()
+            val serviceInstance = MiraAccessibilityService.instance
+            val beforeFrame = if (serviceInstance != null) MikaReliableActions.captureFrameGrid(serviceInstance) else null
 
             // Milestone 6 Off-target refusal guard: refuse BEFORE executing click_text
             if (isOffTargetForAction("click_text", prePackage, resolvedTarget, resolvedGoal, automationPort)) {
@@ -2029,11 +2052,16 @@ private suspend fun executeFunctionCallInternal(
                 }
             }
 
+            delay(appPacing.waitBefore(System.currentTimeMillis()))
+
             // Dispatch tap
             var actionSuccess = if (resolution.source == TargetSource.NODES_EXACT) {
                 automationPort.clickText(text, perception.nodes, tapX, tapY)
             } else if (tapX != null && tapY != null && tapX > 0 && tapY > 0) {
-                automationPort.clickAt(tapX.toFloat(), tapY.toFloat())
+                screenPort()?.let { sp ->
+                    val result = sp.tapXY(tapX, tapY)
+                    result is MiraActionResult.Ok
+                } ?: automationPort.clickAt(tapX.toFloat(), tapY.toFloat())
             } else {
                 automationPort.clickText(text, perception.nodes, tapX, tapY)
             }
@@ -2045,6 +2073,10 @@ private suspend fun executeFunctionCallInternal(
             var postPackage = automationPort.getCurrentPackage().orEmpty()
             var postNodes = automationPort.dumpScreen()
             var postSignature = TaskExecutor.computeNodeSignature(postNodes)
+            val afterFrame = if (serviceInstance != null) MikaReliableActions.captureFrameGrid(serviceInstance) else null
+            val frameChanged = if (beforeFrame != null && afterFrame != null) {
+                FrameDiff.compare(beforeFrame, afterFrame, null)?.visible == true
+            } else null
 
             // Post-action verify: if tap dispatched but had NO verified effect, re-perceive once and retry once
             val noEffectInitially = actionSuccess && (postSignature == preSignature && postPackage == prePackage && !automationPort.isInputFocused())
@@ -2090,7 +2122,8 @@ private suspend fun executeFunctionCallInternal(
                 postPackage = postPackage,
                 postSignature = postSignature,
                 goal = resolvedGoal,
-                targetApp = effectiveTarget
+                targetApp = effectiveTarget,
+                frameChanged = frameChanged
             )
 
             val outcome = if (wrongPackage) {
@@ -2108,6 +2141,8 @@ private suspend fun executeFunctionCallInternal(
             } else {
                 "click_text '$text' dispatched but had no verified effect on screen"
             }
+
+            appPacing.noteAction(postPackage, System.currentTimeMillis(), newScreen = postPackage != prePackage)
 
             return buildActionResult(
                 automationPort = automationPort,
@@ -2140,10 +2175,16 @@ private suspend fun executeFunctionCallInternal(
             }
 
             val prePackage = automationPort.getCurrentPackage().orEmpty()
+            val serviceInstance = MiraAccessibilityService.instance
+            val beforeFrame = if (serviceInstance != null) MikaReliableActions.captureFrameGrid(serviceInstance) else null
             val preNodes = automationPort.dumpScreen()
             val preSignature = TaskExecutor.computeNodeSignature(preNodes)
 
-            val actionSuccess = automationPort.clickAt(x.toFloat(), y.toFloat())
+            delay(appPacing.waitBefore(System.currentTimeMillis()))
+            val actionSuccess = screenPort()?.let { sp ->
+                val result = sp.tapXY(x, y)
+                result is MiraActionResult.Ok
+            } ?: automationPort.clickAt(x.toFloat(), y.toFloat())
             if (settleDelayMs > 0L) {
                 delay(settleDelayMs)
             }
@@ -2151,6 +2192,10 @@ private suspend fun executeFunctionCallInternal(
             val postPackage = automationPort.getCurrentPackage().orEmpty()
             val postNodes = automationPort.dumpScreen()
             val postSignature = TaskExecutor.computeNodeSignature(postNodes)
+            val afterFrame = if (serviceInstance != null) MikaReliableActions.captureFrameGrid(serviceInstance) else null
+            val frameChanged = if (beforeFrame != null && afterFrame != null) {
+                FrameDiff.compare(beforeFrame, afterFrame, null)?.visible == true
+            } else null
 
             val step = TaskStep(action = TaskStep.ACTION_CLICK_AT, params = mapOf("x" to x, "y" to y))
             MicService.lastExecutedStep = step
@@ -2165,7 +2210,8 @@ private suspend fun executeFunctionCallInternal(
                 postPackage = postPackage,
                 postSignature = postSignature,
                 goal = resolvedGoal,
-                targetApp = effectiveTarget
+                targetApp = effectiveTarget,
+                frameChanged = frameChanged
             )
 
             val outcome = if (wrongPackage) {
@@ -2177,6 +2223,8 @@ private suspend fun executeFunctionCallInternal(
             } else {
                 "click_at ($x, $y) dispatched but had no verified effect on screen"
             }
+
+            appPacing.noteAction(postPackage, System.currentTimeMillis(), newScreen = postPackage != prePackage)
 
             return buildActionResult(
                 automationPort = automationPort,
@@ -2364,6 +2412,8 @@ private suspend fun executeFunctionCallInternal(
             }
 
             val prePackage = automationPort.getCurrentPackage().orEmpty()
+            val serviceInstance = MiraAccessibilityService.instance
+            val beforeFrame = if (serviceInstance != null) MikaReliableActions.captureFrameGrid(serviceInstance) else null
 
             // Milestone 6 Off-target refusal guard: refuse BEFORE executing type_text
             if (isOffTargetForAction("type_text", prePackage, resolvedTarget, resolvedGoal, automationPort)) {
@@ -2414,6 +2464,7 @@ private suspend fun executeFunctionCallInternal(
 
             // Coordinator fix (round 3 review): capture the vision failure reason so
             // the Live model hears WHY the field could not be found, not just that it failed.
+            delay(appPacing.waitBefore(System.currentTimeMillis()))
             var lastTypeVisionReason: String? = null
             val typeResult = TaskExecutor.executeTypeFlow(
                 automation = automationPort,
@@ -2440,6 +2491,10 @@ private suspend fun executeFunctionCallInternal(
             val postPackage = automationPort.getCurrentPackage().orEmpty()
             val postNodes = automationPort.dumpScreen()
             val postSignature = TaskExecutor.computeNodeSignature(postNodes)
+            val afterFrame = if (serviceInstance != null) MikaReliableActions.captureFrameGrid(serviceInstance) else null
+            val frameChanged = if (beforeFrame != null && afterFrame != null) {
+                FrameDiff.compare(beforeFrame, afterFrame, null)?.visible == true
+            } else null
 
             val step = TaskStep(action = TaskStep.ACTION_TYPE_TEXT, params = mapOf("text" to text))
             MicService.lastExecutedStep = step
@@ -2454,7 +2509,8 @@ private suspend fun executeFunctionCallInternal(
                     postPackage = postPackage,
                     postSignature = postSignature,
                     goal = resolvedGoal,
-                    targetApp = effectiveTarget
+                    targetApp = effectiveTarget,
+                    frameChanged = frameChanged
                 )
             )
 
@@ -2465,6 +2521,8 @@ private suspend fun executeFunctionCallInternal(
             } else {
                 typeResult.message
             }
+
+            appPacing.noteAction(postPackage, System.currentTimeMillis(), newScreen = postPackage != prePackage)
 
             return buildActionResult(
                 automationPort = automationPort,
@@ -2485,10 +2543,16 @@ private suspend fun executeFunctionCallInternal(
             val direction = (typedArgs["direction"]?.toString() ?: rawArgs["direction"] ?: "down").trim().lowercase(Locale.ROOT).ifEmpty { "down" }
 
             val prePackage = automationPort.getCurrentPackage().orEmpty()
+            val serviceInstance = MiraAccessibilityService.instance
+            val beforeFrame = if (serviceInstance != null) MikaReliableActions.captureFrameGrid(serviceInstance) else null
             val preNodes = automationPort.dumpScreen()
             val preSignature = TaskExecutor.computeNodeSignature(preNodes)
 
-            val actionSuccess = automationPort.scroll(direction)
+            delay(appPacing.waitBefore(System.currentTimeMillis()))
+            val actionSuccess = screenPort()?.let { sp ->
+                val result = sp.scroll(ref = null, snapshotId = null, down = direction == "down")
+                result is MiraActionResult.Ok
+            } ?: automationPort.scroll(direction)
             if (settleDelayMs > 0L) {
                 delay(settleDelayMs)
             }
@@ -2496,6 +2560,10 @@ private suspend fun executeFunctionCallInternal(
             val postPackage = automationPort.getCurrentPackage().orEmpty()
             val postNodes = automationPort.dumpScreen()
             val postSignature = TaskExecutor.computeNodeSignature(postNodes)
+            val afterFrame = if (serviceInstance != null) MikaReliableActions.captureFrameGrid(serviceInstance) else null
+            val frameChanged = if (beforeFrame != null && afterFrame != null) {
+                FrameDiff.compare(beforeFrame, afterFrame, null)?.visible == true
+            } else null
 
             val step = TaskStep(action = TaskStep.ACTION_SCROLL, params = mapOf("direction" to direction))
             MicService.lastExecutedStep = step
@@ -2509,7 +2577,8 @@ private suspend fun executeFunctionCallInternal(
                 postPackage = postPackage,
                 postSignature = postSignature,
                 goal = resolvedGoal,
-                targetApp = effectiveTarget
+                targetApp = effectiveTarget,
+                frameChanged = frameChanged
             )
 
             val overallSuccess = !wrongPackage && actionSuccess && (effectVerified || postPackage == prePackage)
@@ -2522,6 +2591,8 @@ private suspend fun executeFunctionCallInternal(
             } else {
                 "scroll $direction dispatched but screen did not scroll"
             }
+
+            appPacing.noteAction(postPackage, System.currentTimeMillis(), newScreen = postPackage != prePackage)
 
             return buildActionResult(
                 automationPort = automationPort,

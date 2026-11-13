@@ -1026,12 +1026,8 @@ class TaskExecutor(
                     // Symptom 3 fix: re-validate recorded tap coordinate against fresh screen state
                     // (1) Check if coordinates fall inside the keyboard / IME area
                     if (automation.isInsideImeArea(x, y)) {
-                        logWarn("Dropping coordinate tap ($x, $y) inside keyboard/IME area to prevent tapping keyboard settings")
-                        if (automation.isInputFocused()) {
-                            logInfo("Replacing coordinate tap ($x, $y) inside keyboard area with pressEnter")
-                            return automation.pressEnter()
-                        }
-                        return true
+                        lastActionError = "Tap point ($x, $y) lies inside the on-screen keyboard window — tap refused"
+                        return false
                     }
 
                     // (2) Check if layout shifted or target node moved

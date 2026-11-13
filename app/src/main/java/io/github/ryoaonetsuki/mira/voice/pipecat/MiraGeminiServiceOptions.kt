@@ -197,6 +197,24 @@ data class MiraGeminiServiceOptions(
                             )
                         ),
                         Value.Object(
+                            "name" to Value.Str("wait_for_text"),
+                            "description" to Value.Str("Waits until the given text appears anywhere on the current screen (button label, title, dialog text, status text), polling the screen about once a second. Returns the fresh screen state. Use after tapping a button that starts a longer process (Install, Download, Update) to wait for the final state (e.g. 'Open') instead of guessing, or to wait for a screen to load."),
+                            "parameters" to Value.Object(
+                                "type" to Value.Str("OBJECT"),
+                                "properties" to Value.Object(
+                                    "text" to Value.Object(
+                                        "type" to Value.Str("STRING"),
+                                        "description" to Value.Str("Text to wait for on screen")
+                                    ),
+                                    "timeoutMs" to Value.Object(
+                                        "type" to Value.Str("NUMBER"),
+                                        "description" to Value.Str("Maximum milliseconds to wait, default 60000, clamped 5000..120000")
+                                    )
+                                ),
+                                "required" to Value.Array(Value.Str("text"))
+                            )
+                        ),
+                        Value.Object(
                             "name" to Value.Str("get_screen"),
                             "description" to Value.Str("Inspects the current screen state and returns fresh UI element descriptions and screen text."),
                             "parameters" to Value.Object(

@@ -8,6 +8,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONArray
 import org.json.JSONObject
+import io.github.ryoaonetsuki.mira.backend.SupabaseClient
+import io.github.ryoaonetsuki.mira.backend.SupabaseMacro
 
 interface SkillStore {
   fun loadRaw(): String?
@@ -44,6 +46,7 @@ class SkillMemoryService(
 ) {
   private val lock = Any()
   private var cache: MutableList<Skill>? = null
+  private val adminSkills = mutableListOf<Skill>()
   private val _skillsFlow = MutableStateFlow<List<Skill>>(emptyList())
   val skillsFlow: StateFlow<List<Skill>> = _skillsFlow.asStateFlow()
 
@@ -64,7 +67,7 @@ class SkillMemoryService(
     if (raw.isNullOrBlank()) {
       val emptyList = mutableListOf<Skill>()
       cache = emptyList
-      _skillsFlow.value = emptyList
+      _skillsFlow.value = mergeLocalAndAdmin(emptyList)
       return emptyList
     }
     return try {
@@ -77,13 +80,13 @@ class SkillMemoryService(
         }
       }
       cache = list
-      _skillsFlow.value = list.toList()
+      _skillsFlow.value = mergeLocalAndAdmin(list.toList())
       list
     } catch (e: Throwable) {
       logWarning("Corrupt skill memory JSON, resetting to empty: ${e.message}")
       val emptyList = mutableListOf<Skill>()
       cache = emptyList
-      _skillsFlow.value = emptyList
+      _skillsFlow.value = mergeLocalAndAdmin(emptyList)
       emptyList
     }
   }
@@ -96,17 +99,27 @@ class SkillMemoryService(
         array.put(skill.toJson())
       }
       store.saveRaw(array.toString())
-      _skillsFlow.value = skills.toList()
+      _skillsFlow.value = mergeLocalAndAdmin(skills.toList())
     } catch (e: Throwable) {
       logWarning("Failed to persist skill memory: ${e.message}")
     }
   }
 
   fun all(): List<Skill> = synchronized(lock) {
-    return load().toList()
+    return mergeLocalAndAdmin(load().toList())
   }
 
   fun getAllSkills(): List<Skill> = all()
+
+  private fun mergedSkills(): List<Skill> = synchronized(lock) {
+    return mergeLocalAndAdmin(load().toList())
+  }
+
+  private fun mergeLocalAndAdmin(local: List<Skill>): List<Skill> {
+    val localNormalizedGoals = local.map { it.normalizedGoal }.toSet()
+    val adminFiltered = adminSkills.filter { it.normalizedGoal !in localNormalizedGoals }
+    return local + adminFiltered
+  }
 
   /**
    * Finds a stored skill matching [goal]: exact raw match first,
@@ -116,7 +129,7 @@ class SkillMemoryService(
     if (!isSkillsEnabled()) return null
     val clean = goal.trim()
     if (clean.isEmpty()) return null
-    val skills = load()
+    val skills = mergedSkills()
 
     // 1. Exact raw match first
     for (s in skills) {
@@ -195,6 +208,7 @@ class SkillMemoryService(
   }
 
   fun markReplayOutcome(skillId: String, success: Boolean): Unit = synchronized(lock) {
+    if (skillId.startsWith("admin:")) return
     val skills = load()
     val index = skills.indexOfFirst { it.id == skillId }
     if (index < 0) return
@@ -226,7 +240,56 @@ class SkillMemoryService(
     persist()
   }
 
+  fun syncAdminMacros(macros: List<SupabaseMacro>) = synchronized(lock) {
+    val parsed = mutableListOf<Skill>()
+    for (macro in macros) {
+      if (macro.title.isBlank()) continue
+      val steps = parseMacroSteps(macro.steps)
+      if (steps.isEmpty()) {
+        logWarning("Skipping admin macro '${macro.title}': no supported steps")
+        continue
+      }
+      parsed.add(Skill(id = "admin:${macro.id}", goal = macro.title, steps = steps))
+    }
+    adminSkills.clear()
+    adminSkills.addAll(parsed)
+    _skillsFlow.value = mergedSkills()
+  }
+
+  suspend fun refreshAdminMacros(client: SupabaseClient) {
+    val result = client.fetchMacros()
+    if (result.isSuccess) {
+      syncAdminMacros(result.getOrThrow())
+    } else {
+      logWarning("Failed to refresh admin macros: ${result.exceptionOrNull()?.message}")
+    }
+  }
+
+  private fun parseMacroSteps(stepsJson: String): List<TaskStep> {
+    return try {
+      val arr = JSONArray(stepsJson)
+      val list = mutableListOf<TaskStep>()
+      for (i in 0 until arr.length()) {
+        val obj = arr.optJSONObject(i)
+        if (obj != null) {
+          val step = TaskStep.fromJson(obj)
+          if (step.isSupported) list.add(step)
+        }
+      }
+      list
+    } catch (_: Exception) {
+      try {
+        val obj = JSONObject(stepsJson)
+        val step = TaskStep.fromJson(obj)
+        if (step.isSupported) listOf(step) else emptyList()
+      } catch (_: Exception) {
+        emptyList()
+      }
+    }
+  }
+
   fun renameSkill(skillId: String, newGoal: String): Boolean = synchronized(lock) {
+    if (skillId.startsWith("admin:")) return false
     val trimmed = newGoal.trim()
     if (trimmed.isEmpty()) return false
     val skills = load()
@@ -251,6 +314,7 @@ class SkillMemoryService(
   }
 
   fun deleteSkill(skillId: String): Boolean = synchronized(lock) {
+    if (skillId.startsWith("admin:")) return false
     val skills = load()
     val removed = skills.removeAll { it.id == skillId }
     if (removed) {
@@ -260,6 +324,7 @@ class SkillMemoryService(
   }
 
   fun delete(skillId: String): Unit {
+    if (skillId.startsWith("admin:")) return
     deleteSkill(skillId)
   }
 

@@ -222,4 +222,13 @@ class LivePromptBuilderRegressionTest {
         assertTrue(rule.contains("tap a number"))
         assertTrue(rule.contains("tap number N"))
     }
+
+    @Test
+    fun testBuildToolUseRule_ContainsNewGoalStateRules() {
+        val rule = LivePromptBuilder.buildToolUseRule("English")
+        assertTrue("Must contain goal-state completion rule", rule.contains("A task is finished ONLY when the goal state is visible on the screen"))
+        assertTrue("Must contain multi-step Install process rule", rule.contains("Buttons like Install, Download, Update, Send or Save start a process"))
+        assertTrue("Must contain search-result entry rule", rule.contains("To open an app from a search result list"))
+        assertTrue("Must mention wait_for_text tool", rule.contains("wait_for_text"))
+    }
 }

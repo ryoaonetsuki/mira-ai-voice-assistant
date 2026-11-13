@@ -27,6 +27,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.util.Log
 import androidx.core.content.ContextCompat
 import io.github.ryoaonetsuki.mira.R
 import io.github.ryoaonetsuki.mira.backend.RemoteAppConfig
@@ -36,6 +37,7 @@ import io.github.ryoaonetsuki.mira.ui.components.MiraButton
 import io.github.ryoaonetsuki.mira.ui.components.MiraCard
 import io.github.ryoaonetsuki.mira.ui.navigation.Screen
 import io.github.ryoaonetsuki.mira.ui.theme.LocalMiraPalette
+import kotlin.Result
 import kotlinx.coroutines.delay
 
 private fun isVersionOlder(current: String, target: String): Boolean {
@@ -122,6 +124,25 @@ fun SplashScreen(
                 "A required update (${config.forcedUpdateVersion}) is available. Please update the app to continue."
             }
             return@LaunchedEffect
+        }
+
+        // 3b. Licence gate
+        if (config.licenceEnabled) {
+            val licenceKey = securePrefs.getLicenceKey()
+            if (licenceKey.isNullOrBlank()) {
+                blockingTitle = "Licence Required"
+                blockingMessage = "A licence is required to use Mira. Enter your licence key in Personal Profile settings, then tap Retry."
+                return@LaunchedEffect
+            }
+            val validation = supabaseClient.validateLicence(licenceKey)
+            if (validation.isSuccess && validation.getOrNull() != true) {
+                blockingTitle = "Licence Invalid"
+                blockingMessage = "This licence key is not valid. Enter a valid licence key in Personal Profile settings, then tap Retry."
+                return@LaunchedEffect
+            }
+            if (validation.isFailure) {
+                Log.w("SplashScreen", "Licence validation failed, failing open: ${validation.exceptionOrNull()?.message}")
+            }
         }
 
         // 4. Normal setup check: proceed to Home if user has a key OR server key is configured

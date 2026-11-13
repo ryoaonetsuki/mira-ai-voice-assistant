@@ -15,11 +15,19 @@ object CallRestartPolicy {
     /** Capped backoff between fresh-session restarts (1-based attempt). */
     val RESTART_DELAYS_MS = listOf(2_000L, 5_000L, 10_000L, 20_000L, 30_000L)
     const val MAX_RESTART_DELAY_MS = 30_000L
+    const val MAX_AUTO_RESTART_ATTEMPTS = 5
 
     fun delayForAttempt(attempt: Int): Long {
         val index = (attempt - 1).coerceIn(0, RESTART_DELAYS_MS.size - 1)
         return RESTART_DELAYS_MS[index]
     }
+
+    /**
+     * Combined restart decision: only restart when under the attempt cap and the
+     * failure is not terminal. Pure and unit-testable.
+     */
+    fun shouldRestart(attempt: Int, message: String): Boolean =
+        attempt < MAX_AUTO_RESTART_ATTEMPTS && !isTerminalFailure(message)
 
     /**
      * Failures that must NOT auto-restart: the call can never succeed
@@ -30,7 +38,18 @@ object CallRestartPolicy {
         val lower = message.lowercase()
         return lower.contains("gemini key missing") ||
             lower.contains("microphone permission not granted") ||
-            lower.contains("free-tier limit reached")
+            lower.contains("free-tier limit reached") ||
+            lower.contains("invalid api key") ||
+            lower.contains("api key not valid") ||
+            lower.contains("api-key not valid") ||
+            lower.contains("unauthorized") ||
+            lower.contains("unauthenticated") ||
+            lower.contains("permission denied") ||
+            lower.contains("invalid model") ||
+            lower.contains("model not found") ||
+            lower.contains("bad request") ||
+            lower.contains("invalid argument") ||
+            Regex("\\b(400|401|403)\\b").containsMatchIn(lower)
     }
 }
 

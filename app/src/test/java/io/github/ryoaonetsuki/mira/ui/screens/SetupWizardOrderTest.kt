@@ -8,8 +8,8 @@ class SetupWizardOrderTest {
 
     @Test
     fun allRequiredRowsPrecedeAllOptionalRows() {
-        val requiredEndIndex = WIZARD_ROW_ORDER.lastIndexOf { it.isRequired }
-        val firstOptionalIndex = WIZARD_ROW_ORDER.firstIndexOf { !it.isRequired }
+        val requiredEndIndex = WIZARD_ROW_ORDER.indexOfLast { it.isRequired }
+        val firstOptionalIndex = WIZARD_ROW_ORDER.indexOfFirst { !it.isRequired }
         assertTrue(requiredEndIndex < firstOptionalIndex || firstOptionalIndex == -1)
     }
 

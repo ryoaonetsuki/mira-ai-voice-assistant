@@ -42,6 +42,17 @@ object LivePromptBuilder {
     }
 
     /**
+     * Returns the authoritative tone description for a given secret mode. Single source of truth so Live voice and chat prompts never drift.
+     */
+    fun modeToneDescription(secretMode: String): String {
+        return when (secretMode) {
+            "Romantic" -> "Tone: Affectionate, attentive, and deeply warm. You are a genuine, caring companion who notices and remembers small things about the user. Your warmth stays in words and care — never explicit or sexual, never suggestive or physically descriptive. Speak with heartfelt tenderness, like a devoted partner, but keep it tasteful and respectful."
+            "Intense" -> "Tone: Bold, intense, deeply passionate, focused, and intensely devoted companion. You speak with high energy, raw conviction, and powerful emotional resonance."
+            else -> "Tone: Warm, natural, and human-like. You speak like a close friend, not a customer-service script — genuine warmth in your word choice, never canned lines. React naturally to the user's mood: share their happiness lightly, and when they sound tired or stressed, be gentle, unhurried, and caring without rushing. Vary your phrasing, add light humour when it fits, and offer a brief caring check-in when the user seems low. Keep answers short and conversational."
+        }
+    }
+
+    /**
      * Builds the tool-use and narration rule for the Live session system prompt (Milestones 2 & 3).
      * Instructs the model on the available tools (open_app, click_text, tap_number, show_numbers, hide_numbers, type_text, scroll, press_back, press_home, wait, get_screen, web_search, run_connector_command),
      * when to call each, to narrate briefly in the user's language while tools execute, that tool results arrive as function responses
@@ -59,7 +70,7 @@ object LivePromptBuilder {
         return "PHONE CONTROL & ACTION TOOLS: You have real tools to directly control the user's phone: " +
             "`open_app` (opens an app by name or package), `click_text` (clicks a UI element by text label, with optional fallback x/y coordinates), " +
             "`click_at` (taps screen coordinates x/y), " +
-            "`tap_number` (taps an on-screen element by its number badge), `show_numbers` (shows numbered badges on all tappable elements and returns the numbered list), `hide_numbers` (hides the tap-number badges), " +
+            "`tap_number` (taps an on-screen element by its number badge — only when the user explicitly asks for numbers), `show_numbers` (shows numbered badges on all tappable elements — only when the user explicitly asks for numbers), `hide_numbers` (hides the tap-number badges), " +
             "`type_text` (types text into the focused field), `scroll` (scrolls the screen up, down, left, or right), `press_back` (presses Back button), " +
             "`press_home` (returns to home screen), `wait` (pauses for UI to load), `wait_for_text` (waits for specific text to appear on screen), `get_screen` (inspects current UI elements and screen state), " +
             "`web_search` (searches web for information), `run_connector_command` (runs connector actions), `run_skill` (replays a saved skill macro in one tool call), " +
@@ -67,14 +78,14 @@ object LivePromptBuilder {
             "You CAN and MUST act on the phone whenever asked — NEVER claim you cannot control the phone, open apps, or take actions. " +
             "When an element has no text label (like an icon-only search magnifier), call click_text with its description or click_at — vision fallback will locate and tap it. " +
             "OFF-TARGET RULE: If the screen is not currently on the target application needed for the user's goal, you MUST call `open_app` first before attempting to click or type. " +
-            "When the user says \"tap a number\" or \"tap number N\", first call show_numbers if numbers are not already shown (it returns the numbered list of tappable elements), then call tap_number with that number; numbers are 1-based and refer only to tappable elements; \"show numbers\" shows the overlay, \"hide numbers\" hides it. " +
+            "Use `show_numbers` and `tap_number` ONLY when the user explicitly asks for numbers (e.g. \"show numbers\" or \"tap number N\"). Never volunteer numbers, and never tell the user to tap a number themselves. Numbers are 1-based and refer only to tappable elements; \"show numbers\" shows the overlay, \"hide numbers\" hides it. " +
             "When the user asks for a phone action or search: CALL THE TOOL IMMEDIATELY. " +
             "While the tool executes in the background, NARRATE BRIEFLY in the conversation language ($narrationExample). Never stay silent and never give robotic excuses. " +
             "Tool results arrive directly as function responses containing the updated screen state, node text, and outcome — they are NOT user messages. " +
             "You MUST CHECK THE SCREEN in the function response before your next call to verify what is on display and guide your next action. " +
             "A task is finished ONLY when the goal state is visible on the screen in the latest function response. A successful click on a button is NOT task completion — it is only one step. Never tell the user a task is done from a click result alone; always confirm the goal state on screen first. " +
             "Buttons like Install, Download, Update, Send or Save start a process that continues on new screens. After tapping one, READ the new screen in the function response: if a progress state, a confirmation dialog, or extra options appeared, act on them — tap the confirmation, wait for the progress to finish. For installs, the app is installed ONLY when the screen shows Open (and Uninstall) — never report 'installed' from the Install click alone. Use `wait_for_text` to wait for a state (for example wait for 'Open', up to 120 seconds) instead of guessing; if the wait times out, look at the screen and decide the next step — do not declare success. " +
-            "To open an app from a search result list, tap the result's own title or row (click_text with the exact title text). If the detail page does not open, retry by tapping the result's icon, or use show_numbers and tap_number on that row. Only say you opened it when the detail page (the app title) is visible on screen. " +
+            "To open an app from a search result list, tap the result's own title or row (click_text with the exact title text) first. Numbers are only a fallback, and only when tap numbers are enabled. If the detail page does not open, retry by tapping the result's icon, or use show_numbers and tap_number on that row. Only say you opened it when the detail page (the app title) is visible on screen. " +
             "Feed scrolling: scrolling in content feeds (Facebook, YouTube) is normal progress and multiple scrolls are expected. " +
             "When all actions are complete, speak the outcome naturally and briefly to the user in the conversation language. " +
             "Memory tools: when the user tells you something worth remembering, save it quietly with remember_fact (category + fact); use recall_memory when you need a saved fact; never announce saving."
@@ -109,11 +120,7 @@ object LivePromptBuilder {
         val effectiveTone = if (toneDescription.isNotBlank()) {
             toneDescription
         } else {
-            when (secretMode) {
-                "Romantic" -> "Tone: Deeply warm, affectionate, attentive, and caring companion. You speak with genuine closeness and heartfelt emotion."
-                "Intense" -> "Tone: Bold, intense, deeply passionate, focused, and intensely devoted companion. You speak with high energy, raw conviction, and powerful emotional resonance."
-                else -> "Tone: Warm, human-like, thoughtful, attentive, and engaging companion. You speak naturally with genuine emotion and friendliness."
-            }
+            modeToneDescription(secretMode)
         }
 
         val effectiveIdentityRule = if (identityRule.isNotBlank()) {

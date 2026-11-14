@@ -23,6 +23,7 @@ import io.github.ryoaonetsuki.mira.automation.agent.ScreenAutomationService
 import io.github.ryoaonetsuki.mira.automation.agent.ScreenNode
 import io.github.ryoaonetsuki.mira.automation.agent.Skill
 import io.github.ryoaonetsuki.mira.automation.agent.SkillMemoryService
+import io.github.ryoaonetsuki.mira.automation.agent.SkillSettings
 import io.github.ryoaonetsuki.mira.automation.agent.TaskExecutor
 import io.github.ryoaonetsuki.mira.automation.agent.TaskStatus
 import io.github.ryoaonetsuki.mira.automation.agent.TaskStep
@@ -1871,7 +1872,8 @@ internal suspend fun executeFunctionCall(
             skillsService = skillsService,
             appKnowledge = appKnowledge,
             appPacing = appPacing,
-            screenPort = screenPort
+            screenPort = screenPort,
+            tapNumbersEnabled = tapNumbersEnabled
         )
         val latencyMs = System.currentTimeMillis() - startTimeMs
         val success = (response.value["success"] as? Value.Bool)?.value
@@ -1920,7 +1922,8 @@ private suspend fun executeFunctionCallInternal(
     skillsService: SkillMemoryService? = null,
     appKnowledge: io.github.ryoaonetsuki.mira.automation.AppKnowledge? = null,
     appPacing: AppPacing = MIRA_DEFAULT_OPERATING_PACE.appPacing(),
-    screenPort: MiraScreenPort? = null
+    screenPort: MiraScreenPort? = null,
+    tapNumbersEnabled: Boolean = if (context != null) TapNumberSettings.getInstance(context).isTapNumbersEnabled else false
 ): Value.Object {
     val normName = name.lowercase(Locale.ROOT)
 

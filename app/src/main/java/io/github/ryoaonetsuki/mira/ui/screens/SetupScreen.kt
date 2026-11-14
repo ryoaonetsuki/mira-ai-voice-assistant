@@ -59,6 +59,31 @@ private enum class SetupKeyStatus {
     INVALID
 }
 
+data class WizardRow(
+    val id: String,
+    val title: String,
+    val subtitle: String,
+    val iconRes: Int,
+    val isRequired: Boolean,
+    val onClick: () -> Unit
+)
+
+data class WizardRowOrder(
+    val id: String,
+    val isRequired: Boolean
+)
+
+val WIZARD_ROW_ORDER = listOf(
+    WizardRowOrder("microphone", true),
+    WizardRowOrder("battery", true),
+    WizardRowOrder("file", true),
+    WizardRowOrder("accessibility", true),
+    WizardRowOrder("overlay", true),
+    WizardRowOrder("notifications", false),
+    WizardRowOrder("notificationAccess", false),
+    WizardRowOrder("standardIntegrations", false),
+)
+
 @Composable
 fun SetupScreen(
     startStep: Int = 1,
@@ -258,6 +283,133 @@ fun SetupScreen(
     ) {
         hasMicPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         areStandardIntegrationsGranted = checkStandardIntegrations()
+    }
+
+    val wizardRows = remember {
+        listOf(
+            // Required 1: Microphone
+            WizardRow(
+                id = "microphone",
+                title = "Microphone (Required)",
+                subtitle = "Required to speak to Mira in real-time",
+                iconRes = R.drawable.ic_fluent_mic_24_regular,
+                isRequired = true,
+                onClick = {
+                    micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                }
+            ),
+            // Required 2: Battery: Unrestricted (Required)
+            WizardRow(
+                id = "battery",
+                title = "Battery: Unrestricted (Required)",
+                subtitle = "Prevents Android from killing Mira's voice in the background",
+                iconRes = R.drawable.ic_fluent_flash_24_regular,
+                isRequired = true,
+                onClick = {
+                    try {
+                        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                            data = Uri.parse("package:${context.packageName}")
+                        }
+                        context.startActivity(intent)
+                    } catch (e: Exception) {
+                        val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                        context.startActivity(intent)
+                    }
+                }
+            ),
+            // Required 3: File Management (Required)
+            WizardRow(
+                id = "file",
+                title = "File Management (Required)",
+                subtitle = "Mira needs file access to save websites, code, and files you generate",
+                iconRes = R.drawable.ic_fluent_folder_open_24_regular,
+                isRequired = true,
+                onClick = {
+                    try {
+                        val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                            data = Uri.parse("package:${context.packageName}")
+                        }
+                        context.startActivity(intent)
+                    } catch (e: Exception) {
+                        val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                        context.startActivity(intent)
+                    }
+                }
+            ),
+            // Required 4: Accessibility Service (Required for App/Screen Automation)
+            WizardRow(
+                id = "accessibility",
+                title = "Accessibility Service (Required for App/Screen Automation)",
+                subtitle = "Allows Mira to operate the screen for autonomous tasks and skills",
+                iconRes = R.drawable.ic_fluent_person_24_regular,
+                isRequired = true,
+                onClick = {
+                    val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                    context.startActivity(intent)
+                }
+            ),
+            // Required 5: Display Over Other Apps (Required for Tap Numbers)
+            WizardRow(
+                id = "overlay",
+                title = "Display Over Other Apps (Required for Tap Numbers)",
+                subtitle = "Allows floating orb over apps and home screen, and tap-number badges",
+                iconRes = R.drawable.ic_fluent_options_24_regular,
+                isRequired = true,
+                onClick = {
+                    val intent = Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:${context.packageName}")
+                    )
+                    context.startActivity(intent)
+                }
+            ),
+            // Optional 6: Notifications
+            WizardRow(
+                id = "notifications",
+                title = "Notifications",
+                subtitle = "Display foreground session and background updates",
+                iconRes = R.drawable.ic_fluent_alert_24_regular,
+                isRequired = false,
+                onClick = {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                }
+            ),
+            // Optional 7: Notification Access (WhatsApp)
+            WizardRow(
+                id = "notificationAccess",
+                title = "Notification Access (WhatsApp)",
+                subtitle = "Allows reading WhatsApp messages for auto-reply",
+                iconRes = R.drawable.ic_fluent_chat_24_regular,
+                isRequired = false,
+                onClick = {
+                    val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+                    context.startActivity(intent)
+                }
+            ),
+            // Optional 8: Standard Integrations
+            WizardRow(
+                id = "standardIntegrations",
+                title = "Standard Integrations",
+                subtitle = "Camera, Contacts, Phone calls, SMS, Location",
+                iconRes = R.drawable.ic_fluent_settings_24_regular,
+                isRequired = false,
+                onClick = {
+                    val perms = mutableListOf(
+                        Manifest.permission.CAMERA,
+                        Manifest.permission.READ_CONTACTS,
+                        Manifest.permission.CALL_PHONE,
+                        Manifest.permission.SEND_SMS,
+                        Manifest.permission.ACCESS_FINE_LOCATION
+                    )
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        perms.add(Manifest.permission.READ_MEDIA_IMAGES)
+                    }
+                    multiPermissionLauncher.launch(perms.toTypedArray())
+                }
+            )
+        )
     }
 
     Column(
@@ -543,146 +695,25 @@ fun SetupScreen(
                     .fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                // Required 1: Microphone
-                item {
+                items(wizardRows) { row ->
+                    val isGranted = when (row.id) {
+                        "microphone" -> hasMicPermission
+                        "battery" -> isBatteryIgnoringOptimizations
+                        "file" -> hasFileAccess
+                        "accessibility" -> isAccessibilityEnabled
+                        "overlay" -> isOverlayGranted
+                        "notifications" -> hasNotificationPermission
+                        "notificationAccess" -> isNotificationListenerEnabled
+                        "standardIntegrations" -> areStandardIntegrationsGranted
+                        else -> false
+                    }
                     PermissionRow(
-                        title = "Microphone (Required)",
-                        subtitle = "Required to speak to Mira in real-time",
-                        iconRes = R.drawable.ic_fluent_mic_24_regular,
-                        isGranted = hasMicPermission,
-                        isRequired = true,
-                        onClick = {
-                            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                        }
-                    )
-                }
-
-                // Required 2: Battery Optimization Off
-                item {
-                    PermissionRow(
-                        title = "Battery: Unrestricted (Required)",
-                        subtitle = "Prevents Android from killing Mira's voice in the background",
-                        iconRes = R.drawable.ic_fluent_flash_24_regular,
-                        isGranted = isBatteryIgnoringOptimizations,
-                        isRequired = true,
-                        onClick = {
-                            try {
-                                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                                    data = Uri.parse("package:${context.packageName}")
-                                }
-                                context.startActivity(intent)
-                            } catch (e: Exception) {
-                                val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-                                context.startActivity(intent)
-                            }
-                        }
-                    )
-                }
-
-                // Required 3: File Management
-                item {
-                    PermissionRow(
-                        title = "File Management (Required)",
-                        subtitle = "Mira needs file access to save websites, code, and files you generate",
-                        iconRes = R.drawable.ic_fluent_folder_open_24_regular,
-                        isGranted = hasFileAccess,
-                        isRequired = true,
-                        onClick = {
-                            try {
-                                val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
-                                    data = Uri.parse("package:${context.packageName}")
-                                }
-                                context.startActivity(intent)
-                            } catch (e: Exception) {
-                                val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
-                                context.startActivity(intent)
-                            }
-                        }
-                    )
-                }
-
-                // Optional: Notifications
-                item {
-                    PermissionRow(
-                        title = "Notifications",
-                        subtitle = "Display foreground session and background updates",
-                        iconRes = R.drawable.ic_fluent_alert_24_regular,
-                        isGranted = hasNotificationPermission,
-                        onClick = {
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                            }
-                        }
-                    )
-                }
-
-                // Optional: Notification Access (WhatsApp)
-                item {
-                    PermissionRow(
-                        title = "Notification Access (WhatsApp)",
-                        subtitle = "Allows reading WhatsApp messages for auto-reply",
-                        iconRes = R.drawable.ic_fluent_chat_24_regular,
-                        isGranted = isNotificationListenerEnabled,
-                        onClick = {
-                            val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
-                            context.startActivity(intent)
-                        }
-                    )
-                }
-
-                // Required 4: Accessibility
-                item {
-                    PermissionRow(
-                        title = "Accessibility Service (Required for App/Screen Automation)",
-                        subtitle = "Allows Mira to operate the screen for autonomous tasks and skills",
-                        iconRes = R.drawable.ic_fluent_person_24_regular,
-                        isGranted = isAccessibilityEnabled,
-                        isRequired = true,
-                        onClick = {
-                            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-                            context.startActivity(intent)
-                        }
-                    )
-                }
-
-                // Required 5: Overlay
-                item {
-                    PermissionRow(
-                        title = "Display Over Other Apps (Required for Tap Numbers)",
-                        subtitle = "Allows floating orb over apps and home screen, and tap-number badges",
-                        iconRes = R.drawable.ic_fluent_options_24_regular,
-                        isGranted = isOverlayGranted,
-                        isRequired = true,
-                        onClick = {
-                            val intent = Intent(
-                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                Uri.parse("package:${context.packageName}")
-                            )
-                            context.startActivity(intent)
-                        }
-                    )
-                }
-
-                // Batch prompt for standard permissions
-                item {
-                    PermissionRow(
-                        title = "Standard Integrations",
-                        subtitle = "Camera, Contacts, Phone calls, SMS, Location",
-                        iconRes = R.drawable.ic_fluent_settings_24_regular,
-                        isGranted = areStandardIntegrationsGranted,
-                        onClick = {
-                            val perms = mutableListOf(
-                                Manifest.permission.CAMERA,
-                                Manifest.permission.READ_CONTACTS,
-                                Manifest.permission.CALL_PHONE,
-                                Manifest.permission.SEND_SMS,
-                                Manifest.permission.ACCESS_FINE_LOCATION
-                            )
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                perms.add(Manifest.permission.READ_MEDIA_IMAGES)
-                            }
-                            multiPermissionLauncher.launch(perms.toTypedArray())
-                        }
+                        title = row.title,
+                        subtitle = row.subtitle,
+                        iconRes = row.iconRes,
+                        isGranted = isGranted,
+                        isRequired = row.isRequired,
+                        onClick = row.onClick
                     )
                 }
             }

@@ -66,7 +66,7 @@ class EchoGateDrainTest {
     @Test
     fun testBargeIn_LoudSpeechPassesWhileBotTalking() {
         // While bot is talking at high level (botLevel = 0.5f)
-        // Threshold formula: botLevel * RATIO (1.5) + FLOOR (0.05) = 0.5 * 1.5 + 0.05 = 0.80f
+        // Threshold formula: botLevel * RATIO (1.0) + FLOOR (0.02) = 0.5 * 1.0 + 0.02 = 0.52f
 
         // 1. Acoustic echo or normal ambient sound (micRms = 0.40f) is below threshold: must be dropped
         assertFalse(
@@ -74,7 +74,7 @@ class EchoGateDrainTest {
             EchoGate.shouldForward(micRms = 0.40f, botLevel = 0.5f, isBotTalking = true, echoGuardEnabled = true)
         )
 
-        // 2. User speaking loudly right into the mic (micRms = 0.90f > 0.80f): must be forwarded!
+        // 2. User speaking loudly right into the mic (micRms = 0.90f > 0.52f): must be forwarded!
         assertTrue(
             "Loud user speech exceeding bot level * ratio + floor must be forwarded for barge-in",
             EchoGate.shouldForward(micRms = 0.90f, botLevel = 0.5f, isBotTalking = true, echoGuardEnabled = true)
@@ -97,7 +97,7 @@ class EchoGateDrainTest {
         val effectiveBot = router.getEffectiveBotLevel(1200L)
         assertEquals(0.4f, effectiveBot, 0.0001f)
 
-        // Mic hears echo (e.g. 0.3f < 0.4 * 1.5 + 0.05 = 0.65): frame must be dropped!
+        // Mic hears echo (e.g. 0.3f < 0.4 * 1.0 + 0.02 = 0.42): frame must be dropped!
         val shouldForwardEcho = EchoGate.shouldForward(
             micRms = 0.3f,
             botLevel = effectiveBot,
@@ -106,7 +106,7 @@ class EchoGateDrainTest {
         )
         assertFalse("Echo during AudioTrack drain must be blocked by the gate", shouldForwardEcho)
 
-        // But loud user barge-in (0.85f > 0.65) still gets through!
+        // But loud user barge-in (0.85f > 0.42) still gets through!
         val shouldForwardUser = EchoGate.shouldForward(
             micRms = 0.85f,
             botLevel = effectiveBot,

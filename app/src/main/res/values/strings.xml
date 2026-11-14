@@ -41,6 +41,8 @@
     <string name="enable_accessibility_toast">Please enable Screen Control first to record or run skills</string>
     <string name="skills_enabled_title">Skills</string>
     <string name="skills_enabled_desc">When on, Mira replays saved skills automatically and learns new ones. When off, no automatic skill replay and no new skills are learned.</string>
+    <string name="tap_numbers_title">Tap numbers</string>
+    <string name="tap_numbers_desc">Show numbered badges on tappable elements. Off by default — Mira works directly without them.</string>
     <string name="skills_off_record_toast">Skills are off — turn Skills on to record a macro</string>
     <string name="task_pause_button">Pause</string>
     <string name="task_resume_button">Resume</string>

@@ -96,6 +96,10 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
 
     override fun showTapNumbersDetailed(): TapNumbersResult {
         val ctx = context
+        if (ctx != null && !TapNumberSettings.getInstance(ctx).isTapNumbersEnabled) {
+            Log.w(TAG, "showTapNumbers failed: tap numbers toggle is OFF in Settings")
+            return TapNumbersResult.Error("Tap numbers are disabled in Settings. Enable them to show numbered badges on tappable elements, or act directly with click_text / click_at / vision.")
+        }
         if (ctx != null && !android.provider.Settings.canDrawOverlays(ctx)) {
             Log.w(TAG, "showTapNumbers failed: 'Display over other apps' (SYSTEM_ALERT_WINDOW) permission not granted")
             return TapNumbersResult.PermissionMissing
@@ -345,6 +349,10 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
     }
 
     override fun clickNumber(number: Int, nodes: List<ScreenNode>): Boolean {
+        if (context != null && !TapNumberSettings.getInstance(context).isTapNumbersEnabled) {
+            Log.w(TAG, "clickNumber failed: tap numbers are disabled in Settings")
+            return false
+        }
         return try {
             val node = UiNodeMatcher.tappableNumbered(nodes).firstOrNull { it.first == number }?.second
                 ?: return false
@@ -392,6 +400,7 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
             val child = root.getChild(i) ?: continue
             val found = findNodeMatchingText(child, query)
             if (found != null) return found
+            child.recycle()
         }
         return null
     }
@@ -1230,10 +1239,23 @@ open class ScreenAutomationService(private val context: Context? = null) : Autom
             val q = query.trim().lowercase()
             if (q.isEmpty()) return emptyList()
             KNOWN_APP_ALIASES[q]?.let { return it }
-            for ((alias, pkgs) in KNOWN_APP_ALIASES) {
-                if (q.contains(alias)) return pkgs
+            // Prefer the longest/most specific alias (explicit app name over
+            // generic verb), breaking ties by first occurrence in the query.
+            var bestAlias: String? = null
+            var bestLen = -1
+            var bestPos = Int.MAX_VALUE
+            for ((alias, _) in KNOWN_APP_ALIASES) {
+                val pos = q.indexOf(alias)
+                if (pos >= 0) {
+                    val len = alias.length
+                    if (len > bestLen || (len == bestLen && pos < bestPos)) {
+                        bestAlias = alias
+                        bestLen = len
+                        bestPos = pos
+                    }
+                }
             }
-            return emptyList()
+            return bestAlias?.let { KNOWN_APP_ALIASES[it] } ?: emptyList()
         }
 
         fun resolveKnownAppPackage(query: String): String? =

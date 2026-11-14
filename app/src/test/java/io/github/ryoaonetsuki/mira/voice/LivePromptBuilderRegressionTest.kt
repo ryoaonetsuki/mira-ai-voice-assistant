@@ -219,7 +219,8 @@ class LivePromptBuilderRegressionTest {
         assertTrue(rule.contains("`tap_number`"))
         assertTrue(rule.contains("`show_numbers`"))
         assertTrue(rule.contains("`hide_numbers`"))
-        assertTrue(rule.contains("tap a number"))
+        assertTrue(rule.contains("ONLY when the user explicitly asks for numbers"))
+        assertTrue(rule.contains("Never volunteer numbers"))
         assertTrue(rule.contains("tap number N"))
     }
 
@@ -230,5 +231,41 @@ class LivePromptBuilderRegressionTest {
         assertTrue("Must contain multi-step Install process rule", rule.contains("Buttons like Install, Download, Update, Send or Save start a process"))
         assertTrue("Must contain search-result entry rule", rule.contains("To open an app from a search result list"))
         assertTrue("Must mention wait_for_text tool", rule.contains("wait_for_text"))
+    }
+
+    @Test
+    fun testModeToneDescription_Friendly_ContainsWarmEmotionGuidance() {
+        val tone = LivePromptBuilder.modeToneDescription("Friendly")
+        assertTrue("Friendly tone must contain 'Warm, natural, and human-like'", tone.contains("Warm, natural, and human-like"))
+        assertTrue("Friendly tone must contain 'close friend'", tone.contains("close friend"))
+        assertTrue("Friendly tone must contain 'React naturally to the user's mood'", tone.contains("React naturally to the user's mood"))
+        assertFalse("Friendly tone must NOT contain 'affectionate'", tone.contains("affectionate"))
+        assertFalse("Friendly tone must NOT contain 'devoted partner'", tone.contains("devoted partner"))
+    }
+
+    @Test
+    fun testModeToneDescription_Romantic_ContainsAffectionateGuidanceAndGuard() {
+        val tone = LivePromptBuilder.modeToneDescription("Romantic")
+        assertTrue("Romantic tone must contain 'Affectionate, attentive, and deeply warm'", tone.contains("Affectionate, attentive, and deeply warm"))
+        assertTrue("Romantic tone must contain 'never explicit or sexual'", tone.contains("never explicit or sexual"))
+        assertTrue("Romantic tone must contain 'never suggestive'", tone.contains("never suggestive"))
+        assertFalse("Romantic tone must NOT contain 'customer-service script'", tone.contains("customer-service script"))
+    }
+
+    @Test
+    fun testModeToneDescription_Intense_UnchangedVerbatim() {
+        val tone = LivePromptBuilder.modeToneDescription("Intense")
+        assertEquals("Intense tone must be verbatim unchanged", "Tone: Bold, intense, deeply passionate, focused, and intensely devoted companion. You speak with high energy, raw conviction, and powerful emotional resonance.", tone)
+    }
+
+    @Test
+    fun testLivePromptBuilder_UsesSharedToneText_NoDrift() {
+        val friendlyPrompt = LivePromptBuilder.buildLiveSystemPrompt(secretMode = "Friendly")
+        val romanticPrompt = LivePromptBuilder.buildLiveSystemPrompt(secretMode = "Romantic")
+        val intensePrompt = LivePromptBuilder.buildLiveSystemPrompt(secretMode = "Intense")
+
+        assertTrue("Friendly prompt must contain shared Friendly tone text", friendlyPrompt.contains(LivePromptBuilder.modeToneDescription("Friendly")))
+        assertTrue("Romantic prompt must contain shared Romantic tone text", romanticPrompt.contains(LivePromptBuilder.modeToneDescription("Romantic")))
+        assertTrue("Intense prompt must contain shared Intense tone text", intensePrompt.contains(LivePromptBuilder.modeToneDescription("Intense")))
     }
 }

@@ -166,7 +166,7 @@ class VisionFirstPerception(
         }
 
         val key = apiKeyProvider?.invoke()?.takeIf { it.isNotBlank() }
-            ?: return Result.failure(IllegalStateException("Gemini API key is missing or blank"))
+            ?: return Result.failure(IllegalStateException("Mira API key is missing or blank"))
 
         val nodeDump = automationPort.formatNodes(nodes)
 

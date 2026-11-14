@@ -26,6 +26,7 @@ import io.github.ryoaonetsuki.mira.automation.agent.SkillMemoryService
 import io.github.ryoaonetsuki.mira.automation.agent.TaskExecutor
 import io.github.ryoaonetsuki.mira.automation.agent.TaskStatus
 import io.github.ryoaonetsuki.mira.automation.agent.TaskStep
+import io.github.ryoaonetsuki.mira.automation.agent.TapNumberSettings
 import io.github.ryoaonetsuki.mira.automation.agent.TypeFlowResult
 import io.github.ryoaonetsuki.mira.automation.agent.TapNumbersResult
 import io.github.ryoaonetsuki.mira.automation.agent.TargetSource
@@ -316,21 +317,29 @@ class MicService : Service() {
                 } else {
                     // Symptom 5(f): near-miss acknowledgement in disconnected direct path
                     if (containsAutomationVerbOrAppNoun(transcript)) {
-                        val skillService = SkillMemoryService.getInstance(applicationContext)
-                        val match = skillService.findMatch(transcript)
-                        if (match != null) {
-                            Log.i(TAG, "MIRA_LIVE_VOICE: Direct path near-miss found skill match for: $transcript")
-                            val result = automationBridge.executeSkill(match)
+                        val skillSettings = SkillSettings.getInstance(applicationContext)
+                        if (!skillSettings.isSkillsEnabled) {
                             recordAutomationNotification(
-                                title = "Replayed Skill ${if (result.status == TaskStatus.SUCCESS) "Completed" else "Failed"}",
-                                message = "${result.message} ($transcript)"
+                                title = "Skills Disabled",
+                                message = "Automatic skill replay is blocked because Skills are turned off in Settings."
                             )
                         } else {
-                            Log.w(TAG, "MIRA_LIVE_VOICE: Command not understood in disconnected direct path: $transcript")
-                            recordAutomationNotification(
-                                title = "Command Not Understood",
-                                message = "Could not understand voice command: \"$transcript\""
-                            )
+                            val skillService = SkillMemoryService.getInstance(applicationContext)
+                            val match = skillService.findMatch(transcript)
+                            if (match != null) {
+                                Log.i(TAG, "MIRA_LIVE_VOICE: Direct path near-miss found skill match for: $transcript")
+                                val result = automationBridge.executeSkill(match)
+                                recordAutomationNotification(
+                                    title = "Replayed Skill ${if (result.status == TaskStatus.SUCCESS) "Completed" else "Failed"}",
+                                    message = "${result.message} ($transcript)"
+                                )
+                            } else {
+                                Log.w(TAG, "MIRA_LIVE_VOICE: Command not understood in disconnected direct path: $transcript")
+                                recordAutomationNotification(
+                                    title = "Command Not Understood",
+                                    message = "Could not understand voice command: \"$transcript\""
+                                )
+                            }
                         }
                     }
                 }
@@ -776,7 +785,7 @@ class MicService : Service() {
                     callStateStore.setCallActive(false)
                     _liveState.value = LiveState.ERROR
                     _voiceStage.value = VoiceStage.ERROR
-                    _errorMessage.value = "Server voice unavailable — $reason — add your own Gemini key in Settings or tap to retry"
+                    _errorMessage.value = "Server voice unavailable — $reason — add your own Mira key in Settings or tap to retry"
                     LiveVoiceDiagnostics.updateLastError(_errorMessage.value!!)
                     LiveVoiceDiagnostics.updateStage("ERROR")
                     dismissNotification()
@@ -788,7 +797,7 @@ class MicService : Service() {
                 callStateStore.setCallActive(false)
                 _liveState.value = LiveState.ERROR
                 _voiceStage.value = VoiceStage.ERROR
-                val noKeyErr = "Gemini key missing — add it in Settings"
+                val noKeyErr = "Mira key missing — add it in Settings"
                 _errorMessage.value = noKeyErr
                 _lastVoiceDiagnostic.value = noKeyErr
                 LiveVoiceDiagnostics.updateLastError(noKeyErr)
@@ -1018,7 +1027,7 @@ class MicService : Service() {
                                     notifDb.notificationDao().insertNotification(
                                         NotificationEntity(
                                             title = "Voice Session Started",
-                                            message = "Connected to Gemini Live ($cachedVoiceName)",
+                                            message = "Connected to Mira Live ($cachedVoiceName)",
                                             type = "voice"
                                         )
                                     )
@@ -1281,7 +1290,8 @@ class MicService : Service() {
         targetApp: String? = null,
         goal: String? = null,
         skillsService: SkillMemoryService? = null,
-        appKnowledge: io.github.ryoaonetsuki.mira.automation.AppKnowledge? = null
+        appKnowledge: io.github.ryoaonetsuki.mira.automation.AppKnowledge? = null,
+        tapNumbersEnabled: Boolean = TapNumberSettings.getInstance(this).isTapNumbersEnabled
     ): Value.Object = io.github.ryoaonetsuki.mira.service.executeFunctionCall(
         automationPort = automationPort,
         context = context,
@@ -1296,7 +1306,8 @@ class MicService : Service() {
         skillsService = skillsService,
         appKnowledge = appKnowledge ?: this@MicService.appKnowledge,
         appPacing = appPacing,
-        screenPort = screenPort()
+        screenPort = screenPort(),
+        tapNumbersEnabled = tapNumbersEnabled
     ).also { response ->
         val success = (response.value["success"] as? Value.Bool)?.value == true
         if (success && name.equals("open_app", ignoreCase = true)) {
@@ -1598,7 +1609,7 @@ internal suspend fun resolveVisionCoordinates(
         ?: getEffectiveGeminiApiKey(context)
     if (apiKey.isNullOrBlank()) {
         Log.w(TAG, "Vision locator failed: Gemini API key is missing or blank")
-        return VisionResolution(null, "Gemini API key is missing in Settings")
+        return VisionResolution(null, "Mira API key is missing in Settings")
     }
 
     val jpeg = automationPort.takeScreenshotJpeg(720)
@@ -1790,7 +1801,8 @@ internal suspend fun executeFunctionCall(
     skillsService: SkillMemoryService? = null,
     appKnowledge: io.github.ryoaonetsuki.mira.automation.AppKnowledge? = null,
     appPacing: AppPacing = MIRA_DEFAULT_OPERATING_PACE.appPacing(),
-    screenPort: MiraScreenPort? = null
+    screenPort: MiraScreenPort? = null,
+    tapNumbersEnabled: Boolean = if (context != null) TapNumberSettings.getInstance(context).isTapNumbersEnabled else false
 ): Value.Object {
     val startTimeMs = System.currentTimeMillis()
     val argsSummary = (typedArgs.ifEmpty { rawArgs }).toString()
@@ -1936,7 +1948,8 @@ private suspend fun executeFunctionCallInternal(
                     stepDelayMs = if (pollTimeoutMs == 0L) 0L else 600L,
                     apiKeyProvider = { (context as? MicService)?.activeGeminiApiKey ?: getEffectiveGeminiApiKey(context).orEmpty() },
                     visionLocator = { target, currentNodes -> resolveVisionCoordinates(context, target, currentNodes, automationPort).coordinates },
-                    appKnowledge = appKnowledge
+                    appKnowledge = appKnowledge,
+                    tapNumbersEnabled = tapNumbersEnabled
                 )
                 val replayResult = executor.replaySkillDirect(matchedSkill)
                 if (replayResult.status == TaskStatus.SUCCESS) {
@@ -2029,7 +2042,7 @@ private suspend fun executeFunctionCallInternal(
 
             val prePackage = automationPort.getCurrentPackage().orEmpty()
             val serviceInstance = MiraAccessibilityService.instance
-            val beforeFrame = if (serviceInstance != null) MikaReliableActions.captureFrameGrid(serviceInstance) else null
+            val beforeHash = MikaReliableActions.treeHash(serviceInstance?.windows ?: emptyList())
 
             // Milestone 6 Off-target refusal guard: refuse BEFORE executing click_text
             if (isOffTargetForAction("click_text", prePackage, resolvedTarget, resolvedGoal, automationPort)) {
@@ -2157,10 +2170,7 @@ private suspend fun executeFunctionCallInternal(
             var postPackage = automationPort.getCurrentPackage().orEmpty()
             var postNodes = automationPort.dumpScreen()
             var postSignature = TaskExecutor.computeNodeSignature(postNodes)
-            val afterFrame = if (serviceInstance != null) MikaReliableActions.captureFrameGrid(serviceInstance) else null
-            val frameChanged = if (beforeFrame != null && afterFrame != null) {
-                FrameDiff.compare(beforeFrame, afterFrame, null)?.visible == true
-            } else null
+            val frameChanged = MikaReliableActions.awaitChange(beforeHash, 500L)
 
             // Post-action verify: if tap dispatched but had NO verified effect, re-perceive once and retry once
             val noEffectInitially = actionSuccess && (postSignature == preSignature && postPackage == prePackage && !automationPort.isInputFocused())
@@ -2263,7 +2273,7 @@ private suspend fun executeFunctionCallInternal(
 
             val prePackage = automationPort.getCurrentPackage().orEmpty()
             val serviceInstance = MiraAccessibilityService.instance
-            val beforeFrame = if (serviceInstance != null) MikaReliableActions.captureFrameGrid(serviceInstance) else null
+            val beforeHash = MikaReliableActions.treeHash(serviceInstance?.windows ?: emptyList())
             val preNodes = automationPort.dumpScreen()
             val preSignature = TaskExecutor.computeNodeSignature(preNodes)
 
@@ -2279,10 +2289,7 @@ private suspend fun executeFunctionCallInternal(
             val postPackage = automationPort.getCurrentPackage().orEmpty()
             val postNodes = automationPort.dumpScreen()
             val postSignature = TaskExecutor.computeNodeSignature(postNodes)
-            val afterFrame = if (serviceInstance != null) MikaReliableActions.captureFrameGrid(serviceInstance) else null
-            val frameChanged = if (beforeFrame != null && afterFrame != null) {
-                FrameDiff.compare(beforeFrame, afterFrame, null)?.visible == true
-            } else null
+            val frameChanged = MikaReliableActions.awaitChange(beforeHash, 500L)
 
             val step = TaskStep(action = TaskStep.ACTION_CLICK_AT, params = mapOf("x" to x, "y" to y))
             MicService.lastExecutedStep = step
@@ -2333,6 +2340,12 @@ private suspend fun executeFunctionCallInternal(
                 ?: rawArgs["number"]?.toIntOrNull()
             if (number == null || number <= 0) {
                 return Value.Object("error" to Value.Str("Missing or invalid number argument for tap_number"))
+            }
+
+            if (!tapNumbersEnabled) {
+                return Value.Object(
+                    "error" to Value.Str("Tap numbers are disabled in Settings. Enable them to show numbered badges on tappable elements, or act directly with click_text / click_at / vision.")
+                )
             }
 
             val prePackage = automationPort.getCurrentPackage().orEmpty()
@@ -2408,6 +2421,20 @@ private suspend fun executeFunctionCallInternal(
         }
 
         "show_numbers" -> {
+            if (!tapNumbersEnabled) {
+                val postPackage = automationPort.getCurrentPackage().orEmpty()
+                val postNodes = automationPort.dumpScreen()
+                return buildActionResult(
+                    automationPort = automationPort,
+                    outcome = "Tap numbers are disabled in Settings. Enable them to show numbered badges on tappable elements, or act directly with click_text / click_at / vision.",
+                    success = false,
+                    postPackage = postPackage,
+                    postNodes = postNodes,
+                    isStepOpenApp = false,
+                    descriptionContext = "Tap numbers disabled",
+                    appKnowledge = appKnowledge
+                )
+            }
             val detailed = automationPort.showTapNumbersDetailed()
             when (detailed) {
                 is TapNumbersResult.PermissionMissing -> {
@@ -2500,7 +2527,7 @@ private suspend fun executeFunctionCallInternal(
 
             val prePackage = automationPort.getCurrentPackage().orEmpty()
             val serviceInstance = MiraAccessibilityService.instance
-            val beforeFrame = if (serviceInstance != null) MikaReliableActions.captureFrameGrid(serviceInstance) else null
+            val beforeHash = MikaReliableActions.treeHash(serviceInstance?.windows ?: emptyList())
 
             // Milestone 6 Off-target refusal guard: refuse BEFORE executing type_text
             if (isOffTargetForAction("type_text", prePackage, resolvedTarget, resolvedGoal, automationPort)) {
@@ -2597,10 +2624,7 @@ private suspend fun executeFunctionCallInternal(
             val postPackage = automationPort.getCurrentPackage().orEmpty()
             val postNodes = automationPort.dumpScreen()
             val postSignature = TaskExecutor.computeNodeSignature(postNodes)
-            val afterFrame = if (serviceInstance != null) MikaReliableActions.captureFrameGrid(serviceInstance) else null
-            val frameChanged = if (beforeFrame != null && afterFrame != null) {
-                FrameDiff.compare(beforeFrame, afterFrame, null)?.visible == true
-            } else null
+            val frameChanged = MikaReliableActions.awaitChange(beforeHash, 500L)
 
             val step = TaskStep(action = TaskStep.ACTION_TYPE_TEXT, params = mapOf("text" to text))
             MicService.lastExecutedStep = step
@@ -2650,7 +2674,7 @@ private suspend fun executeFunctionCallInternal(
 
             val prePackage = automationPort.getCurrentPackage().orEmpty()
             val serviceInstance = MiraAccessibilityService.instance
-            val beforeFrame = if (serviceInstance != null) MikaReliableActions.captureFrameGrid(serviceInstance) else null
+            val beforeHash = MikaReliableActions.treeHash(serviceInstance?.windows ?: emptyList())
             val preNodes = automationPort.dumpScreen()
             val preSignature = TaskExecutor.computeNodeSignature(preNodes)
 
@@ -2666,10 +2690,7 @@ private suspend fun executeFunctionCallInternal(
             val postPackage = automationPort.getCurrentPackage().orEmpty()
             val postNodes = automationPort.dumpScreen()
             val postSignature = TaskExecutor.computeNodeSignature(postNodes)
-            val afterFrame = if (serviceInstance != null) MikaReliableActions.captureFrameGrid(serviceInstance) else null
-            val frameChanged = if (beforeFrame != null && afterFrame != null) {
-                FrameDiff.compare(beforeFrame, afterFrame, null)?.visible == true
-            } else null
+            val frameChanged = MikaReliableActions.awaitChange(beforeHash, 500L)
 
             val step = TaskStep(action = TaskStep.ACTION_SCROLL, params = mapOf("direction" to direction))
             MicService.lastExecutedStep = step
@@ -2939,7 +2960,8 @@ private suspend fun executeFunctionCallInternal(
                 stepDelayMs = if (pollTimeoutMs == 0L) 0L else 600L,
                 apiKeyProvider = { (context as? MicService)?.activeGeminiApiKey ?: getEffectiveGeminiApiKey(context).orEmpty() },
                 visionLocator = { target, currentNodes -> resolveVisionCoordinates(context, target, currentNodes, automationPort).coordinates },
-                appKnowledge = appKnowledge
+                appKnowledge = appKnowledge,
+                tapNumbersEnabled = tapNumbersEnabled
             )
             val replayResult = executor.replaySkillDirect(matchedSkill)
             val postPackage = automationPort.getCurrentPackage().orEmpty()

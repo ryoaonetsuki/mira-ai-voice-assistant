@@ -215,7 +215,7 @@ fun PersonalSettingsScreen(
                         Spacer(modifier = Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Gemini Key Status",
+                                text = "Mira Key Status",
                                 fontSize = 15.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 color = palette.textPrimary
@@ -238,7 +238,7 @@ fun PersonalSettingsScreen(
                             testResultMsg = null
                             validationState = PersonalKeyValidationState.IDLE
                         },
-                        label = { Text("Gemini API Key") },
+                        label = { Text("Mira API Key") },
                         placeholder = { Text("Paste key starting with AQ...") },
                         singleLine = true,
                         shape = RoundedCornerShape(12.dp),

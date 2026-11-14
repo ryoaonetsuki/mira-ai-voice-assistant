@@ -17,8 +17,8 @@ class EchoGateTest {
 
     @Test
     fun testConstants() {
-        assertEquals("Ratio should be 1.5f (+3.5 dB safety multiplier)", 1.5f, EchoGate.RATIO, 0.0001f)
-        assertEquals("Floor should be 0.05f (5% RMS noise floor)", 0.05f, EchoGate.FLOOR, 0.0001f)
+        assertEquals("Ratio should be 1.0f (retuned v1.0.1: post-AEC residual is far below raw coupling)", 1.0f, EchoGate.RATIO, 0.0001f)
+        assertEquals("Floor should be 0.02f (2% RMS noise floor, retuned v1.0.1)", 0.02f, EchoGate.FLOOR, 0.0001f)
         assertEquals("Half-life should be 150ms", 150L, EchoGate.BOT_LEVEL_HALF_LIFE_MS)
         assertEquals("Max age cutoff should be 600ms", 600L, EchoGate.BOT_LEVEL_MAX_AGE_MS)
     }
@@ -67,8 +67,8 @@ class EchoGateTest {
 
     @Test
     fun testBotTalking_EchoLevelMic_DropsFrame() {
-        // Threshold formula: botLevel * 1.5f + 0.05f
-        // For botLevel = 0.20f: threshold = 0.20 * 1.5 + 0.05 = 0.35f
+        // Threshold formula (retuned v1.0.1): botLevel * 1.0f + 0.02f
+        // For botLevel = 0.20f: threshold = 0.20 * 1.0 + 0.02 = 0.22f
 
         // Case A: micRms <= botLevel (direct acoustic coupling / attenuated echo)
         assertFalse(
@@ -80,24 +80,16 @@ class EchoGateTest {
             EchoGate.shouldForward(micRms = 0.20f, botLevel = 0.20f, isBotTalking = true, echoGuardEnabled = true)
         )
 
-        // Case B: micRms slightly above botLevel but below threshold (0.20 < micRms <= 0.35)
+        // Case B: micRms slightly above botLevel but below threshold (0.20 < micRms <= 0.22)
         assertFalse(
-            "Mic energy slightly above botLevel (0.25 vs threshold 0.35) must be dropped",
-            EchoGate.shouldForward(micRms = 0.25f, botLevel = 0.20f, isBotTalking = true, echoGuardEnabled = true)
-        )
-        assertFalse(
-            "Mic energy just below threshold (0.34 vs threshold 0.35) must be dropped",
-            EchoGate.shouldForward(micRms = 0.34f, botLevel = 0.20f, isBotTalking = true, echoGuardEnabled = true)
-        )
-        assertFalse(
-            "Mic energy exactly at threshold (0.35 vs threshold 0.35) must be dropped",
-            EchoGate.shouldForward(micRms = 0.35f, botLevel = 0.20f, isBotTalking = true, echoGuardEnabled = true)
+            "Mic energy slightly above botLevel (0.21 vs threshold 0.22) must be dropped",
+            EchoGate.shouldForward(micRms = 0.21f, botLevel = 0.20f, isBotTalking = true, echoGuardEnabled = true)
         )
 
-        // Case C: Quiet playback (botLevel = 0.04f, threshold = 0.04 * 1.5 + 0.05 = 0.11f)
+        // Case C: Quiet playback (botLevel = 0.04f, threshold = 0.04 * 1.0 + 0.02 = 0.06f)
         assertFalse(
-            "Quiet speaker output with ambient room noise (0.07 vs threshold 0.11) must be dropped",
-            EchoGate.shouldForward(micRms = 0.07f, botLevel = 0.04f, isBotTalking = true, echoGuardEnabled = true)
+            "Quiet speaker output with ambient room noise (0.05 vs threshold 0.06) must be dropped",
+            EchoGate.shouldForward(micRms = 0.05f, botLevel = 0.04f, isBotTalking = true, echoGuardEnabled = true)
         )
     }
 
@@ -105,40 +97,40 @@ class EchoGateTest {
     fun testBotTalking_LoudUserSpeech_ForwardsFrame() {
         // User deliberately interrupts Mira: mic energy clearly exceeds the safety threshold
 
-        // For botLevel = 0.20f (threshold = 0.35f), user speaking near the mic at micRms = 0.50f
+        // For botLevel = 0.20f (threshold = 0.22f), user speaking near the mic at micRms = 0.50f
         assertTrue(
-            "Loud user speech exceeding threshold (0.50 > 0.35) must be forwarded to trigger interruption",
+            "Loud user speech exceeding threshold (0.50 > 0.22) must be forwarded to trigger interruption",
             EchoGate.shouldForward(micRms = 0.50f, botLevel = 0.20f, isBotTalking = true, echoGuardEnabled = true)
         )
 
-        // Quiet bot playback (botLevel = 0.04f, threshold = 0.11f), normal user speech at micRms = 0.25f
+        // Quiet bot playback (botLevel = 0.04f, threshold = 0.06f), normal user speech at micRms = 0.25f
         assertTrue(
-            "Normal user speech during quiet playback (0.25 > 0.11) must be forwarded",
+            "Normal user speech during quiet playback (0.25 > 0.06) must be forwarded",
             EchoGate.shouldForward(micRms = 0.25f, botLevel = 0.04f, isBotTalking = true, echoGuardEnabled = true)
         )
 
-        // Loud bot playback (botLevel = 0.40f, threshold = 0.65f), loud close-mic shout at micRms = 0.80f
+        // Loud bot playback (botLevel = 0.40f, threshold = 0.42f), loud close-mic shout at micRms = 0.80f
         assertTrue(
-            "Loud user barge-in during loud playback (0.80 > 0.65) must be forwarded",
+            "Loud user barge-in during loud playback (0.80 > 0.42) must be forwarded",
             EchoGate.shouldForward(micRms = 0.80f, botLevel = 0.40f, isBotTalking = true, echoGuardEnabled = true)
         )
     }
 
     @Test
     fun testBoundaryValues() {
-        // micRms = 0, botLevel = 0: threshold = 0 * 1.5 + 0.05 = 0.05 -> 0 > 0.05 is false
+        // micRms = 0, botLevel = 0: threshold = 0 * 1.0 + 0.02 = 0.02 -> 0 > 0.02 is false
         assertFalse(
             "mic=0, bot=0 with bot talking must DROP",
             EchoGate.shouldForward(micRms = 0.0f, botLevel = 0.0f, isBotTalking = true, echoGuardEnabled = true)
         )
 
-        // micRms = 1, botLevel = 0: threshold = 0.05 -> 1.0 > 0.05 is true
+        // micRms = 1, botLevel = 0: threshold = 0.02 -> 1.0 > 0.02 is true
         assertTrue(
             "mic=1, bot=0 with bot talking must FORWARD",
             EchoGate.shouldForward(micRms = 1.0f, botLevel = 0.0f, isBotTalking = true, echoGuardEnabled = true)
         )
 
-        // micRms = 1, botLevel = 1: threshold = 1 * 1.5 + 0.05 = 1.55 -> 1.0 > 1.55 is false
+        // micRms = 1, botLevel = 1: threshold = 1 * 1.0 + 0.02 = 1.02 -> 1.0 > 1.02 is false
         assertFalse(
             "mic=1, bot=1 with bot talking must DROP (echo exceeds maximum scale)",
             EchoGate.shouldForward(micRms = 1.0f, botLevel = 1.0f, isBotTalking = true, echoGuardEnabled = true)
@@ -228,7 +220,7 @@ class EchoGateTest {
         val botChunkTime = 10000L
         val initialBotLevel = 0.40f
 
-        // 1. During active bot speech (age = 0ms), normal user voice (0.20f) is dropped because threshold is 0.40 * 1.5 + 0.05 = 0.65f
+        // 1. During active bot speech (age = 0ms), normal user voice (0.20f) is dropped because threshold is 0.40 * 1.0 + 0.02 = 0.42f
         val freshEffective = EchoGate.computeEffectiveBotLevel(initialBotLevel, botChunkTime, botChunkTime)
         assertFalse(
             "During active playback, normal mic RMS is below high threshold and dropped",
@@ -240,7 +232,7 @@ class EchoGateTest {
         val decayedEffective = EchoGate.computeEffectiveBotLevel(initialBotLevel, botChunkTime, pauseTime)
         assertEquals("Decayed effective level during 650ms pause must be 0", 0.0f, decayedEffective, 0.0001f)
 
-        // 3. Normal user conversational voice (micRms = 0.20f) easily exceeds the decayed floor (0.05f)
+        // 3. Normal user conversational voice (micRms = 0.20f) easily exceeds the decayed floor (0.02f)
         assertTrue(
             "Normal user voice during bot pause MUST forward even while isBotTalking remains true",
             EchoGate.shouldForward(micRms = 0.20f, botLevel = decayedEffective, isBotTalking = true, echoGuardEnabled = true)
@@ -248,13 +240,13 @@ class EchoGateTest {
 
         // 4. Whisper / quiet speech (micRms = 0.08f) during pause also forwards
         assertTrue(
-            "Quiet user speech (0.08 > 0.05) during pause must forward",
+            "Quiet user speech (0.08 > 0.02) during pause must forward",
             EchoGate.shouldForward(micRms = 0.08f, botLevel = decayedEffective, isBotTalking = true, echoGuardEnabled = true)
         )
 
         // 5. Ambient room noise (micRms = 0.02f) during pause is still safely rejected by the noise floor
         assertFalse(
-            "Ambient room noise (0.02 <= 0.05) during pause must be dropped",
+            "Ambient room noise (0.02 <= 0.02) during pause must be dropped",
             EchoGate.shouldForward(micRms = 0.02f, botLevel = decayedEffective, isBotTalking = true, echoGuardEnabled = true)
         )
     }
@@ -316,5 +308,35 @@ class EchoGateTest {
         // After drain window expires (e.g. at 2000L), gate opens and forward is allowed
         assertFalse("After drain window expires, isBotTalking must be false", router.isBotTalking(2000L))
         assertTrue("After generationComplete turn end and drain, user mic frame must be forwarded", router.shouldForward(micRms = 0.04f, nowMs = 2000L))
+    }
+
+    @Test
+    fun testRetune_QuietBargeInForwards() {
+        // New RATIO=1.0f, FLOOR=0.02f: threshold = 0.1 * 1.0 + 0.02 = 0.12f
+        // mic 0.15 > 0.12 -> forwards
+        assertTrue(
+            "Quiet barge-in during playback must forward",
+            EchoGate.shouldForward(micRms = 0.15f, botLevel = 0.10f, isBotTalking = true, echoGuardEnabled = true)
+        )
+    }
+
+    @Test
+    fun testRetune_LoudBargeInForwards() {
+        // threshold = 0.3 * 1.0 + 0.02 = 0.32f
+        // mic 0.40 > 0.32 -> forwards
+        assertTrue(
+            "Loud barge-in during playback must forward",
+            EchoGate.shouldForward(micRms = 0.40f, botLevel = 0.30f, isBotTalking = true, echoGuardEnabled = true)
+        )
+    }
+
+    @Test
+    fun testRetune_PureEchoAt0_8xCouplingBlocked() {
+        // threshold = 0.3 * 1.0 + 0.02 = 0.32f
+        // mic 0.24 (0.8x of 0.3) is not > 0.32 -> blocked
+        assertFalse(
+            "Pure echo at 0.8x coupling must be blocked",
+            EchoGate.shouldForward(micRms = 0.24f, botLevel = 0.30f, isBotTalking = true, echoGuardEnabled = true)
+        )
     }
 }

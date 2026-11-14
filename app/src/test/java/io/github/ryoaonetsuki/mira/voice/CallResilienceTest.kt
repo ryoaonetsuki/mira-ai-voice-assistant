@@ -40,7 +40,7 @@ class CallResilienceTest {
 
     @Test
     fun testTerminalFailures_NeverAutoRestart() {
-        assertTrue(CallRestartPolicy.isTerminalFailure("Gemini key missing — add it in Settings"))
+        assertTrue(CallRestartPolicy.isTerminalFailure("Mira key missing — add it in Settings"))
         assertTrue(CallRestartPolicy.isTerminalFailure("Microphone permission not granted — allow it in Settings"))
         assertTrue(CallRestartPolicy.isTerminalFailure("Free-tier limit reached: maximum 1 concurrent sessions allowed"))
         assertTrue(CallRestartPolicy.isTerminalFailure("HTTP 401 Unauthorized"))

@@ -354,6 +354,9 @@ class GeminiSessionManager(
         currentClient?.sendFunctionResponse(id, name, response)
     }
 
+    /** Returns the number of in-flight function calls. */
+    fun activeFunctionCallCount(): Int = activeFunctionCalls.get()
+
     private fun closeCurrentClient() {
         val client = currentClient
         currentClient = null

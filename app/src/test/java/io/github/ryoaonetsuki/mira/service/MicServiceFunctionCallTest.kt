@@ -874,6 +874,7 @@ class MicServiceFunctionCallTest {
             name = "tap_number",
             rawArgs = mapOf("number" to "1"),
             typedArgs = mapOf("number" to 1),
+            tapNumbersEnabled = true,
             settleDelayMs = 0L,
             targetApp = "com.google.android.youtube"
         )
@@ -903,6 +904,7 @@ class MicServiceFunctionCallTest {
             name = "tap_number",
             rawArgs = mapOf("number" to "99"),
             typedArgs = mapOf("number" to 99),
+            tapNumbersEnabled = true,
             settleDelayMs = 0L,
             targetApp = "com.google.android.youtube"
         )
@@ -924,7 +926,8 @@ class MicServiceFunctionCallTest {
             context = null,
             name = "tap_number",
             rawArgs = emptyMap(),
-            typedArgs = emptyMap()
+            typedArgs = emptyMap(),
+            tapNumbersEnabled = true
         )
         val errMissing = (responseMissing.value["error"] as? Value.Str)?.value
         assertEquals("Missing or invalid number argument for tap_number", errMissing)
@@ -934,7 +937,8 @@ class MicServiceFunctionCallTest {
             context = null,
             name = "tap_number",
             rawArgs = mapOf("number" to "0"),
-            typedArgs = mapOf("number" to 0)
+            typedArgs = mapOf("number" to 0),
+            tapNumbersEnabled = true
         )
         val errZero = (responseZero.value["error"] as? Value.Str)?.value
         assertEquals("Missing or invalid number argument for tap_number", errZero)
@@ -954,6 +958,7 @@ class MicServiceFunctionCallTest {
             name = "show_numbers",
             rawArgs = emptyMap(),
             typedArgs = emptyMap(),
+            tapNumbersEnabled = true,
             settleDelayMs = 0L,
             targetApp = "com.google.android.youtube"
         )
@@ -977,7 +982,8 @@ class MicServiceFunctionCallTest {
             context = null,
             name = "show_numbers",
             rawArgs = emptyMap(),
-            typedArgs = emptyMap()
+            typedArgs = emptyMap(),
+            tapNumbersEnabled = true
         )
 
         val resultMap = response.value
@@ -998,12 +1004,112 @@ class MicServiceFunctionCallTest {
             context = null,
             name = "show_numbers",
             rawArgs = emptyMap(),
-            typedArgs = emptyMap()
+            typedArgs = emptyMap(),
+            tapNumbersEnabled = true
         )
 
         val resultMap = response.value
         val res = (resultMap["result"] as? Value.Str)?.value
         assertEquals("Please enable 'Display over other apps' in Mira setup or Android Settings to show number badges.", res)
+        assertEquals(false, (resultMap["success"] as? Value.Bool)?.value)
+    }
+
+    @Test
+    fun testShowNumbers_ToggleOff_ReturnsDisabledResult() = runBlocking {
+        val fakePort = TestAutomationPort(
+            currentPkg = "com.google.android.youtube"
+        )
+        fakePort.tapNumbersToShow = listOf(1 to fakePort.testNodes[0])
+
+        val response = executeFunctionCall(
+            automationPort = fakePort,
+            context = null,
+            name = "show_numbers",
+            rawArgs = emptyMap(),
+            typedArgs = emptyMap(),
+            settleDelayMs = 0L,
+            targetApp = "com.google.android.youtube",
+            tapNumbersEnabled = false
+        )
+
+        val resultMap = response.value
+        val resultStr = (resultMap["result"] as? Value.Str)?.value.orEmpty()
+        assertTrue("Result must state tap numbers are disabled: $resultStr", resultStr.contains("disabled in Settings"))
+        assertEquals(false, (resultMap["success"] as? Value.Bool)?.value)
+        assertFalse("Overlay must not be shown when toggle is OFF", fakePort.hideTapNumbersCalled)
+    }
+
+    @Test
+    fun testTapNumber_ToggleOff_ReturnsDisabledError() = runBlocking {
+        val fakePort = TestAutomationPort(
+            currentPkg = "com.google.android.youtube"
+        )
+
+        val response = executeFunctionCall(
+            automationPort = fakePort,
+            context = null,
+            name = "tap_number",
+            rawArgs = mapOf("number" to "1"),
+            typedArgs = mapOf("number" to 1),
+            settleDelayMs = 0L,
+            targetApp = "com.google.android.youtube",
+            tapNumbersEnabled = false
+        )
+
+        val resultMap = response.value
+        val err = (resultMap["error"] as? Value.Str)?.value
+        assertEquals("Tap numbers are disabled in Settings. Enable them to show numbered badges on tappable elements, or act directly with click_text / click_at / vision.", err)
+        assertEquals(false, (resultMap["success"] as? Value.Bool)?.value)
+    }
+
+    @Test
+    fun testTapNumber_DefaultOff_ReturnsDisabledGuidance() = runBlocking {
+        val fakePort = TestAutomationPort(
+            currentPkg = "com.google.android.youtube"
+        )
+
+        // No tapNumbersEnabled passed; context is null -> default must be false
+        val response = executeFunctionCall(
+            automationPort = fakePort,
+            context = null,
+            name = "tap_number",
+            rawArgs = mapOf("number" to "1"),
+            typedArgs = mapOf("number" to 1),
+            settleDelayMs = 0L,
+            targetApp = "com.google.android.youtube"
+        )
+
+        val resultMap = response.value
+        val err = (resultMap["error"] as? Value.Str)?.value
+        assertEquals(
+            "Tap numbers are disabled in Settings. Enable them to show numbered badges on tappable elements, or act directly with click_text / click_at / vision.",
+            err
+        )
+        assertEquals(false, (resultMap["success"] as? Value.Bool)?.value)
+    }
+
+    @Test
+    fun testShowNumbers_DefaultOff_ReturnsDisabledGuidance() = runBlocking {
+        val fakePort = TestAutomationPort(
+            currentPkg = "com.google.android.youtube"
+        )
+        fakePort.tapNumbersToShow = listOf(1 to fakePort.testNodes[0])
+
+        // No tapNumbersEnabled passed; context is null -> default must be false
+        val response = executeFunctionCall(
+            automationPort = fakePort,
+            context = null,
+            name = "show_numbers",
+            rawArgs = emptyMap(),
+            typedArgs = emptyMap()
+        )
+
+        val resultMap = response.value
+        val err = (resultMap["error"] as? Value.Str)?.value
+        assertEquals(
+            "Tap numbers are disabled in Settings. Enable them to show numbered badges on tappable elements, or act directly with click_text / click_at / vision.",
+            err
+        )
         assertEquals(false, (resultMap["success"] as? Value.Bool)?.value)
     }
 

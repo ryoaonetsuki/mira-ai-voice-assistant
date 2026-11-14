@@ -56,6 +56,7 @@ import io.github.ryoaonetsuki.mira.voice.pipecat.SessionManagerListener
 import io.github.ryoaonetsuki.mira.voice.pipecat.SessionManagerState
 import io.github.ryoaonetsuki.mira.voice.pipecat.VoiceEchoDetector
 import kotlinx.coroutines.*
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -176,6 +177,8 @@ class MicService : Service() {
     private var sessionManager: GeminiSessionManager? = null
     private var connectingWatchdogJob: Job? = null
     private var startVoiceSessionJob: Job? = null
+    private val taskSupervisor = TaskSupervisor()
+    private val functionCallJobs = mutableSetOf<Job>()
     /**
      * Turn G: the call is owned by "call active" state, not by one WebSocket.
      * [autoRestartJob] re-starts a fresh session after a terminal error
@@ -266,13 +269,18 @@ class MicService : Service() {
             scope = serviceScope,
             timeoutMs = UserTurnEscalator.DEFAULT_ESCALATION_TIMEOUT_MS
         ) { reason ->
-            Log.w(TAG, "MIRA_LIVE_VOICE: User-turn second-stage escalation fired ($reason) — requesting reconnect")
-            LiveVoiceDiagnostics.recordDropReason("escalation-$reason")
-            _liveState.value = LiveState.CONNECTING
-            _voiceStage.value = VoiceStage.CONNECTING
-            _isReconnecting.value = true
-            postCallNotificationIfForeground()
-            sessionManager?.requestReconnect(reason)
+            val inFlightCount = sessionManager?.activeFunctionCallCount() ?: 0
+            if (shouldEscalateWhileInFlight(inFlightCount)) {
+                Log.w(TAG, "MIRA_LIVE_VOICE: User-turn second-stage escalation fired ($reason) — requesting reconnect")
+                LiveVoiceDiagnostics.recordDropReason("escalation-$reason")
+                _liveState.value = LiveState.CONNECTING
+                _voiceStage.value = VoiceStage.CONNECTING
+                _isReconnecting.value = true
+                postCallNotificationIfForeground()
+                sessionManager?.requestReconnect(reason)
+            } else {
+                Log.i(TAG, "MIRA_LIVE_VOICE: Escalation suppressed — function call in flight ($inFlightCount)")
+            }
         }
     }
 
@@ -294,13 +302,14 @@ class MicService : Service() {
 
     private fun handleUserTurnWatchdogFired(transcript: String) {
         val isConnected = sessionManager?.state?.value == SessionManagerState.CONNECTED
-        Log.i(TAG, "MIRA_LIVE_VOICE: User turn watchdog fired (connected=$isConnected): $transcript")
-        if (isConnected) {
+        val inFlightCount = sessionManager?.activeFunctionCallCount() ?: 0
+        Log.i(TAG, "MIRA_LIVE_VOICE: User turn watchdog fired (connected=$isConnected, inFlight=$inFlightCount): $transcript")
+        if (isConnected && !shouldSuppressNudgeWhileInFlight(inFlightCount)) {
             Log.i(TAG, "MIRA_LIVE_VOICE: Injecting user turn nudge into same Live session: $transcript")
             sessionManager?.sendUserMessage(transcript)
             // Symptom 3(b): arm second-stage escalation
             userTurnEscalator.arm("no-model-response-after-nudge")
-        } else {
+        } else if (!isConnected && shouldRunDisconnectedDirectPath(sessionManager?.state?.value ?: SessionManagerState.IDLE)) {
             val action = WatchdogActionResolver.resolve(isLiveConnected = false, isUserInitiated = true)
             Log.i(TAG, "MIRA_LIVE_VOICE: Live not connected, action=$action; running direct path for: $transcript")
             serviceScope.launch(Dispatchers.IO) {
@@ -1248,7 +1257,50 @@ class MicService : Service() {
         _voiceStage.value = VoiceStage.THINKING
         _statusText.value = "Running: $name"
         postCallNotificationIfForeground()
-        serviceScope.launch(Dispatchers.IO) {
+
+        // Dedup check before entering mutex
+        val canonicalTarget: String? = if (name.equals("open_app", ignoreCase = true)) {
+            val appTarget = (typedArgs["app"]?.toString() ?: rawArgs["app"] ?: rawArgs["package"] ?: rawArgs["name"] ?: "").trim()
+            if (appTarget.isNotEmpty()) MiraAutomationBridge.extractTargetApp(appTarget) else null
+        } else null
+
+        val key = taskSupervisor.canonicalKey(name, typedArgs, currentAutomationTarget, canonicalTarget)
+        if (key != null) {
+            when (val decision = taskSupervisor.checkAndReserve(key, System.currentTimeMillis())) {
+                DedupDecision.ALREADY_RUNNING -> {
+                    serviceScope.launch {
+                        sessionManager?.sendFunctionResponse(
+                            id,
+                            name,
+                            Value.Object(
+                                "success" to Value.Bool(true),
+                                "result" to Value.Str("Same task already running — will report once.")
+                            )
+                        )
+                    }
+                    return
+                }
+                DedupDecision.ALREADY_DONE -> {
+                    val cached = taskSupervisor.cachedResult(key) ?: "Already completed."
+                    serviceScope.launch {
+                        sessionManager?.sendFunctionResponse(
+                            id,
+                            name,
+                            Value.Object(
+                                "success" to Value.Bool(true),
+                                "result" to Value.Str(cached)
+                            )
+                        )
+                    }
+                    return
+                }
+                DedupDecision.EXECUTE -> {
+                    // proceed to launch below
+                }
+            }
+        }
+
+        val job = serviceScope.launch(Dispatchers.IO) {
             functionCallMutex.withLock {
                 try {
                     val responseObj = executeFunctionCall(
@@ -1263,8 +1315,32 @@ class MicService : Service() {
                     )
                     sessionManager?.sendFunctionResponse(id, name, responseObj)
                     val outcome = extractOutcomeString(responseObj)
+                    val success = (responseObj.value["success"] as? Value.Bool)?.value
+                        ?: !responseObj.value.containsKey("error")
+                    if (key != null) {
+                        taskSupervisor.markFinished(key, success = success, System.currentTimeMillis(), outcome)
+                    }
                     postCallWatchdog.arm(outcome, TurnWatchdog.DEFAULT_POST_CALL_TIMEOUT_MS)
+                } catch (e: CancellationException) {
+                    if (key != null) {
+                        taskSupervisor.markCancelled(key, System.currentTimeMillis())
+                    }
+                    automationBridge.cancel()
+                    serviceScope.launch {
+                        sessionManager?.sendFunctionResponse(
+                            id,
+                            name,
+                            Value.Object(
+                                "success" to Value.Bool(false),
+                                "cancelled" to Value.Bool(true),
+                                "message" to Value.Str("cancelled by newer task")
+                            )
+                        )
+                    }
                 } catch (e: Exception) {
+                    if (key != null) {
+                        taskSupervisor.markFinished(key, success = false, System.currentTimeMillis())
+                    }
                     Log.e(TAG, "MIRA_LIVE_VOICE: Error handling function call $name: ${e.message}", e)
                     val errObj = Value.Object(
                         "error" to Value.Str(e.message ?: "Function execution failed")
@@ -1276,6 +1352,10 @@ class MicService : Service() {
                     postCallNotificationIfForeground()
                 }
             }
+        }
+        synchronized(functionCallJobs) { functionCallJobs.add(job) }
+        job.invokeOnCompletion {
+            synchronized(functionCallJobs) { functionCallJobs.remove(job) }
         }
     }
 
@@ -1355,6 +1435,60 @@ class MicService : Service() {
                 return
             }
             io.github.ryoaonetsuki.mira.voice.VoiceTurnRoute.LIVE_ANSWERS -> {
+                // New-task interrupt: classify against the PREVIOUS goal BEFORE
+                // overwriting it — comparing the new text against itself would
+                // always read SAME_INTENT and the interrupt could never fire.
+                val previousGoal = lastAutomationGoal
+
+                // New-task interrupt: cancel in-flight calls if this is a new task
+                val hasActiveCalls = synchronized(functionCallJobs) { functionCallJobs.any { it.isActive } }
+                if (hasActiveCalls) {
+                    val parsed = MiraAutomationBridge.parseDirectAction(cleanText)
+                    val parsedKind = when (parsed) {
+                        is MiraAutomationBridge.DirectAction.OpenApp -> "OpenApp"
+                        is MiraAutomationBridge.DirectAction.Search -> "Search"
+                        is MiraAutomationBridge.DirectAction.Dial -> "Dial"
+                        is MiraAutomationBridge.DirectAction.Scroll -> "Scroll"
+                        is MiraAutomationBridge.DirectAction.TapLabel -> "TapLabel"
+                        is MiraAutomationBridge.DirectAction.TapNumber -> "TapNumber"
+                        is MiraAutomationBridge.DirectAction.PressBack -> "PressBack"
+                        else -> null
+                    }
+                    val parsedTarget = when (parsed) {
+                        is MiraAutomationBridge.DirectAction.OpenApp -> parsed.target
+                        is MiraAutomationBridge.DirectAction.Search -> parsed.targetApp
+                        else -> null
+                    }
+
+                    val classification = taskSupervisor.classifyTurn(
+                        Skill.normalize(cleanText),
+                        previousGoal?.let { Skill.normalize(it) },
+                        currentAutomationTarget,
+                        parsedKind,
+                        parsedTarget
+                    )
+
+                    if (classification == TaskSupervisor.TurnClass.NEW_TASK) {
+                        val jobsToCancel = synchronized(functionCallJobs) { functionCallJobs.toList() }
+                        jobsToCancel.forEach { it.cancel() }
+                        taskSupervisor.cancelAll(System.currentTimeMillis())
+                        automationBridge.cancel()
+                        GoalToolTracker.reset()
+                        if (parsedTarget != null && parsedTarget != currentAutomationTarget) {
+                            currentAutomationTarget = null
+                        }
+                        serviceScope.launch {
+                            sessionManager?.sendUserMessage(
+                                "[System: The user gave a new task and the previous task was cancelled. Start the new task; do not re-emit the previous task's tool calls.]"
+                            )
+                        }
+                    }
+                }
+
+                // Goal signal: the transcript IS the goal (set after classification
+                // so the interrupt check above compares against the previous goal).
+                lastAutomationGoal = cleanText
+
                 userTurnWatchdog.arm(cleanText, TurnWatchdog.DEFAULT_USER_TURN_TIMEOUT_MS)
             }
         }
@@ -1814,6 +1948,8 @@ internal suspend fun executeFunctionCall(
         ?: (typedArgs["targetApp"]?.toString() ?: rawArgs["targetApp"] ?: typedArgs["target"]?.toString() ?: rawArgs["target"])
         ?: resolvedGoal?.let { MiraAutomationBridge.extractTargetApp(it) }
 
+    currentCoroutineContext().ensureActive()
+
     // Milestone 6: Per-goal tool-call cap (30) and 120s task timeout tracking
     val trackerCheck = GoalToolTracker.onToolCall(resolvedGoal)
     val currentGoalCount = GoalToolTracker.callCount
@@ -1858,6 +1994,7 @@ internal suspend fun executeFunctionCall(
     }
 
     try {
+        currentCoroutineContext().ensureActive()
         val response = executeFunctionCallInternal(
             automationPort = automationPort,
             context = context,

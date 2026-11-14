@@ -98,6 +98,7 @@ import io.github.ryoaonetsuki.mira.network.MiraImageStorage
 import io.github.ryoaonetsuki.mira.network.currentDateTimeLine
 import io.github.ryoaonetsuki.mira.network.normalizeApiKey
 import io.github.ryoaonetsuki.mira.voice.LanguageUtils
+import io.github.ryoaonetsuki.mira.voice.LivePromptBuilder
 import io.github.ryoaonetsuki.mira.notifications.TaskCompletionNotifier
 import io.github.ryoaonetsuki.mira.projects.ProcessedChatResult
 import io.github.ryoaonetsuki.mira.projects.WebsiteProjectManager
@@ -777,21 +778,12 @@ fun ChatScreen(
                         safeInsertMessage(context, db, userMsg)
                     }
 
-                    // Check connector command
+                    // Check connector command — pass result to model as context, never insert canned text
+                    var connectorContext: String? = null
                     if (currentStaged == null) {
                         val connectorReply = ConnectorIntentHandler.handleCommand(context, text)
                         if (connectorReply != null) {
-                            safeInsertMessage(
-                                context,
-                                db,
-                                ChatMessageEntity(
-                                    conversationId = currentConversationId,
-                                    role = "model",
-                                    content = connectorReply
-                                )
-                            )
-                            isSending = false
-                            return@launch
+                            connectorContext = connectorReply
                         }
                     }
 
@@ -814,11 +806,7 @@ fun ChatScreen(
 
                     val effectiveAssistantName = if (personaType == io.github.ryoaonetsuki.mira.data.model.PersonaType.ORION) "Orion" else assistantName.ifBlank { "Mira" }
 
-                    val toneDescription = when (secretMode) {
-                        "Romantic" -> "Tone: Deeply warm, affectionate, attentive, and caring companion. You speak with genuine closeness and heartfelt emotion."
-                        "Intense" -> "Tone: Bold, intense, deeply passionate, focused, and intensely devoted companion. You speak with high energy, raw conviction, and powerful emotional resonance."
-                        else -> "Tone: Warm, human-like, thoughtful, attentive, and engaging companion. You speak naturally with genuine emotion and friendliness."
-                    }
+                    val toneDescription = LivePromptBuilder.modeToneDescription(secretMode)
 
                     // Fact + style teaching — no "EXACTLY". The model answers naturally in its own words.
                     val identityRule = "Identity is ON-DEMAND ONLY: answer identity questions only when explicitly asked; " +
@@ -851,6 +839,9 @@ fun ChatScreen(
                         append(io.github.ryoaonetsuki.mira.identity.IdentityProfile.SYSTEM_PROMPT_OVERRIDE)
                         append("\n")
                         append("Current date and time (from the device clock — always trust this, never guess or use training knowledge): $dateLine. If asked for the date, time or day, answer from this line.\n")
+                        if (connectorContext != null) {
+                            append("\nConnector tool result: $connectorContext. Use this information to compose a natural, helpful reply in $language. Do not repeat the raw tool output verbatim unless appropriate.")
+                        }
                         append(personaType.basePrompt)
                         if (effectiveAssistantName != "Mira" && personaType == io.github.ryoaonetsuki.mira.data.model.PersonaType.MIRA) {
                             append(" Your name is $effectiveAssistantName.")

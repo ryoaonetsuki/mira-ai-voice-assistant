@@ -55,6 +55,10 @@ class MicServiceFunctionCallTest {
         var pkgChangeOnAction: String? = null
         var tapNumbersToShow: List<Pair<Int, ScreenNode>> = emptyList()
         var hideTapNumbersCalled: Boolean = false
+        // Simulates a real screen: tapping a field focuses it, so the
+        // type-flow focus check can pass (the interface default is false).
+        var inputFocusedState: Boolean = false
+        override fun isInputFocused(): Boolean = inputFocusedState
         var tapNumbersDetailedResult: io.github.ryoaonetsuki.mira.automation.agent.TapNumbersResult? = null
 
         override fun showTapNumbers(): List<Pair<Int, ScreenNode>> = tapNumbersToShow
@@ -94,6 +98,7 @@ class MicServiceFunctionCallTest {
 
         override fun clickAt(x: Float, y: Float): Boolean {
             lastClickedCoords = Pair(x, y)
+            inputFocusedState = true
             if (pkgChangeOnAction != null) {
                 currentPkg = pkgChangeOnAction!!
             }
@@ -1105,11 +1110,10 @@ class MicServiceFunctionCallTest {
         )
 
         val resultMap = response.value
-        val err = (resultMap["error"] as? Value.Str)?.value
-        assertEquals(
-            "Tap numbers are disabled in Settings. Enable them to show numbered badges on tappable elements, or act directly with click_text / click_at / vision.",
-            err
-        )
+        // Same disabled response shape as testShowNumbers_ToggleOff: the
+        // guidance arrives under "result" (buildActionResult), not "error".
+        val resultStr = (resultMap["result"] as? Value.Str)?.value.orEmpty()
+        assertTrue("Result must state tap numbers are disabled: $resultStr", resultStr.contains("disabled in Settings"))
         assertEquals(false, (resultMap["success"] as? Value.Bool)?.value)
     }
 

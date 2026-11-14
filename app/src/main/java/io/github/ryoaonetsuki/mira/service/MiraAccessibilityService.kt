@@ -136,9 +136,10 @@ class MiraAccessibilityService : AccessibilityService() {
                 }
             }
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
-                val node = event.source
-                val scrollX = node?.scrollX ?: event.scrollX
-                val scrollY = node?.scrollY ?: event.scrollY
+                // AccessibilityNodeInfo has no scroll offsets; the offsets live
+                // on the event itself (via AccessibilityRecord).
+                val scrollX = event.scrollX
+                val scrollY = event.scrollY
                 val prev = lastScrollPos[pkg]
                 val direction = when {
                     prev == null -> "down"

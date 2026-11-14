@@ -1,10 +1,25 @@
-# Mira AI — Native Android Voice Assistant
+<p align="center">
+  <img src="assets/logo-chosen.png" alt="Mira AI" width="120" />
+</p>
 
-Mira AI is a real-time voice assistant for Android, built natively in **Kotlin** and
-**Jetpack Compose**. Talk to her like a person — she keeps talking like a real human while
-she does the work on your phone, in the background, in one continuous voice session.
+<h1 align="center">Mira AI</h1>
 
-Developed by **Salman Biswas** — [github.com/ryoaonetsuki](https://github.com/ryoaonetsuki).
+<p align="center">
+  <b>A real-time voice assistant for Android — talk to her like a person.</b><br />
+  She keeps talking like a real human while she does the work on your phone,
+  in the background, in one continuous voice session.
+</p>
+
+<p align="center">
+  <a href="https://github.com/ryoaonetsuki/mira-ai-voice-assistant/releases"><img src="https://img.shields.io/github/v/release/ryoaonetsuki/mira-ai-voice-assistant" alt="Release" /></a>
+  <a href="https://github.com/ryoaonetsuki/mira-ai-voice-assistant/releases/download/v1.0.0/mira-ai-debug.apk"><img src="https://img.shields.io/badge/Download-APK-3DDC84?logo=android" alt="Download APK" /></a>
+  <img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License: Apache 2.0" />
+  <a href="https://github.com/ryoaonetsuki/mira-ai-voice-assistant/actions/workflows/build-apk.yml"><img src="https://img.shields.io/github/actions/workflow/status/ryoaonetsuki/mira-ai-voice-assistant/build-apk.yml?branch=main" alt="Build status" /></a>
+  <img src="https://img.shields.io/badge/Android-26%2B-3DDC84?logo=android" alt="Android 26+" />
+  <img src="https://img.shields.io/badge/Kotlin-2.2.20-7F52FF?logo=kotlin" alt="Kotlin 2.2.20" />
+</p>
+
+<p align="center">Developed by <b>Salman Biswas</b> — <a href="https://github.com/ryoaonetsuki">github.com/ryoaonetsuki</a></p>
 
 ---
 
@@ -20,11 +35,11 @@ Developed by **Salman Biswas** — [github.com/ryoaonetsuki](https://github.com/
   understands what each button does, re-reads the screen after every action, and finishes
   only when the goal state is visible.
 - **Skills & macros** — do a task once and it becomes a skill: next time she replays it
-  directly. Recorded macros, learned skills, and admin-defined macros (from Supabase) all
-  run from the Skills screen.
+  directly. Recorded macros, learned skills, and admin-defined macros all run from the
+  Skills screen.
 - **Text chat** — persistent on-device history, grouped by date, with Think / Search /
-  Image modes. Image mode generates images (FLUX via a Cloudflare Worker) — only when the
-  Image button is on, using your full message as the prompt.
+  Image modes. Image mode generates images (FLUX) — only when the Image button is on,
+  using your full message as the prompt.
 - **Vision** — point the camera and ask; answers are text-only.
 - **Memory** — what she learns about you stays on the phone only, never on a server.
 - **Websites** — ask her to build a multi-page static website; she saves it and serves it
@@ -32,9 +47,18 @@ Developed by **Salman Biswas** — [github.com/ryoaonetsuki](https://github.com/
 - **3D orb** — the home screen is a single amplitude-driven orb; dark cyan-to-violet theme,
   Fluent icons throughout.
 
+## Download
+
+### ⬇️ Download Mira AI v1.0.0
+
+[![Download APK](https://img.shields.io/badge/Download-APK%20v1.0.0-3DDC84?style=for-the-badge&logo=android)](https://github.com/ryoaonetsuki/mira-ai-voice-assistant/releases/download/v1.0.0/mira-ai-debug.apk)
+
+**[mira-ai-debug.apk — v1.0.0 (57.5 MB)](https://github.com/ryoaonetsuki/mira-ai-voice-assistant/releases/download/v1.0.0/mira-ai-debug.apk)** — install it directly on your phone. No account, no sign-up. Older releases are on the [Releases page](https://github.com/ryoaonetsuki/mira-ai-voice-assistant/releases).
+
 ## Setup
 
-1. Install the APK (see [Building](#building) — GitHub Actions is the reliable path).
+1. Install the APK (download it above, or see [Building](#building) — GitHub Actions is
+   the reliable path).
 2. Open Mira and complete setup: paste your **Gemini API key** (get one free from
    [Google AI Studio](https://aistudio.google.com/)) and grant the permissions she needs:
    Accessibility Service, Display over other apps, Notifications, and File Management.
@@ -43,13 +67,6 @@ Developed by **Salman Biswas** — [github.com/ryoaonetsuki](https://github.com/
 
 Optional: **Settings → Tap numbers** shows numbered badges on tappable elements. It is off
 by default — Mira works directly without it.
-
-## Admin backend
-
-Supabase project `mira` backs the admin panel at
-[https://mira-admin-8qg.pages.dev/](https://mira-admin-8qg.pages.dev/) (licence off by
-default; banner, kill-switch, maintenance mode, forced update, and macros as JSON).
-Conversation history is never sent to Supabase — it stays on the phone.
 
 ## Tech stack
 
@@ -81,7 +98,7 @@ the full unit-test suite, and the `app-debug` artifact is the APK to install.
   - `automation/` — AccessibilityService control, skills/macros, perception, vision
   - `ui/` — Compose screens (Home, Voice, Chat, Vision, Skills, Settings)
   - `chat/`, `data/`, `network/`, `notifications/`, `backend/` — chat, Room DB, API
-    clients, notifications, Supabase/licence
+    clients, notifications, licence
 - `app/src/main/cpp/` — vendored WebRTC audio processing (AEC3)
 - `app/src/test/` — unit tests (612 tests, run in CI)
 - `THIRD_PARTY_NOTICES.md` — every third-party component and its licence
@@ -97,3 +114,8 @@ and the same credits are shown in the app (Settings → About → Credits).
 
 Contributions are accepted — see [CONTRIBUTING.md](CONTRIBUTING.md) for the fork / branch /
 PR flow, code standards, and the rules for third-party code.
+
+## License
+
+Licensed under the [Apache License, Version 2.0](LICENSE). See [LICENSE](LICENSE) for the
+full text.

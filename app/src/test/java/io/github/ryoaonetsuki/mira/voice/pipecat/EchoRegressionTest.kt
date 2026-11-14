@@ -136,16 +136,16 @@ class EchoRegressionTest {
     fun testOwnerSymptom_RealBargeInForwards_AllowsInterruption() {
         val pipeline = TestFramePipeline(echoGuardEnabled = true)
 
-        // 1. Mira speaks: bot level ≈ 0.25f (threshold = 0.25 * 1.5 + 0.05 = 0.425f)
+        // 1. Mira speaks: bot level ≈ 0.25f (threshold = 0.25 * 1.0 + 0.02 = 0.27f)
         val botAudioOut = createPcmFrame(0.25f)
         pipeline.onMiraAudioOutChunk(botAudioOut, timestampMs = 1000L)
 
-        // 2. User interrupts loudly: mic RMS = 0.65f (> 0.425f threshold)
+        // 2. User interrupts loudly: mic RMS = 0.65f (> 0.27f threshold)
         val loudUserBargeIn = createPcmFrame(0.65f)
         val forwarded = pipeline.onMicCaptureFrame(loudUserBargeIn, timestampMs = 1000L)
 
         // 3. Verification: Frame must be FORWARDED
-        assertTrue("Loud barge-in frame (0.65 > 0.425) MUST be forwarded", forwarded)
+        assertTrue("Loud barge-in frame (0.65 > 0.27) MUST be forwarded", forwarded)
         assertEquals("Forwarded frames must have 1 frame", 1, pipeline.forwardedFrames.size)
         assertEquals("Dropped frames must be 0", 0, pipeline.droppedFrames.size)
 
@@ -197,7 +197,7 @@ class EchoRegressionTest {
         val normalUserPcm = createPcmFrame(0.18f)
         val forwarded = pipeline.onMicCaptureFrame(normalUserPcm, timestampMs = 1950L)
 
-        // 6. With decayed floor 0.05f, 0.18 > 0.05 -> FORWARDED
+        // 6. With decayed floor 0.02f, 0.18 > 0.02 -> FORWARDED
         assertTrue("Normal user speech during bot pause MUST be forwarded", forwarded)
         assertEquals(1, pipeline.forwardedFrames.size)
         assertEquals(0, pipeline.droppedFrames.size)

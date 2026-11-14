@@ -7,8 +7,9 @@ import java.util.Locale
  *
  * Detects:
  * 1. Exact match between user transcript and model speech.
- * 2. High token overlap (>= 70%) for multi-word phrases (e.g. mic capturing phone speaker).
- * 3. Significant substring match (>= 10 chars) between normalized strings.
+ * 2. High token overlap (>= 85%) for multi-word phrases (e.g. mic capturing phone speaker).
+ * 3. Significant substring match (>= 15 chars on BOTH strings) between normalized strings.
+ * 4. Single-token user turns match ONLY on exact string equality.
  *
  * Protects genuine user queries (e.g. "তুমি কে?", "তোমার নাম কি?", "stop") from being
  * falsely classified as echo.
@@ -30,23 +31,21 @@ object VoiceEchoDetector {
 
         val modelTokenSet = modelTokens.toSet()
 
-        // If user text has 1 token, only match if model was very short (<= 3 tokens) and contains token,
-        // or user text is an exact string match
+        // If user text has 1 token, only match on exact string equality.
         if (userTokens.size == 1) {
-            val token = userTokens[0]
-            return (modelTokens.size <= 3 && modelTokens.any { tokensMatch(token, it) }) || cleanUser == cleanModel
+            return cleanUser == cleanModel
         }
 
         // Multi-token: check token overlap
         // Fuzzy: a slightly mis-transcribed echo word (one letter off) still counts as a match.
         val matchCount = userTokens.count { u -> u in modelTokenSet || modelTokens.any { tokensMatch(u, it) } }
         val overlapRatio = matchCount.toDouble() / userTokens.size
-        if (overlapRatio >= 0.70) return true
+        if (overlapRatio >= 0.85) return true
 
         // Substring match on normalized string with spaces between tokens
         val joinedUser = userTokens.joinToString(" ")
         val joinedModel = modelTokens.joinToString(" ")
-        if (joinedUser.length >= 10 && (joinedModel.contains(joinedUser) || joinedUser.contains(joinedModel))) {
+        if (joinedUser.length >= 15 && joinedModel.length >= 15 && (joinedModel.contains(joinedUser) || joinedUser.contains(joinedModel))) {
             return true
         }
 

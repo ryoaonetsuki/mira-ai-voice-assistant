@@ -2,6 +2,7 @@ package io.github.ryoaonetsuki.mira.voice
 
 import io.github.ryoaonetsuki.mira.automation.MiraAutomationBridge
 import io.github.ryoaonetsuki.mira.automation.agent.TaskStep
+import io.github.ryoaonetsuki.mira.voice.pipecat.SessionManagerState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -166,4 +167,27 @@ class TurnWatchdog(
             }
         }
     }
+}
+
+/**
+ * Pure decision: suppress the user-turn nudge when a function call is in flight.
+ * No Android imports — JVM-testable with plain values.
+ */
+internal fun shouldSuppressNudgeWhileInFlight(inFlightCallCount: Int): Boolean {
+    return inFlightCallCount > 0
+}
+
+/**
+ * Pure decision: allow escalation/reconnect only when no function call is in flight.
+ */
+internal fun shouldEscalateWhileInFlight(inFlightCallCount: Int): Boolean {
+    return inFlightCallCount == 0
+}
+
+/**
+ * Pure decision: run the disconnected direct path only when the session is dead
+ * (STOPPED or ERROR). Skip while RECONNECTING or CONFIGURING to wait for resumption.
+ */
+internal fun shouldRunDisconnectedDirectPath(sessionState: SessionManagerState): Boolean {
+    return sessionState == SessionManagerState.STOPPED || sessionState == SessionManagerState.ERROR
 }

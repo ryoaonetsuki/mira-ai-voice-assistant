@@ -628,6 +628,92 @@ class TaskExecutorTest {
     }
 
     // =========================================================================
+    // A-M16: App alias resolution
+    // =========================================================================
+
+    @Test
+    fun testAM16_PlaySongOnSpotifyResolvesSpotify() {
+        val pkgs = ScreenAutomationService.resolveKnownAppPackages("play a song on spotify")
+        assertTrue("Should resolve Spotify, not YouTube", pkgs.contains("com.spotify.music"))
+        assertFalse("Should not prefer YouTube over Spotify", pkgs.firstOrNull() == "com.google.android.youtube")
+    }
+
+    @Test
+    fun testAM16_PlayAloneDoesNotResolvePlayStore() {
+        val pkgs = ScreenAutomationService.resolveKnownAppPackages("play")
+        assertTrue("'play' alone should not resolve Play Store", pkgs.isEmpty())
+    }
+
+    @Test
+    fun testAM16_ExactMatchWinsOverSubstring() {
+        val pkgs = ScreenAutomationService.resolveKnownAppPackages("youtube")
+        assertEquals(listOf("com.google.android.youtube"), pkgs)
+    }
+
+    // =========================================================================
+    // A-M17: Macro recording fixes
+    // =========================================================================
+
+    @Test
+    fun testAM17_ScrollUpRecordsUpDirection() {
+        val events = listOf(
+            mapOf(
+                "type" to "scroll",
+                "direction" to "up",
+                "package" to "com.facebook.katana",
+                "timestamp" to System.currentTimeMillis()
+            )
+        )
+        val steps = io.github.ryoaonetsuki.mira.service.MiraAccessibilityService.convertEventsToSteps(events)
+        assertEquals(1, steps.size)
+        assertEquals(TaskStep.ACTION_SCROLL, steps[0].action)
+        assertEquals("up", steps[0].stringParam("direction"))
+    }
+
+    @Test
+    fun testAM17_TypeInDifferentFieldsKeepsBothTexts() {
+        val events = listOf(
+            mapOf(
+                "type" to "type",
+                "text" to "hello",
+                "viewId" to "field_a",
+                "package" to "com.example.app",
+                "timestamp" to System.currentTimeMillis()
+            ),
+            mapOf(
+                "type" to "type",
+                "text" to "world",
+                "viewId" to "field_b",
+                "package" to "com.example.app",
+                "timestamp" to System.currentTimeMillis()
+            )
+        )
+        val steps = io.github.ryoaonetsuki.mira.service.MiraAccessibilityService.convertEventsToSteps(events)
+        assertEquals(2, steps.size)
+        assertEquals(TaskStep.ACTION_TYPE_TEXT, steps[0].action)
+        assertEquals("hello", steps[0].stringParam("text"))
+        assertEquals(TaskStep.ACTION_TYPE_TEXT, steps[1].action)
+        assertEquals("world", steps[1].stringParam("text"))
+    }
+
+    @Test
+    fun testAM17_PasswordFieldRecordsNoText() {
+        val events = listOf(
+            mapOf(
+                "type" to "type",
+                "text" to "",  // recorder strips password-field text; converter sees empty text
+                "viewId" to "password_field",
+                "package" to "com.example.app",
+                "timestamp" to System.currentTimeMillis()
+            )
+        )
+        val steps = io.github.ryoaonetsuki.mira.service.MiraAccessibilityService.convertEventsToSteps(events)
+        // Password text is not recorded; empty text produces no type step.
+        assertTrue(steps.isEmpty())
+    }
+
+
+    // =========================================================================
     // 6. Round 25 Fix Turn A — F-01, F-02, F-04, F-07, F-08, F-09, F-14 & Vision
     // =========================================================================
 
@@ -2178,10 +2264,12 @@ class TaskExecutorTest {
         assertTrue("Nodes should be empty", result.nodes.isEmpty())
     }
 
-    // --- A-M6: 4-arg clickText must try coordinates before text search ---
+    // --- A-M6: 4-arg clickText falls back to coordinates when the text is absent ---
+    // (Turn C contract: live text search first; recorded coordinates ONLY when
+    // the text is gone from the screen.)
 
     @Test
-    fun testClickTextFourArg_CoordinatesFirst_When2ArgReturnsFalse() {
+    fun testClickTextFourArg_CoordinatesFallback_WhenTextAbsent() {
         val fakePort = FakeAutomationPort(
             actionSuccess = true,
             requireNodeMatchForClickText = true,
@@ -2207,7 +2295,8 @@ class TaskExecutorTest {
             )
         )
 
-        // 4-arg default method: coordinates first, 2-arg text search only as fallback
+        // 4-arg default method: text search first, coordinates only as fallback
+        // when the text is absent from the screen (Turn C contract).
         val result = fakePort.clickText("Search", fakePort.screenNodes, 500, 800)
 
         assertTrue(result)
@@ -2393,5 +2482,159 @@ class TaskExecutorTest {
         assertEquals(TaskStatus.FAILED, result.status)
         assertTrue("Result message must mention stale tap failure: ${result.message}",
             result.message.contains("Stale recorded coordinate") || result.message.contains("tap skipped"))
+    }
+
+    // =========================================================================
+    // A-M2: executeSkillWithResume resume/retry behaviour
+    // =========================================================================
+
+    @Test
+    fun testA_M2_ResumeFromFailedStep_Succeeds() = runBlocking {
+        var clickFailures = 0
+        val port = object : FakeAutomationPort() {
+            override fun clickText(text: String, nodes: List<ScreenNode>): Boolean {
+                clickFailures++
+                return clickFailures > 2
+            }
+        }
+        val skills = SkillMemoryService(InMemorySkillStore())
+        val skill = Skill(
+            goal = "resume test",
+            steps = listOf(
+                TaskStep(action = TaskStep.ACTION_CLICK_TEXT, params = mapOf("text" to "A")),
+                TaskStep(action = TaskStep.ACTION_CLICK_TEXT, params = mapOf("text" to "B"))
+            )
+        )
+        val executor = TaskExecutor(automation = port, skills = skills, stepDelayMs = 0)
+
+        val result = executor.replaySkillDirect(skill)
+        assertEquals(TaskStatus.SUCCESS, result.status)
+        assertTrue("Should have retried the failed step", clickFailures >= 2)
+    }
+
+    @Test
+    fun testA_M2_FailsAfterMaxResumes() = runBlocking {
+        val port = FakeAutomationPort(actionSuccess = false)
+        val skills = SkillMemoryService(InMemorySkillStore())
+        val skill = Skill(
+            goal = "always fails",
+            steps = listOf(TaskStep(action = TaskStep.ACTION_CLICK_TEXT, params = mapOf("text" to "A")))
+        )
+        val executor = TaskExecutor(automation = port, skills = skills, stepDelayMs = 0)
+
+        val result = executor.replaySkillDirect(skill)
+        assertEquals(TaskStatus.FAILED, result.status)
+        assertTrue(result.message.contains("resumes"))
+    }
+
+    // =========================================================================
+    // A-M13: executeTypeFlow correctness
+    // =========================================================================
+
+    @Test
+    fun testA_M13_TypeIntoMissedField_Fails() = runBlocking {
+        val port = FakeAutomationPort(screenNodes = emptyList())
+        port.inputFocusedState = false
+        val result = TaskExecutor.executeTypeFlow(
+            automation = port,
+            text = "salman",
+            targetQuery = "Search",
+            pressEnter = false,
+            pollTimeoutMs = 0L
+        )
+        assertFalse("Typing into a missed field must fail", result.success)
+        assertTrue(result.message.contains("Could not focus intended text field"))
+    }
+
+    @Test
+    fun testA_M13a_DoNotFallBackToFirstEditableNode() = runBlocking {
+        // An editable field exists on screen, but targetQuery names a different
+        // field that is not present. executeTypeFlow must fail rather than
+        // typing into the first editable node in tree order.
+        val port = FakeAutomationPort(
+            screenNodes = listOf(
+                ScreenNode(
+                    index = 0,
+                    text = "Username",
+                    contentDescription = "Username field",
+                    className = "android.widget.EditText",
+                    viewId = "username",
+                    isClickable = true,
+                    isEditable = true,
+                    isScrollable = false,
+                    isCheckable = false,
+                    isEnabled = true,
+                    left = 10,
+                    top = 10,
+                    right = 100,
+                    bottom = 50,
+                    centerX = 55,
+                    centerY = 30
+                )
+            )
+        )
+        port.inputFocusedState = false
+
+        val result = TaskExecutor.executeTypeFlow(
+            automation = port,
+            text = "salman",
+            targetQuery = "Search",
+            pressEnter = false,
+            pollTimeoutMs = 0L
+        )
+
+        assertFalse("Typing into the first editable node when targetQuery matches nothing must fail", result.success)
+        assertTrue(result.message.contains("Could not focus intended text field"))
+        assertEquals("setTextOnFocused must not be called on the wrong field", 0, port.setAttempts)
+        assertFalse("clickAt must not tap the first editable node", port.actionsPerformed.any { it.startsWith("clickAt:") })
+    }
+
+    @Test
+    fun testA_M13_UnknownReadbackOnNormalField_Fails() = runBlocking {
+        val port = object : FakeAutomationPort() {
+            override fun setTextOnFocused(text: String): Boolean = true
+            override fun getFocusedText(): String? = "wrong_text"
+        }
+        port.inputFocusedState = true
+        val result = TaskExecutor.executeTypeFlow(
+            automation = port,
+            text = "salman",
+            pressEnter = false,
+            pollTimeoutMs = 0L
+        )
+        assertFalse("Unknown readback on a normal field must not be success", result.success)
+    }
+
+    @Test
+    fun testA_M13_UnknownReadbackOnPasswordField_Succeeds() = runBlocking {
+        val port = object : FakeAutomationPort() {
+            override fun setTextOnFocused(text: String): Boolean = true
+            override fun getFocusedText(): String? = null
+        }
+        port.inputFocusedState = true
+        val result = TaskExecutor.executeTypeFlow(
+            automation = port,
+            text = "secret",
+            pressEnter = false,
+            pollTimeoutMs = 0L
+        )
+        assertTrue("Unknown readback on a password field must be success", result.success)
+    }
+
+    @Test
+    fun testA_M13_FailedPressEnter_Fails() = runBlocking {
+        val port = object : FakeAutomationPort() {
+            override fun pressEnter(): Boolean = false
+        }
+        port.inputFocusedState = true
+        port.currentFieldText = "salman"
+        val result = TaskExecutor.executeTypeFlow(
+            automation = port,
+            text = "salman",
+            pressEnter = true,
+            pollTimeoutMs = 0L
+        )
+        assertFalse("Failed pressEnter must be failure", result.success)
+        assertTrue(result.message.contains("pressEnter failed to register"))
     }
 }

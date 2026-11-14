@@ -2347,7 +2347,8 @@ private suspend fun executeFunctionCallInternal(
 
             if (!tapNumbersEnabled) {
                 return Value.Object(
-                    "error" to Value.Str("Tap numbers are disabled in Settings. Enable them to show numbered badges on tappable elements, or act directly with click_text / click_at / vision.")
+                    "error" to Value.Str("Tap numbers are disabled in Settings. Enable them to show numbered badges on tappable elements, or act directly with click_text / click_at / vision."),
+                    "success" to Value.Bool(false)
                 )
             }
 

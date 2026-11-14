@@ -6,6 +6,7 @@
  */
 package io.github.ryoaonetsuki.mira.automation.agent
 
+import io.github.ryoaonetsuki.mira.service.MiraAccessibilityService
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -571,6 +572,83 @@ class GesturePacingTest {
     @Test
     fun human_paced_isTrue() {
         assertTrue(GesturePacing.human(Random(0)).paced)
+    }
+}
+
+// ============================================================
+// 6. traverseTreeBounded — bounded traversal still collects all eligible nodes
+// ============================================================
+
+class TraverseTreeBoundedTest {
+
+    private data class TreeNode(val id: Int, val children: List<TreeNode> = emptyList())
+
+    /** traverseTreeBounded collects every eligible node up to the maxNodes cap. */
+    @Test
+    fun traverseTreeBounded_collectsAllEligibleNodes() {
+        val root = TreeNode(1, listOf(
+            TreeNode(2, listOf(TreeNode(4), TreeNode(5))),
+            TreeNode(3, listOf(TreeNode(6)))
+        ))
+        val out = mutableListOf<TreeNode>()
+        val count = MiraAccessibilityService.traverseTreeBounded(
+            root = root,
+            startIndex = 0,
+            out = out,
+            maxNodes = 100,
+            timeBudgetMs = 5000,
+            startTimeMs = System.currentTimeMillis(),
+            isEligible = { true },
+            getChildren = { it.children }
+        )
+        assertEquals(6, count)
+        assertEquals(6, out.size)
+        assertEquals(listOf(1, 2, 4, 5, 3, 6), out.map { it.id })
+    }
+
+    /** traverseTreeBounded respects the maxNodes cap. */
+    @Test
+    fun traverseTreeBounded_respectsMaxNodesCap() {
+        val root = TreeNode(1, listOf(
+            TreeNode(2, listOf(TreeNode(4), TreeNode(5))),
+            TreeNode(3, listOf(TreeNode(6)))
+        ))
+        val out = mutableListOf<TreeNode>()
+        val count = MiraAccessibilityService.traverseTreeBounded(
+            root = root,
+            startIndex = 0,
+            out = out,
+            maxNodes = 3,
+            timeBudgetMs = 5000,
+            startTimeMs = System.currentTimeMillis(),
+            isEligible = { true },
+            getChildren = { it.children }
+        )
+        assertEquals(3, count)
+        assertEquals(3, out.size)
+    }
+
+    /** traverseTreeBounded respects isEligible filter. */
+    @Test
+    fun traverseTreeBounded_respectsIsEligible() {
+        val root = TreeNode(1, listOf(
+            TreeNode(2, listOf(TreeNode(4), TreeNode(5))),
+            TreeNode(3, listOf(TreeNode(6)))
+        ))
+        val out = mutableListOf<TreeNode>()
+        val count = MiraAccessibilityService.traverseTreeBounded(
+            root = root,
+            startIndex = 0,
+            out = out,
+            maxNodes = 100,
+            timeBudgetMs = 5000,
+            startTimeMs = System.currentTimeMillis(),
+            isEligible = { it.id % 2 == 0 },
+            getChildren = { it.children }
+        )
+        assertEquals(3, count)
+        assertEquals(3, out.size)
+        assertEquals(listOf(2, 4, 6), out.map { it.id })
     }
 }
 

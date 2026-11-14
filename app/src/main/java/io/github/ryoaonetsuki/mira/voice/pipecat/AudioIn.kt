@@ -82,7 +82,9 @@ internal class AudioIn @RequiresPermission(android.Manifest.permission.RECORD_AU
 
                     try {
                         val frameSizeBytes = 2 // 16-bit, mono
-                        val bufferBytes = (frameSizeBytes * sampleRateHz * BUFFER_MS) / 1000
+                        val computedBufferBytes = (frameSizeBytes * sampleRateHz * BUFFER_MS) / 1000
+                        val minBufferBytes = AudioRecord.getMinBufferSize(sampleRateHz, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+                        val bufferBytes = if (minBufferBytes > 0) maxOf(computedBufferBytes, minBufferBytes) else computedBufferBytes
 
                         val record = AudioRecord(
                             AudioSource.VOICE_COMMUNICATION,

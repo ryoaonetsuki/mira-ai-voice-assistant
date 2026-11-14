@@ -49,6 +49,7 @@ class MiraAccessibilityService : AccessibilityService() {
     private var lastObservedPackage: String? = null
 
     private val macroEvents = mutableListOf<Map<String, Any>>()
+    private val lastScrollPos = mutableMapOf<String, Pair<Int, Int>>()
 
     fun startMacroRecording() {
         synchronized(macroEvents) {
@@ -114,27 +115,43 @@ class MiraAccessibilityService : AccessibilityService() {
                 }
             }
             AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> {
-                val text = event.text?.joinToString("") ?: ""
-                if (text.isNotEmpty()) {
-                    val map = mutableMapOf<String, Any>(
-                        "type" to "type",
-                        "text" to text,
-                        "package" to pkg,
-                        "timestamp" to System.currentTimeMillis()
-                    )
-                    synchronized(macroEvents) {
-                        if (macroEvents.isNotEmpty() && macroEvents.last()["type"] == "type") {
-                            macroEvents[macroEvents.size - 1] = map
-                        } else {
-                            macroEvents.add(map)
-                        }
+                val node = event.source
+                val viewId = node?.viewIdResourceName ?: ""
+                val isPassword = node?.isPassword == true
+                val text = if (isPassword) "" else event.text?.joinToString("") ?: ""
+                val map = mutableMapOf<String, Any>(
+                    "type" to "type",
+                    "text" to text,
+                    "viewId" to viewId,
+                    "package" to pkg,
+                    "timestamp" to System.currentTimeMillis()
+                )
+                synchronized(macroEvents) {
+                    val last = macroEvents.lastOrNull()
+                    if (last != null && last["type"] == "type" && last["viewId"] == viewId) {
+                        macroEvents[macroEvents.size - 1] = map
+                    } else {
+                        macroEvents.add(map)
                     }
                 }
             }
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
+                val node = event.source
+                val scrollX = node?.scrollX ?: event.scrollX
+                val scrollY = node?.scrollY ?: event.scrollY
+                val prev = lastScrollPos[pkg]
+                val direction = when {
+                    prev == null -> "down"
+                    scrollY > prev.second -> "down"
+                    scrollY < prev.second -> "up"
+                    scrollX > prev.first -> "right"
+                    scrollX < prev.first -> "left"
+                    else -> "down"
+                }
+                lastScrollPos[pkg] = scrollX to scrollY
                 val map = mutableMapOf<String, Any>(
                     "type" to "scroll",
-                    "direction" to "down",
+                    "direction" to direction,
                     "package" to pkg,
                     "timestamp" to System.currentTimeMillis()
                 )
@@ -322,6 +339,7 @@ class MiraAccessibilityService : AccessibilityService() {
             if (out.size >= maxNodes || clockMs() - startTimeMs >= timeBudgetMs) break
             val child = node.getChild(i) ?: continue
             index = traverse(child, index, out, startTimeMs, maxNodes, timeBudgetMs, clockMs)
+            child.recycle()
         }
         return index
     }
@@ -517,8 +535,10 @@ class MiraAccessibilityService : AccessibilityService() {
         if (node == null) return null
         if (node.isScrollable && node.isVisibleToUser) return node
         for (i in 0 until node.childCount) {
-            val found = findFirstScrollable(node.getChild(i))
+            val child = node.getChild(i) ?: continue
+            val found = findFirstScrollable(child)
             if (found != null) return found
+            child.recycle()
         }
         return null
     }
@@ -566,8 +586,10 @@ class MiraAccessibilityService : AccessibilityService() {
         if (node == null) return null
         if (node.isEditable && node.isVisibleToUser && node.isEnabled) return node
         for (i in 0 until node.childCount) {
-            val found = findFirstEditable(node.getChild(i))
+            val child = node.getChild(i) ?: continue
+            val found = findFirstEditable(child)
             if (found != null) return found
+            child.recycle()
         }
         return null
     }

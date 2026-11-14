@@ -144,7 +144,8 @@ class TaskExecutor(
     private val apiKeyProvider: (suspend () -> String)? = null,
     var visionLocator: (suspend (target: String, nodes: List<ScreenNode>) -> Pair<Int, Int>?)? = null,
     private val appKnowledge: io.github.ryoaonetsuki.mira.automation.AppKnowledge? = null,
-    var visionFirstPerception: VisionFirstPerception? = null
+    var visionFirstPerception: VisionFirstPerception? = null,
+    private val tapNumbersEnabled: Boolean = false
 ) {
     fun getOrCreateVisionPerception(): VisionFirstPerception {
         visionFirstPerception?.let { return it }
@@ -491,35 +492,47 @@ class TaskExecutor(
 
     /**
      * Replays a skill with delete-at-3 and retry-once per step.
-     * On failure, returns a diagnostic TaskResult so the Live voice model
-     * can inspect the failure and issue corrected tool calls.
+     * On failure, resumes from the failed step up to AI_RESUME_MAX_ATTEMPTS times,
+     * consulting the RecoveryEngine for corrective suggestions.
      */
     internal suspend fun executeSkillWithResume(skill: Skill): TaskResult {
         if (skill.steps.isEmpty()) {
             logWarn("Cannot replay skill '${skill.goal}': no steps recorded")
             return TaskResult(TaskStatus.FAILED, "Skill '${skill.goal}' has no recorded steps", 0)
         }
-        val first = replaySkillFrom(skill, 0)
-        if (_cancelRequested) {
-            return TaskResult(TaskStatus.CANCELLED, "Task cancelled by user", skill.steps.size)
+        recovery.reset()
+        var resumeCount = 0
+        var startFrom = 0
+        while (true) {
+            val result = replaySkillFrom(skill, startFrom)
+            if (_cancelRequested) {
+                return TaskResult(TaskStatus.CANCELLED, "Task cancelled by user", skill.steps.size)
+            }
+            if (result.success) {
+                skills.markReplayOutcome(skill.id, true)
+                return TaskResult(
+                    status = TaskStatus.SUCCESS,
+                    message = "Task completed via memorized skill",
+                    stepsUsed = skill.steps.size
+                )
+            }
+            val failedStepIndex = result.failedStepIndex.coerceIn(0, skill.steps.size - 1)
+            if (resumeCount >= AI_RESUME_MAX_ATTEMPTS) {
+                skills.markReplayOutcome(skill.id, false)
+                val diag = _lastDiagnosis ?: lastActionError?.let { "Action error: $it" } ?: "Skill replay failed during execution. Please re-record the macro."
+                return TaskResult(
+                    status = TaskStatus.FAILED,
+                    message = "Skill replay failed after $resumeCount resumes: $diag",
+                    stepsUsed = _currentStep
+                )
+            }
+            if (recovery.shouldRecover) {
+                val recoveryStep = recovery.suggestRecovery()
+                logWarn("Recovery suggested: ${recoveryStep.action} — ${recoveryStep.reasoning}")
+            }
+            resumeCount++
+            startFrom = failedStepIndex
         }
-        if (first.success) {
-            skills.markReplayOutcome(skill.id, true)
-            return TaskResult(
-                status = TaskStatus.SUCCESS,
-                message = "Task completed via memorized skill",
-                stepsUsed = skill.steps.size
-            )
-        }
-        val failedStepIndex = first.failedStepIndex.coerceIn(0, skill.steps.size - 1)
-        val failedStepNumber = failedStepIndex + 1
-        skills.markReplayOutcome(skill.id, false)
-        val diag = _lastDiagnosis ?: lastActionError?.let { "Action error: $it" } ?: "Skill replay failed during execution. Please re-record the macro."
-        return TaskResult(
-            status = TaskStatus.FAILED,
-            message = "Skill replay failed at step $failedStepNumber: $diag",
-            stepsUsed = _currentStep
-        )
     }
 
     private fun describeStep(step: TaskStep): String = when (step.action) {
@@ -717,6 +730,7 @@ class TaskExecutor(
                 logWarn("Replayed step $stepNumber/$totalSteps (${step.action}) dispatch failed after retry ($reason) — aborting replay")
                 return ReplayOutcome(success = false, failedStepIndex = stepIndex, stepsCompleted = stepCount)
             }
+            recovery.recordAction(step)
 
             // (ii) Verify effect; if no effect, retry once, then skip non-critical or fail critical.
             // Turn F(a): open_app polls for the target package (cold start)
@@ -728,6 +742,7 @@ class TaskExecutor(
                 else "verifying effect (step $stepNumber)"
             )
             var (postNodes, postPackage, postSignature) = settleAndDump(step, prePackage)
+            recovery.recordScreen(automation.formatNodes(postNodes))
             var effectVerified = verifyEffect(step, prePackage, preSignature, postPackage, postSignature, goal = skill.goal, port = automation)
 
             if (!effectVerified) {
@@ -833,7 +848,7 @@ class TaskExecutor(
             return null
         }
         val key = apiKeyProvider?.invoke()?.takeIf { it.isNotBlank() } ?: run {
-            lastVisionFailureReason = "Gemini API key is missing or blank"
+            lastVisionFailureReason = "Mira API key is missing or blank"
             android.util.Log.w("MiraVisionLocator", "TaskExecutor vision locator failed: apiKeyProvider returned null or blank")
             logWarn("TaskExecutor vision locator failed: apiKeyProvider returned null or blank")
             return null
@@ -1002,20 +1017,25 @@ class TaskExecutor(
                     success
                 }
                 TaskStep.ACTION_SHOW_NUMBERS -> {
-                    val detailed = automation.showTapNumbersDetailed()
-                    when (detailed) {
-                        is TapNumbersResult.Success -> true
-                        is TapNumbersResult.PermissionMissing -> {
-                            lastActionError = "show_numbers failed: 'Display over other apps' permission is not granted (enable it in setup)"
-                            false
-                        }
-                        is TapNumbersResult.NoTappableElements -> {
-                            lastActionError = "show_numbers failed: no tappable elements found on screen"
-                            false
-                        }
-                        is TapNumbersResult.Error -> {
-                            lastActionError = "show_numbers failed: ${detailed.message}"
-                            false
+                    if (!tapNumbersEnabled) {
+                        lastActionError = "show_numbers failed: tap numbers are disabled in Settings. Enable them to show numbered badges on tappable elements, or act directly with click_text / click_at / vision."
+                        false
+                    } else {
+                        val detailed = automation.showTapNumbersDetailed()
+                        when (detailed) {
+                            is TapNumbersResult.Success -> true
+                            is TapNumbersResult.PermissionMissing -> {
+                                lastActionError = "show_numbers failed: 'Display over other apps' permission is not granted (enable it in setup)"
+                                false
+                            }
+                            is TapNumbersResult.NoTappableElements -> {
+                                lastActionError = "show_numbers failed: no tappable elements found on screen"
+                                false
+                            }
+                            is TapNumbersResult.Error -> {
+                                lastActionError = "show_numbers failed: ${detailed.message}"
+                                false
+                            }
                         }
                     }
                 }
@@ -1467,6 +1487,10 @@ class TaskExecutor(
                     }
                     if (match != null) return match
                 }
+                // Typing into the wrong field is worse than failing — if the
+                // intended field (targetQuery) was not found, do not fall back
+                // to the first editable node in tree order.
+                if (!targetQuery.isNullOrBlank()) return null
                 val editable = nodes.firstOrNull { it.isEditable || it.className.contains("EditText", ignoreCase = true) }
                 if (editable != null) return editable
 
@@ -1532,12 +1556,12 @@ class TaskExecutor(
                     }
                 }
 
-                if (!tapped && !automation.isInputFocused() && !currentNodes.any { it.isEditable }) {
+                if (!automation.isInputFocused()) {
                     val visionErr = visionFailureReasonProvider?.invoke()
                     val msg = if (!visionErr.isNullOrBlank()) {
-                        "Could not find or tap editable text field on screen and vision fallback failed: $visionErr"
+                        "Could not focus intended text field on screen and vision fallback failed: $visionErr"
                     } else {
-                        "Could not find or tap editable text field on screen"
+                        "Could not focus intended text field on screen"
                     }
                     return TypeFlowResult(false, msg)
                 }
@@ -1571,8 +1595,12 @@ class TaskExecutor(
             }
 
             // (e) then press search/enter
+            var enterOk = true
             if (pressEnter) {
-                automation.pressEnter()
+                enterOk = automation.pressEnter()
+                if (!enterOk) {
+                    return TypeFlowResult(false, "pressEnter failed to register for '$text'")
+                }
             }
 
             // Verify results appeared if pressEnter was sent
@@ -1585,7 +1613,9 @@ class TaskExecutor(
                     postEnterNodes.any { it.text.contains(text, ignoreCase = true) }
             }
 
-            val success = setOk || readBack == text
+            // MATCH: readBack equals intended text.
+            // UNKNOWN: readBack is blank (typical for password/secret fields) — accept only then.
+            val success = (readBack == text) || (setOk && readBack.isNullOrBlank())
             return if (success) {
                 val msg = if (pressEnter && hasResults) {
                     "Successfully typed '$text' and submitted search; results appeared on screen"

@@ -36,7 +36,7 @@ object CallRestartPolicy {
      */
     fun isTerminalFailure(message: String): Boolean {
         val lower = message.lowercase()
-        return lower.contains("gemini key missing") ||
+        return lower.contains("key missing") ||
             lower.contains("microphone permission not granted") ||
             lower.contains("free-tier limit reached") ||
             lower.contains("invalid api key") ||

@@ -58,7 +58,7 @@ fun VoiceEngineScreen(
     fun runCapabilityCheck() {
         val key = securePrefs.getGeminiApiKey() ?: ""
         if (key.isBlank()) {
-            capabilityMessage = "No Gemini API key saved — add one in Setup or Personal Profile"
+            capabilityMessage = "No Mira API key saved — add one in Setup or Personal Profile"
             isLiveCapable = false
             return
         }

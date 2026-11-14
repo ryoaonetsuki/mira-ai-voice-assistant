@@ -9,7 +9,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
@@ -576,6 +578,7 @@ class TaskExecutor(
         var remainingMs = effectiveOpenAppPollTimeoutMs
         var current = automation.getCurrentPackage().orEmpty()
         while (true) {
+            currentCoroutineContext().ensureActive()
             if (openAppTargetReached(step, prePackage, current, automation)) return current
             if (_cancelRequested) return current
             if (!awaitIfPaused()) return current
@@ -1677,6 +1680,7 @@ class TaskExecutor(
             val start = System.currentTimeMillis()
             var nodes: List<ScreenNode> = emptyList()
             while (true) {
+                currentCoroutineContext().ensureActive()
                 val elapsed = System.currentTimeMillis() - start
                 if (elapsed >= timeoutMs) {
                     return WaitForTextResult(found = false, elapsedMs = elapsed, nodes = nodes)

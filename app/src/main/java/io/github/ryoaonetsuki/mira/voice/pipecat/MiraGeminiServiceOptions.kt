@@ -126,7 +126,7 @@ data class MiraGeminiServiceOptions(
                         ),
                         Value.Object(
                             "name" to Value.Str("show_numbers"),
-                            "description" to Value.Str("Shows numbered badges on all tappable elements on the current screen and returns the numbered list (number, label, center coordinates) as text. Call this first when the user asks to tap a number and numbers are not already shown."),
+                            "description" to Value.Str("Shows numbered badges on all tappable elements on the current screen and returns the numbered list (number, label, center coordinates) as text. Tap numbers are opt-in and disabled by default. Call this only when the user explicitly asks to show numbers or tap a number."),
                             "parameters" to Value.Object(
                                 "type" to Value.Str("OBJECT"),
                                 "properties" to Value.Object()

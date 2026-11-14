@@ -665,9 +665,12 @@ class TaskExecutorTest {
             )
         )
         val steps = io.github.ryoaonetsuki.mira.service.MiraAccessibilityService.convertEventsToSteps(events)
-        assertEquals(1, steps.size)
-        assertEquals(TaskStep.ACTION_SCROLL, steps[0].action)
-        assertEquals("up", steps[0].stringParam("direction"))
+        // convertEventsToSteps also prepends an OPEN_APP launch step for the
+        // external package; this test is about the scroll conversion only.
+        val scrollSteps = steps.filter { it.action == TaskStep.ACTION_SCROLL }
+        assertEquals(1, scrollSteps.size)
+        assertEquals(TaskStep.ACTION_SCROLL, scrollSteps[0].action)
+        assertEquals("up", scrollSteps[0].stringParam("direction"))
     }
 
     @Test
@@ -689,11 +692,15 @@ class TaskExecutorTest {
             )
         )
         val steps = io.github.ryoaonetsuki.mira.service.MiraAccessibilityService.convertEventsToSteps(events)
-        assertEquals(2, steps.size)
-        assertEquals(TaskStep.ACTION_TYPE_TEXT, steps[0].action)
-        assertEquals("hello", steps[0].stringParam("text"))
-        assertEquals(TaskStep.ACTION_TYPE_TEXT, steps[1].action)
-        assertEquals("world", steps[1].stringParam("text"))
+        // Each type event also emits a PRESS_ENTER step (and an OPEN_APP launch
+        // step precedes them for the external package); assert on the type
+        // steps only — typing in different fields must keep both texts.
+        val typeSteps = steps.filter { it.action == TaskStep.ACTION_TYPE_TEXT }
+        assertEquals(2, typeSteps.size)
+        assertEquals(TaskStep.ACTION_TYPE_TEXT, typeSteps[0].action)
+        assertEquals("hello", typeSteps[0].stringParam("text"))
+        assertEquals(TaskStep.ACTION_TYPE_TEXT, typeSteps[1].action)
+        assertEquals("world", typeSteps[1].stringParam("text"))
     }
 
     @Test
@@ -709,7 +716,8 @@ class TaskExecutorTest {
         )
         val steps = io.github.ryoaonetsuki.mira.service.MiraAccessibilityService.convertEventsToSteps(events)
         // Password text is not recorded; empty text produces no type step.
-        assertTrue(steps.isEmpty())
+        // (An OPEN_APP launch step for the external package may still precede.)
+        assertTrue(steps.none { it.action == TaskStep.ACTION_TYPE_TEXT })
     }
 
 
@@ -2494,7 +2502,14 @@ class TaskExecutorTest {
         val port = object : FakeAutomationPort() {
             override fun clickText(text: String, nodes: List<ScreenNode>): Boolean {
                 clickFailures++
-                return clickFailures > 2
+                val ok = clickFailures > 2
+                if (ok) {
+                    // Simulate the visible screen change a real tap causes, so
+                    // effect verification passes (the base fake's mutateScreenState
+                    // is bypassed by this override).
+                    screenNodes = screenNodes.map { it.copy(text = "${it.text} [$text]") }
+                }
+                return ok
             }
         }
         val skills = SkillMemoryService(InMemorySkillStore())

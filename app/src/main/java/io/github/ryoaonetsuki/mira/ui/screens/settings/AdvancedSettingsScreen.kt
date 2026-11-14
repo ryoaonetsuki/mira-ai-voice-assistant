@@ -260,7 +260,7 @@ fun AdvancedSettingsScreen(
                                 .background(palette.primary.copy(alpha = 0.15f))
                         ) {
                             Icon(
-                                painter = painterResource(id = R.drawable.ic_fluent_tap_24_regular),
+                                painter = painterResource(id = R.drawable.ic_fluent_target_arrow_24_regular),
                                 contentDescription = null,
                                 tint = palette.primary,
                                 modifier = Modifier.size(20.dp)

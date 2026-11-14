@@ -73,6 +73,8 @@ class MiraGeminiSetupPayloadTest {
         assertNotNull("automaticActivityDetection must exist", autoActivity)
         assertEquals("END_SENSITIVITY_HIGH", (autoActivity?.value?.get("endOfSpeechSensitivity") as? Value.Str)?.value)
         assertEquals(800.0, (autoActivity?.value?.get("silenceDurationMs") as? Value.Number)?.value ?: 0.0, 0.001)
+        assertEquals("START_SENSITIVITY_HIGH", (autoActivity?.value?.get("startOfSpeechSensitivity") as? Value.Str)?.value)
+        assertEquals(300.0, (autoActivity?.value?.get("prefixPaddingMs") as? Value.Number)?.value ?: 0.0, 0.001)
 
         // Transcription configs present as empty objects
         assertTrue("inputAudioTranscription must be present", modelConfig.value.containsKey("inputAudioTranscription"))

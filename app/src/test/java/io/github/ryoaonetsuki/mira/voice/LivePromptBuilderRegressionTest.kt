@@ -138,10 +138,10 @@ class LivePromptBuilderRegressionTest {
     @Test
     fun testSecretModeTones_FriendlyRomanticIntense() {
         val promptFriendly = LivePromptBuilder.buildLiveSystemPrompt(secretMode = "Friendly")
-        assertTrue("Friendly prompt must contain thoughtful friend tone", promptFriendly.contains("Warm, human-like, thoughtful"))
+        assertTrue("Friendly prompt must contain warm natural tone", promptFriendly.contains("Warm, natural, and human-like"))
 
         val promptRomantic = LivePromptBuilder.buildLiveSystemPrompt(secretMode = "Romantic")
-        assertTrue("Romantic prompt must contain affectionate romantic tone", promptRomantic.contains("Deeply warm, affectionate, attentive"))
+        assertTrue("Romantic prompt must contain affectionate romantic tone", promptRomantic.contains("Affectionate, attentive, and deeply warm"))
 
         val promptIntense = LivePromptBuilder.buildLiveSystemPrompt(secretMode = "Intense")
         assertTrue("Intense prompt must contain bold intense tone", promptIntense.contains("Bold, intense, deeply passionate"))

@@ -326,7 +326,7 @@ data class MiraGeminiServiceOptions(
          * - model: models/gemini-3.8-live
          * - generationConfig.responseModalities: ["AUDIO"]
          * - speechConfig: prebuiltVoiceConfig.voiceName + languageCode
-         * - realtimeInputConfig: automaticActivityDetection (HIGH sensitivity, 800ms silence)
+         * - realtimeInputConfig: automaticActivityDetection (start HIGH sensitivity, end HIGH sensitivity, 800ms silence, 300ms prefix padding)
          * - inputAudioTranscription: {}
          * - outputAudioTranscription: {}
          * - sessionResumption: {} (fresh) or { "handle": storedHandle } (resumption)
@@ -359,8 +359,10 @@ data class MiraGeminiServiceOptions(
 
             val realtimeInputConfig = Value.Object(
                 "automaticActivityDetection" to Value.Object(
+                    "startOfSpeechSensitivity" to Value.Str("START_SENSITIVITY_HIGH"),
                     "endOfSpeechSensitivity" to Value.Str("END_SENSITIVITY_HIGH"),
-                    "silenceDurationMs" to Value.Number(800.0)
+                    "silenceDurationMs" to Value.Number(800.0),
+                    "prefixPaddingMs" to Value.Number(300.0)
                 )
             )
 

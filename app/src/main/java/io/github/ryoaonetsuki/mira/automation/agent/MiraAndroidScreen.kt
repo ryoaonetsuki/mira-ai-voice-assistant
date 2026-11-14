@@ -147,10 +147,9 @@ class MiraAndroidScreen(private val service: MiraAccessibilityService) : MiraScr
         val (w, h) = dimensions()
         if (w == 0 || h == 0) return MiraActionResult.Failed("no_dimensions")
         val beforeHash = MikaReliableActions.treeHash(service.windows)
-        val beforeFrame = MikaReliableActions.captureFrameGrid(service)
         val ok = service.clickAt(x.toFloat(), y.toFloat())
         if (!ok) return MiraActionResult.Failed("tap_failed")
-        val changed = MikaReliableActions.awaitChange(beforeHash, beforeFrame, 2000L)
+        val changed = MikaReliableActions.awaitChange(beforeHash, 2000L)
         return MiraActionResult.Ok(changed = changed)
     }
 
@@ -221,10 +220,9 @@ class MiraAndroidScreen(private val service: MiraAccessibilityService) : MiraScr
 
     override suspend fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Long): MiraActionResult {
         val beforeHash = MikaReliableActions.treeHash(service.windows)
-        val beforeFrame = MikaReliableActions.captureFrameGrid(service)
         val ok = service.swipe(x1.toFloat(), y1.toFloat(), x2.toFloat(), y2.toFloat(), durationMs)
         if (!ok) return MiraActionResult.Failed("swipe_failed")
-        val changed = MikaReliableActions.awaitChange(beforeHash, beforeFrame, 1500L)
+        val changed = MikaReliableActions.awaitChange(beforeHash, 1500L)
         return MiraActionResult.Ok(changed = changed)
     }
 
@@ -290,8 +288,7 @@ class MiraAndroidScreen(private val service: MiraAccessibilityService) : MiraScr
 
     override suspend fun awaitChange(timeoutMs: Long): Boolean {
         val beforeHash = MikaReliableActions.treeHash(service.windows)
-        val beforeFrame = MikaReliableActions.captureFrameGrid(service)
-        return MikaReliableActions.awaitChange(beforeHash, beforeFrame, timeoutMs)
+        return MikaReliableActions.awaitChange(beforeHash, timeoutMs)
     }
 
     override suspend fun waitFor(condition: String, value: String?, timeoutMs: Long): Boolean {

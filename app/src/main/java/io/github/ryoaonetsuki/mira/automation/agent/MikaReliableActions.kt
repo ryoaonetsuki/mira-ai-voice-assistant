@@ -106,7 +106,6 @@ object MikaReliableActions {
      */
     suspend fun awaitChange(
         beforeHash: Long,
-        beforeFrame: FrameGrid?,
         timeoutMs: Long,
         pollMs: Long = 80L,
     ): Boolean {
@@ -114,14 +113,6 @@ object MikaReliableActions {
         while (System.currentTimeMillis() < deadline) {
             val windows = MiraAccessibilityService.instance?.windows ?: emptyList()
             if (treeHash(windows) != beforeHash) return true
-            // Frame-based secondary check (visual change without a11y-tree change)
-            if (beforeFrame != null) {
-                val service = MiraAccessibilityService.instance
-                if (service != null) {
-                    val currentFrame = captureFrameGrid(service)
-                    if (FrameDiff.compare(beforeFrame, currentFrame, null)?.visible == true) return true
-                }
-            }
             delay(pollMs)
         }
         return false
@@ -307,7 +298,6 @@ object MikaReliableActions {
         gesturePacing: GesturePacing = GesturePacing.Instant,
     ): ActionVerdict {
         val beforeHash = treeHash(service.windows)
-        val beforeFrame = captureFrameGrid(service)
 
         val entry = resolveRef(ref, snapshot.entries)
             ?: return ActionVerdict.failed("ref_not_found: $ref")
@@ -321,14 +311,14 @@ object MikaReliableActions {
             ?: node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
 
         if (actionAccepted) {
-            if (awaitChange(beforeHash, beforeFrame, 2000L)) return ActionVerdict.Changed
+            if (awaitChange(beforeHash, 2000L)) return ActionVerdict.Changed
         }
 
         // Fallback: jitter touch inside node bounds
         if (!bounds.isEmpty) {
             val (x, y) = jitter(bounds)
             service.clickAt(x, y)
-            if (awaitChange(beforeHash, beforeFrame, 2000L)) return ActionVerdict.Changed
+            if (awaitChange(beforeHash, 2000L)) return ActionVerdict.Changed
         }
 
         return if (!actionAccepted && bounds.isEmpty) {
@@ -359,7 +349,6 @@ object MikaReliableActions {
         screenHeight: Int,
     ): ActionVerdict {
         val beforeHash = treeHash(service.windows)
-        val beforeFrame = captureFrameGrid(service)
 
         val scrollable: AccessibilityNodeInfo? = when {
             node != null -> findScrollableAncestor(node)
@@ -376,7 +365,7 @@ object MikaReliableActions {
 
         if (scrollable != null) {
             val accepted = scrollable.performAction(action)
-            if (accepted && awaitChange(beforeHash, beforeFrame, 1500L)) return ActionVerdict.Changed
+            if (accepted && awaitChange(beforeHash, 1500L)) return ActionVerdict.Changed
         }
 
         // Swipe fallback: centre-screen swipe (up to scroll down, down to scroll up)
@@ -387,7 +376,7 @@ object MikaReliableActions {
             (screenHeight / 4).toFloat() to (screenHeight * 3 / 4).toFloat()
         }
         service.swipe(cx.toFloat(), fromY, cx.toFloat(), toY, 400L)
-        if (awaitChange(beforeHash, beforeFrame, 1500L)) return ActionVerdict.Changed
+        if (awaitChange(beforeHash, 1500L)) return ActionVerdict.Changed
 
         return ActionVerdict.Unchanged
     }

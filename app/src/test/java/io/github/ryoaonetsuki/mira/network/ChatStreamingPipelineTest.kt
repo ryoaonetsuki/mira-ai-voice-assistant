@@ -129,4 +129,16 @@ class ChatStreamingPipelineTest {
         // When LazyColumn has 10 items, safe index is 9
         assertEquals(9, computeSafeScrollIndex(10))
     }
+
+    @Test
+    fun testConnectorCommandDetection_RoutesToModelInsteadOfCannedReply() {
+        // Connector commands must be detected so their result can be passed to the model as context
+        assertTrue(ConnectorIntentHandler.isConnectorCommand("weather"))
+        assertTrue(ConnectorIntentHandler.isConnectorCommand("add a task buy milk"))
+        assertTrue(ConnectorIntentHandler.isConnectorCommand("my github"))
+        assertTrue(ConnectorIntentHandler.isConnectorCommand("আবহাওয়া"))
+        assertFalse(ConnectorIntentHandler.isConnectorCommand("hello how are you"))
+        assertFalse(ConnectorIntentHandler.isConnectorCommand("what is the capital of france"))
+        assertFalse(ConnectorIntentHandler.isConnectorCommand(""))
+    }
 }

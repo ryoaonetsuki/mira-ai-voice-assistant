@@ -7,6 +7,7 @@ import io.github.ryoaonetsuki.mira.automation.agent.SkillMemoryService
 import io.github.ryoaonetsuki.mira.automation.agent.TaskExecutor
 import io.github.ryoaonetsuki.mira.automation.agent.TaskHistoryStore
 import io.github.ryoaonetsuki.mira.automation.agent.TaskStatus
+import io.github.ryoaonetsuki.mira.automation.agent.TapNumberSettings
 import io.github.ryoaonetsuki.mira.backend.ApiKeyResolver
 import io.github.ryoaonetsuki.mira.backend.KeySource
 import io.github.ryoaonetsuki.mira.data.local.entities.ChatMessageEntity
@@ -132,7 +133,8 @@ class MiraAutomationBridge(
             onProgress = onProgress,
             historyStore = historyStore,
             apiKeyProvider = apiKey,
-            appKnowledge = knowledge
+            appKnowledge = knowledge,
+            tapNumbersEnabled = TapNumberSettings.getInstance(ctx).isTapNumbersEnabled
         )
     }
 
